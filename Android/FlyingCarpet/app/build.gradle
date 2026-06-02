@@ -3,6 +3,32 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// ── shiroikuma fork versioning ──────────────────────────────────────────────
+// versionName tracks the FlyingCarpet *release* version (the `v*` git tag / the
+// desktop Cargo.toml + tauri.conf.json), NOT this build.gradle's historical
+// value — upstream lets the Android versionName lag the release (e.g. it was
+// 9.0.8 at the v9.0.10 release). versionCode follows the sister-repo rule:
+//   versionCode = <upstream Android versionCode> * 10000 + <buildNumber>
+// buildNumber is our fork increment; it resets to 1 on each upstream rebase and
+// bumps +1 per delivered build. See .claude/skills/upstream-new-version.
+def releaseVersionName = "9.0.10"   // = latest upstream `v*` tag / desktop Cargo version
+def upstreamVersionCode = 21        // = upstream Android defaultConfig.versionCode
+def buildNumber = 1                 // fork build; reset to 1 each upstream bump
+
+def forkVersionName = "${releaseVersionName}+${buildNumber}"
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210001
+
+// Release signing: read from a gitignored keystore.properties at the Gradle
+// project root, falling back to SIGNING_* env vars. Without either, the release
+// build is unsigned (and won't install). See .claude/skills/build-apk.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasKeystoreProperties = keystorePropertiesFile.exists()
+if (hasKeystoreProperties) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+def hasSigningEnv = System.getenv("SIGNING_STORE_FILE") != null
+
 android {
     compileSdk 34
 
@@ -15,19 +41,44 @@ android {
     }
 
     defaultConfig {
-        applicationId "dev.spiegl.flyingcarpet"
+        applicationId "shiroikuma.mahojutan"
         minSdk 29
         targetSdk 35
-        versionCode 21
-        versionName "9.0.8"
+        versionCode forkVersionCode
+        versionName forkVersionName
+
+        // Raw APK is e.g. shiroikuma-mahojutan_9.0.10+1_arm64-v8a-release.apk;
+        // the build-apk skill copies it to ~/tmp under the clean name (no -release).
+        setProperty("archivesBaseName", "shiroikuma-mahojutan_${forkVersionName}_arm64-v8a")
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (hasKeystoreProperties || hasSigningEnv) {
+            release {
+                if (hasKeystoreProperties) {
+                    keyAlias keystoreProperties.getProperty("keyAlias")
+                    keyPassword keystoreProperties.getProperty("keyPassword")
+                    storeFile file(keystoreProperties.getProperty("storeFile"))
+                    storePassword keystoreProperties.getProperty("storePassword")
+                } else {
+                    keyAlias System.getenv("SIGNING_KEY_ALIAS")
+                    keyPassword System.getenv("SIGNING_KEY_PASSWORD")
+                    storeFile file(System.getenv("SIGNING_STORE_FILE"))
+                    storePassword System.getenv("SIGNING_STORE_PASSWORD")
+                }
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasKeystoreProperties || hasSigningEnv) {
+                signingConfig signingConfigs.release
+            }
         }
     }
     compileOptions {
@@ -37,6 +88,8 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
+    // Code namespace stays upstream's (R class + Kotlin package dev.spiegl.flyingcarpet);
+    // only applicationId is rebranded, so the fork installs side-by-side with upstream.
     namespace 'dev.spiegl.flyingcarpet'
 }
 
