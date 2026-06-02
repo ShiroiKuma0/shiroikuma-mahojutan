@@ -1,57 +1,122 @@
-# Flying Carpet
+# CLAUDE.md
 
-Encrypted, no-internet file transfer between **Android, iOS, Linux, macOS, and Windows**, over either an ad-hoc Wi-Fi hotspot (one device hosts) or a **shared network** both devices are already on. Two devices, Wi-Fi (or ethernet), optionally Bluetooth. Port **3290** throughout.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Three implementations, one wire protocol (critical)
+## This is a rebranded fork (read first)
 
-All five platforms live in this repo, in **three independent implementations of the same wire protocol**. A change to the on-the-wire format in one is a breaking change unless mirrored in the other two:
+This is the **shiroikuma personal fork** of [spieglt/FlyingCarpet](https://github.com/spieglt/FlyingCarpet),
+following the same model as the other `shiroikuma-*` sister repos. **Only the Android app is forked,
+rebranded, and shipped** — the Tauri/Rust desktop app is left exactly as upstream and is never built here.
 
-- **Rust** (`core/`) — the **reference implementation** the other two are tested against. Ships the Tauri desktop app (`Flying Carpet/`) for Windows + Linux.
-- **Kotlin** (`Android/FlyingCarpet/`) — Android.
-- **Swift** (`Apple/`) — iOS + macOS. A full port, **not** a binding over the Rust core. Build only on a Mac; see `Apple/CLAUDE.md`.
+| Item | Value |
+|------|-------|
+| Upstream | `spieglt/FlyingCarpet` (remote `upstream`, HTTPS, fetch-only) |
+| Fork | `git@github.com:ShiroiKuma0/shiroikuma-mahojutan` (remote `origin`, push here) |
+| Installed app ID | `shiroikuma.mahojutan` (was `dev.spiegl.flyingcarpet`) |
+| Code namespace (unchanged) | `dev.spiegl.flyingcarpet` (R class / Kotlin package — no source edits) |
+| App launcher label | `白い熊 魔法絨毯` (`app_name` in `Android/FlyingCarpet/app/src/main/res/values/strings.xml`) |
+| APK filename | `shiroikuma-mahojutan_<release>+<buildNumber>_arm64-v8a.apk` (e.g. `shiroikuma-mahojutan_9.0.10+1_arm64-v8a.apk`) |
+| Keystore | `~/.android-keystores/shiroikuma-mahojutan.jks` (alias `mahojutan`); creds in gitignored `Android/FlyingCarpet/keystore.properties` |
+| Build JDK / SDK | JDK 21 (`/usr/lib/jvm/java-21-openjdk-amd64`), SDK `/home/shiroikuma/android-sdk` |
 
-When touching the protocol (discovery bytes, version/mode preamble, Noise handshake, framing), update **all three implementations** and their cross-platform known-answer tests together.
+### Branch model
 
-### Where code lives vs. where binaries ship (don't conflate these)
+- `main` — mirrors `upstream/main`, **fast-forward only**, never carries our changes.
+- `custom` — carries all fork customizations, **rebased onto each new upstream release**. Develop here.
 
-- **The Rust code builds for Windows and Linux only.** `core/src/` has just `windows/` and `linux/`; `lib.rs` cfg-selects `network`/`bluetooth` on those two `target_os` values, and there is no `target_os = "macos"` anywhere in `core/`. A Tauri/`wry`/`webkit2gtk` change therefore affects **two** desktop platforms, not three — macOS is served by the Swift app in `Apple/`, which shares no code with `core/`.
-- **The macOS binary is released from this repo's Releases page** as a **`.zip` of the `.app`** (`macOS_FlyingCarpet_<version>.zip`) — *not* a `.dmg`. The `.dmg` format ended at v8.0.1; v9.0.0 switched to `.zip`. Don't infer from a macOS binary existing that the Rust code targets macOS — it's built from `Apple/macOS/`. There is also a Homebrew **cask** (`brew install flying-carpet`), which is maintained outside this repo.
-- `tauri.conf.json` still lists `icons/icon.icns` — genuinely stale, intentionally left alone. Not evidence of macOS support either.
-- The Swift code was developed in a separate `FlyingCarpetApple` repo and imported without history at the v10 release, so `git log` on `Apple/` starts at the import commit. Commit hashes cited for Swift changes in the older docs (e.g. `4c59af6` in `docs/bluetooth-field-guide.md`, `4a6b889`/`b7e9b59` in `ARCHITECTURE.md`) belong to that repo and won't resolve here.
+### Versioning
 
-## Layout
+- `versionName` = `"<release>+<buildNumber>"` where `<release>` is the FlyingCarpet **release** version
+  (the latest `v*` tag / desktop `Cargo.toml`), **not** the stale value upstream leaves in Android's
+  `build.gradle` (e.g. Android said `9.0.8` at the `v9.0.10` release).
+- `versionCode` = `<upstream Android versionCode> * 10000 + <buildNumber>` (currently `21 * 10000 + 1 = 210001`).
+- `buildNumber` resets to `1` on each upstream rebase, +1 per delivered build. All three live at the top
+  of `Android/FlyingCarpet/app/build.gradle`.
 
-- `core/` — Rust core crate `flying-carpet-core` (v10). Platform-split: `core/src/{windows,linux}/` for network/bluetooth/peripheral/central; the `bluetooth` module is `cfg`-selected per-OS in `lib.rs`. Key files: `lib.rs` (`start_transfer` entry point), `discovery.rs`, `noise.rs`, `sending.rs`/`receiving.rs`.
-- `Flying Carpet/` — Tauri desktop app. Rust backend in `Flying Carpet/src-tauri/` (workspace member), JS/HTML frontend in `Flying Carpet/src/` (`main.js`, `index.html`). **Note the space in the directory name** — quote it in shell commands.
-- `Android/FlyingCarpet/` — Android app (Kotlin). Noise/discovery ports in `app/src/main/java/dev/spiegl/flyingcarpet/`.
-- `Apple/` — iOS + macOS apps (Swift). Protocol code shared by both in `Apple/shared/`, per-platform UI in `Apple/iOS/` and `Apple/macOS/`. **Read `Apple/CLAUDE.md` before changing anything under it** — the Apple platforms have constraints the others don't (no programmatic hotspot, so Apple-to-Apple requires shared network mode; BLE can't pair iPhone↔Mac).
-- `docs/` — design docs (see below). `ARCHITECTURE.md` — connection role model.
+### Skills (authoritative for project specifics)
 
-## Build & test
+- `.claude/skills/build-apk` — build the signed release APK, copy to `~/tmp`, optionally `adb push`.
+- `.claude/skills/upstream-new-version` — rebase `custom` onto a new upstream release + re-derive versions.
 
-Rust is a Cargo **workspace** (`core` + `Flying Carpet/src-tauri`):
+### Hard rules
 
-- `cargo test` — run all Rust tests (includes the Noise/discovery known-answer vectors in `core/src/noise.rs` and `core/src/discovery.rs`). `cargo build` to compile.
-- Desktop app: `cargo tauri dev` (run) / `cargo tauri build` (release). Needs the Tauri CLI and the Linux deps listed in `README.md`.
-- Android: from `Android/FlyingCarpet/`, `./gradlew assembleDebug` / `./gradlew test`. **Set `JAVA_HOME` to the Android Studio JBR** (the bundled JDK) or Gradle fails.
-- Apple: **macOS only**, and outside the Cargo workspace — `cargo build` never touches it. From `Apple/`, `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project <iOS|macOS>/FlyingCarpet.xcodeproj -scheme "FlyingCarpet" build`. `DEVELOPMENT_TEAM` is blank in both projects, so signing fails until you set your team in Xcode or pass `DEVELOPMENT_TEAM=YOURTEAMID`. Details in `Apple/CLAUDE.md`.
+- **Never `git commit` / `git push` unprompted; never `adb install`.** Build, copy to `~/tmp`, and only
+  `adb push` to `/sdcard/tmp/` after asking — the user installs from the phone's file manager and tests
+  before anything is committed. Push (`--force-with-lease origin custom`, since rebases rewrite history)
+  only on an explicit **"Push"**.
 
-## Architecture & design docs — read before changing these areas
+---
 
-- **`ARCHITECTURE.md`** — the four independent role axes (transfer direction / BLE peripheral-central / hotspot host-joiner / TCP server-client) and how they map per platform pair. Read before touching connection setup, hosting logic, or BLE.
-- **`docs/shared-network-crypto.md`** — the full v10 cryptographic design (the normative reference for the handshake bytes). Read before touching anything crypto, discovery-auth, or the record/framing layer.
-- **`docs/bluetooth-field-guide.md`** — **read before touching any BLE code on any platform.** The four independent axes (advertising / scanning / bonding / GATT services), seven hard-won laws, a per-platform matrix, and a symptom→cause playbook. Bluetooth bugs here are subtle, intermittent, and platform-asymmetric; several have been re-derived from scratch more than once. Chronological investigation logs: `docs/windows-ble-gatt-0x8000ffff.md`, `docs/ble-bond-asymmetries.md`.
+## What this is
 
-## Load-bearing invariants (don't "simplify" these)
+Flying Carpet: encrypted, peer-to-peer file transfer between Android, iOS, Linux, macOS, and Windows over an ad hoc WiFi hotspot — no shared network or internet required. Bluetooth LE (added in v9) is used optionally to negotiate WiFi credentials before the transfer. This repo contains the **desktop** (Linux/Windows) and **Android** implementations. The iOS/macOS (Swift) codebase is **not public** and lives elsewhere; the Go predecessor was rewritten in Rust.
 
-- **v10 = Noise.** Every transfer (both modes) runs a `Noise_NNpsk0_25519_ChaChaPoly_SHA256` handshake; the PSK is `PBKDF2-HMAC-SHA256(password, salt="Flying Carpet v10 shared network PSK", 600_000)`. Noise is the **sole** cipher — the old inner per-chunk AES is gone. v10 is a clean break; v9 peers are rejected. If v10 ships before a later Noise wire change, that change must bump to v11.
-- **Preamble → prologue binding.** Version/mode are negotiated in a plaintext preamble, then every preamble byte is bound into the Noise prologue. Both platforms of any pair must build the prologue identically (`build_prologue`/`buildPrologue`). Cross-platform KATs guard this — keep all three in sync (Rust `core/src/noise.rs`, Kotlin `NoiseUnitTest`, Swift `Apple/macOS/FlyingCarpetTests/FlyingCarpetTests.swift`; discovery vector: `core/src/discovery.rs` `test_cross_platform_vector` == Android `DiscoveryUnitTest.kt` == the Swift discovery test in the same file). Note the Swift KATs run only under `xcodebuild` on a Mac, so `cargo test` and `./gradlew test` passing is **not** evidence the Swift side still agrees.
-- **Passwords: single-use + CSPRNG.** The receiver mints a fresh random password per transfer and displays it; never reuse, never user-chosen, never "remember." The entire "offline crack is worthless" security argument depends on this (see the crypto doc §7). The discovery HMAC key is derived from the stretched PSK, so no fast hash of the password goes on the wire.
-- **Bluetooth is hotspot-only.** Shared network mode exchanges the password manually (display + type/QR); do **not** re-add BLE to shared mode. Apple-to-Apple can't pair iPhone↔Mac over BLE by design, which is exactly the pair that would need it. Rationale is recorded in `ARCHITECTURE.md` ("Bluetooth + Shared Network Mode"). Every platform greys out its BT switch in shared network mode; on Apple that goes through `bluetoothSwitchShouldBeEnabled()`, since restoring the switch on hardware capability alone re-enabled it after a transfer.
-- **Receiver is the anchor.** In both modes the receiver generates the password and is the TCP server (Noise responder); the sender is the TCP client (Noise initiator).
+## Repository layout
 
-## Conventions & gotchas
+This is a Cargo workspace (`Cargo.toml` at root) plus an independent Android Gradle project.
 
-- Android: keep `res/layout/` and `res/layout-land/` in sync when changing the UI.
-- `core/Cargo.toml` is pinned to **LF** line endings (`.gitattributes`); don't let an editor rewrite it to CRLF.
-- Header-value bounds (file count / filename length / chunk size sanity checks) and filename sanitization apply to values read from the **Noise-decrypted** stream, not the raw socket.
+- `core/` — `flying-carpet-core` crate. The shared, platform-agnostic transfer engine for **desktop only** (Linux + Windows). This is where most logic lives.
+- `Flying Carpet/src-tauri/` — `flying-carpet` crate, the Tauri v2 desktop app (thin wrapper exposing `core` to the GUI via `#[tauri::command]`).
+- `Flying Carpet/src/` — desktop frontend: plain HTML/CSS/vanilla JS (`main.js`), no build step, no framework. Talks to Rust via `window.__TAURI__`.
+- `Android/FlyingCarpet/` — standalone Kotlin/Android app (see "Android is independent" below).
+- `fastlane/` — F-Droid/Play Store metadata only.
+
+## Build, run, test
+
+### Desktop (Rust + Tauri)
+Run all commands from the **repo root** (the workspace root).
+
+```bash
+cargo tauri dev          # run dev build of the desktop app (needs `cargo install tauri-cli`)
+cargo tauri build        # build release artifacts (.AppImage/.deb on Linux, .msi/.exe on Windows)
+cargo build -p flying-carpet-core    # compile just the core crate
+cargo test  -p flying-carpet-core    # run core unit tests
+cargo test  -p flying-carpet-core utils::tests::size_readable   # run a single test
+```
+
+There is no JS build step or `beforeDevCommand` — Tauri serves `Flying Carpet/src/` directly (`frontendDist` in `tauri.conf.json`). Edit `main.js` and reload.
+
+Linux build needs system libs (webkit2gtk, libsoup, gdk, etc.) — see the Ubuntu example in `README.md`. The platform-specific `core` module is selected at compile time, so building on Linux compiles `core/src/linux/*` and on Windows compiles `core/src/windows/*` — **you cannot exercise the Windows networking/BLE code from a Linux host and vice versa.**
+
+### Android
+```bash
+cd Android/FlyingCarpet
+./gradlew assembleDebug     # build debug APK
+./gradlew test              # JVM unit tests
+./gradlew connectedAndroidTest   # instrumented tests (needs device/emulator)
+```
+Requires Android 10 / API 29+ (uses the `LocalOnlyHotspot` API).
+
+## Architecture
+
+### Desktop core: the transfer state machine
+`core/src/lib.rs` is the entry point. `start_transfer()` drives the whole flow and is generic over a `UI` trait — the **only** coupling between the engine and any frontend. Implement `UI` (5 methods: `output`, `show_progress_bar`, `update_progress_bar`, `enable_ui`, `show_pin`) to host the core anywhere. The Tauri app's impl is `GUI` in `Flying Carpet/src-tauri/src/main.rs`, which forwards each call as an emitted window event that `main.js` listens for.
+
+Transfer flow in `start_transfer()`:
+1. (Optional) `bluetooth::negotiate_bluetooth()` — exchange peer OS + SSID + password over BLE GATT.
+2. `network::connect_to_peer()` — one side **hosts** a hotspot, the other **joins**. Returns a `PeerResource` (`WifiClient(gateway_ip)` for the joiner, `WindowsHotspot`/`LinuxHotspot` for the host).
+3. `start_tcp()` — TCP on **port 3290**. Host binds/listens; client connects to the gateway IP.
+4. `confirm_version()` then `confirm_mode()` — handshake over the socket. Versions are compatible if `peer_version >= 8` (`utils::is_compatible`); mismatched send/receive selections error out.
+5. `sending::send_file()` / `receiving::receive_file()` per file.
+
+`Transfer` (in `lib.rs`) is the shared mutable state held in Tauri's managed state: the cancel `JoinHandle`, the active hotspot, the SSID, and a BLE-pairing mpsc channel. `clean_up_transfer()` tears down the TCP stream and hotspot afterward.
+
+### Wire protocol (must stay identical across all 5 platforms)
+Because Android and Swift reimplement this independently, **any change here is a cross-platform breaking change**:
+- Files are sent in 1 MB chunks (`CHUNKSIZE` in `lib.rs`). Each chunk: a 12-byte AES-GCM nonce prepended to the ciphertext, length-prefixed with a `u64`. A chunk length of `0` signals end-of-file.
+- Encryption: **AES-256-GCM**. The key is `SHA-256(password)` (see the README FAQ for why it's not a PBKDF) and the hotspot SSID is `flyingCarpet_<first 2 key bytes as hex>` (`utils::get_key_and_ssid`).
+- Multi-file: sender writes file count as `u64`, then per file: filename length + filename + size, then a "do you already have this?" exchange (receiver hashes its copy; transfer is skipped if SHA-256 matches).
+- All integers on the wire are `u64` via tokio's `write_u64`/`read_u64`.
+- BLE: fixed GATT UUIDs (`SERVICE_UUID` + OS/SSID/Password characteristics) defined identically in `core/src/{linux,windows}/bluetooth.rs`. The **sender** acts as the BLE peripheral/GATT server (see README footnote on the macOS↔Linux pairing limitation).
+
+### Platform abstraction
+`core/src/lib.rs` uses `#[cfg_attr(target_os = ..., path = ...)]` to map `mod network` and `mod bluetooth` to either `core/src/linux/*` or `core/src/windows/*`. **Both platform implementations must expose the same function signatures** (e.g. `connect_to_peer`, `stop_hotspot`, `get_wifi_interfaces`, `negotiate_bluetooth`, `check_support`) — `lib.rs`, `sending.rs`, and `receiving.rs` are platform-neutral and call into them. Each platform splits BLE into `central.rs` (client/GATT-client role) and `peripheral.rs` (server role). Linux uses `bluer` (BlueZ) and shells out to `nmcli` for WiFi; Windows uses `windows-rs` (WiFi Direct / WinSock / WlanAPI) and `wifidirect-legacy-ap`.
+
+### Errors
+Everything in `core` returns `Result<_, FCError>` (`core/src/error.rs`), a single string-wrapping error type with `From` impls for the common error kinds. Use the `fc_error("msg")` helper to construct one. The Tauri commands convert these to `Option<String>` for JS (null = success).
+
+### Android is independent
+`Android/` does **not** use the Rust `core` via FFI/JNI — it's a **full Kotlin reimplementation** of the same wire + BLE protocol (`Send.kt`, `Receive.kt`, `Bluetooth.kt`, `MainViewModel.kt`). When you change the protocol, encryption, or BLE UUIDs in `core`, you must mirror the change here (and the change should also be reflected in the non-public Swift codebase). Comments in `Send.kt`/`Receive.kt` explicitly note where the Kotlin mirrors the Rust/Swift behavior.
+
+## Versioning gotcha
+The version number lives in **four** places and they must be bumped together: `core/Cargo.toml`, `Flying Carpet/src-tauri/Cargo.toml`, `Flying Carpet/src-tauri/tauri.conf.json`, and `MAJOR_VERSION` in `core/src/lib.rs` (this last one is the on-the-wire compatibility number — only the major version is checked). Android has its own `versionCode`/`versionName` in `Android/FlyingCarpet/app/build.gradle`. The release commit convention is `version X.Y.Z: <summary>`.
