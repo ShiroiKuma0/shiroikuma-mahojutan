@@ -3,6 +3,7 @@ package dev.spiegl.flyingcarpet
 import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -45,6 +46,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var peerInstruction: TextView
     private lateinit var bluetoothSwitch: SwitchCompat
     private lateinit var bluetoothIcon: ImageView
+    private val settings: Settings by lazy { Settings(this) }
 
     private fun getFilePicker(): ActivityResultLauncher<Array<String>> {
         return registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -305,14 +307,14 @@ class MainActivity : AppCompatActivity() {
         // send button
         val sendButton = findViewById<Button>(id.sendButton)
         sendButton.setOnClickListener {
-            startButton.text = getString(R.string.selectFiles)
+            startButton.text = settings.textOr("start.filesText", getString(R.string.selectFiles))
             sendFolderCheckBox.visibility = View.VISIBLE
         }
 
         // receive button
         val receiveButton = findViewById<Button>(id.receiveButton)
         receiveButton.setOnClickListener {
-            startButton.text = getString(R.string.selectFolder)
+            startButton.text = settings.textOr("start.folderText", getString(R.string.selectFolder))
             sendFolderCheckBox.visibility = View.GONE
         }
 
@@ -323,6 +325,18 @@ class MainActivity : AppCompatActivity() {
             aboutFragment.show(supportFragmentManager, "alert")
         }
 
+        // 白い熊 魔法絨毯 UI customization page
+        val uiButton = findViewById<TextView>(id.uiButton)
+        uiButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-apply the UI customizations every time we return to the screen (incl. from the settings page).
+        Appearance.apply(this)
     }
 
     private fun cleanUpUi() {
@@ -481,7 +495,7 @@ class MainActivity : AppCompatActivity() {
 
         bluetoothIcon = findViewById(id.bluetoothIcon)
         viewModel.bluetooth.status.observe(this) {
-            bluetoothIcon.drawable.setTint(if (it) { Color.BLUE } else { Color.BLACK })
+            bluetoothIcon.drawable.setTint(Appearance.bluetoothIconColor(this, it))
         }
         bluetoothSwitch = findViewById(id.bluetoothSwitch)
         bluetoothSwitch.setOnCheckedChangeListener { _, isChecked ->

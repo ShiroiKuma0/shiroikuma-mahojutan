@@ -252,6 +252,16 @@
         app:layout_constraintEnd_toEndOf="@+id/programTitle"
         app:layout_constraintTop_toBottomOf="@+id/programTitle" />
 
+    <TextView
+        android:id="@+id/uiButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="2dp"
+        android:text="@string/uiSettingsLink"
+        android:textColor="@color/aboutButtonColor"
+        app:layout_constraintEnd_toEndOf="@+id/aboutButton"
+        app:layout_constraintTop_toBottomOf="@+id/aboutButton" />
+
     <CheckBox
         android:id="@+id/sendFolderCheckBox"
         android:layout_width="0dp"

@@ -19,4 +19,6 @@
     <string name="versionNumber">Version 9</string>
     <string name="sendFolderText">Send Folder</string>
     <string name="bluetooth">Use Bluetooth</string>
+    <string name="uiSettingsTitle">白い熊 魔法絨毯 UI</string>
+    <string name="uiSettingsLink">Customize UI</string>
 </resources>
