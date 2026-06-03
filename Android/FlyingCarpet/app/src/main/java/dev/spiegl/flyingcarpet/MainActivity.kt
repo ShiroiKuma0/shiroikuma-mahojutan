@@ -589,6 +589,8 @@ class MainActivity : AppCompatActivity() {
             val qrCode = findViewById<ImageView>(id.qrCodeView)
             val drawable = AppCompatResources.getDrawable(applicationContext, R.drawable.icon1024)
             qrCode.setImageDrawable(drawable)
+            // The logo is back — re-apply its tint (cleared while a QR code was shown).
+            Appearance.applyLogoTint(this)
         }
     }
 
@@ -597,6 +599,7 @@ class MainActivity : AppCompatActivity() {
             // display qr code
             val qrCode = findViewById<ImageView>(id.qrCodeView)
             viewModel.qrBitmap = getQrCodeBitmap(ssid, password)
+            qrCode.colorFilter = null   // never tint a QR code — it must stay black/white to scan
             qrCode.setImageBitmap(viewModel.qrBitmap)
             qrCode.bringToFront()
         } else { // peer is macOS, because if windows or linux we wouldn't be hosting
@@ -718,7 +721,10 @@ class MainActivity : AppCompatActivity() {
         toggleUI(!transferRunning)
         if (transferRunning) {
             viewModel.qrBitmap?.let {
-                findViewById<ImageView>(id.qrCodeView).setImageBitmap(it)
+                findViewById<ImageView>(id.qrCodeView).apply {
+                    colorFilter = null   // restored view is showing a QR code; keep it untinted
+                    setImageBitmap(it)
+                }
             }
         }
         findViewById<ProgressBar>(id.progressBar).progress = savedInstanceState.getInt("progress")
