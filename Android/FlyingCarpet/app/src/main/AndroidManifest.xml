@@ -50,6 +50,10 @@
             </intent-filter>
         </activity>
         <activity
+            android:name="dev.spiegl.flyingcarpet.SettingsActivity"
+            android:exported="false"
+            android:label="@string/uiSettingsTitle" />
+        <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
             android:screenOrientation="fullSensor"
             tools:replace="screenOrientation" />

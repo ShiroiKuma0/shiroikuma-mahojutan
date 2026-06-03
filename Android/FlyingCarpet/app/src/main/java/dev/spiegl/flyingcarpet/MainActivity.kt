@@ -3,6 +3,7 @@ package dev.spiegl.flyingcarpet
 import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -65,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     // remembers the bluetooth switch state while in shared network mode, which forces
     // it off; restored when the user returns to hotspot mode (mirrors the desktop UI)
     private var bluetoothCheckedBeforeShared: Boolean? = null
+    private val settings: Settings by lazy { Settings(this) }
 
     private fun getFilePicker(): ActivityResultLauncher<Array<String>> {
         return registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -461,10 +463,10 @@ class MainActivity : AppCompatActivity() {
         modeGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
             if (checkedId == id.sendButton) {
-                startButton.text = getString(R.string.selectFiles)
+                startButton.text = settings.textOr("start.filesText", getString(R.string.selectFiles))
                 sendFolderCheckBox.visibility = View.VISIBLE
             } else {
-                startButton.text = getString(R.string.selectFolder)
+                startButton.text = settings.textOr("start.folderText", getString(R.string.selectFolder))
                 sendFolderCheckBox.visibility = View.GONE
             }
         }
@@ -476,6 +478,18 @@ class MainActivity : AppCompatActivity() {
             aboutFragment.show(supportFragmentManager, "alert")
         }
 
+        // 白い熊 魔法絨毯 UI customization page
+        val uiButton = findViewById<TextView>(id.uiButton)
+        uiButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-apply the UI customizations every time we return to the screen (incl. from the settings page).
+        Appearance.apply(this)
     }
 
     private fun applyConnectionModeUi() {
@@ -794,14 +808,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         bluetoothIcon = findViewById(id.bluetoothIcon)
-        viewModel.bluetooth.status.observe(this) { connected ->
-            // the idle tint has to come from the theme rather than a hardcoded black: the
-            // icon's resting color is @color/bluetoothColor, which is white in dark mode.
-            // Hardcoding black left it invisible against the dark background from the end of
-            // the first transfer (when status goes back to false) onward.
-            bluetoothIcon.drawable.setTint(
-                if (connected) Color.BLUE else getColor(R.color.bluetoothColor)
-            )
+        // the idle tint comes from the fork's Appearance layer rather than a hardcoded black:
+        // the icon's resting color must follow the theme, or it goes invisible against the
+        // dark background from the end of the first transfer (when status goes back to false).
+        viewModel.bluetooth.status.observe(this) {
+            bluetoothIcon.drawable.setTint(Appearance.bluetoothIconColor(this, it))
         }
         bluetoothSwitch = findViewById(id.bluetoothSwitch)
         bluetoothSwitch.setOnCheckedChangeListener { _, isChecked ->
