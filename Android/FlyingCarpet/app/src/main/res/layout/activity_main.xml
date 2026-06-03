@@ -307,15 +307,23 @@
         app:layout_constraintEnd_toEndOf="@+id/programTitle"
         app:layout_constraintTop_toBottomOf="@+id/programTitle" />
 
-    <TextView
+    <Button
         android:id="@+id/uiButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="2dp"
+        android:layout_marginEnd="8dp"
+        android:insetTop="0dp"
+        android:insetBottom="0dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
         android:text="@string/uiSettingsLink"
-        android:textColor="@color/aboutButtonColor"
-        app:layout_constraintEnd_toEndOf="@+id/aboutButton"
-        app:layout_constraintTop_toBottomOf="@+id/aboutButton" />
+        android:textAllCaps="false"
+        android:textSize="12sp"
+        app:layout_constraintBottom_toTopOf="@+id/modeGroup"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/qrCodeView" />
 
     <CheckBox
         android:id="@+id/sendFolderCheckBox"
