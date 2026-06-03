@@ -21,4 +21,25 @@
         <item name="strokeColor">@color/black</item>
         <item name="backgroundTint">@drawable/button_background_selector</item>
     </style>
+    <!-- 白い熊 魔法絨毯 UI customization page: a yellow-on-black dark theme so the page's many native
+         controls (EditText, Spinner, SeekBar, Buttons) stay legible by default. The page is still fully
+         configurable on top of this via the "This settings page" section (page.* keys). -->
+    <style name="Theme.FlyingCarpet.Settings" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+        <item name="colorPrimary">#FFFF00</item>
+        <item name="colorOnPrimary">#000000</item>
+        <item name="colorSecondary">#FFFF00</item>
+        <item name="colorOnSecondary">#000000</item>
+        <item name="colorSurface">#000000</item>
+        <item name="colorOnSurface">#FFFF00</item>
+        <item name="colorAccent">#FFFF00</item>
+        <item name="colorControlNormal">#FFFF00</item>
+        <item name="colorControlActivated">#FFFF00</item>
+        <item name="android:textColor">#FFFF00</item>
+        <item name="android:textColorPrimary">#FFFF00</item>
+        <item name="android:textColorSecondary">#CCFFEB00</item>
+        <item name="android:textColorHint">#80FFFF00</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+    </style>
 </resources>
