@@ -34,6 +34,12 @@ class Settings(context: Context) {
         if (value <= 0f) remove(key) else putFloat(key, value)
     }.apply()
 
+    // Dimensions (border width / corner radius) whose default is non-zero: here 0 is a *valid* stored
+    // value (no border / square), distinct from "unset" (use the default). sizeOrNull tells them apart;
+    // setDim stores even 0 so a slider can be dragged down to zero without snapping back to the default.
+    fun sizeOrNull(key: String): Float? = if (prefs.contains(key)) prefs.getFloat(key, 0f) else null
+    fun setDim(key: String, value: Float) = prefs.edit().putFloat(key, value).apply()
+
     fun family(key: String): String = prefs.getString(key, "") ?: ""
     fun setFamily(key: String, value: String) = prefs.edit().apply {
         if (value.isEmpty()) remove(key) else putString(key, value)
@@ -45,6 +51,9 @@ class Settings(context: Context) {
     }.apply()
 
     fun clearAll() = prefs.edit().clear().apply()
+
+    // Remove a set of keys (used by a group's "Reset to default" button) so they fall back to defaults.
+    fun remove(keys: List<String>) = prefs.edit().apply { keys.forEach { remove(it) } }.apply()
 
     // ── External font files ──────────────────────────────────────────────────
     // 白い熊 picks .ttf/.otf files; SettingsActivity copies each into filesDir/fonts (named after the
