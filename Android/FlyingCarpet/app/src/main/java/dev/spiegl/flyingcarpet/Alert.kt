@@ -2,7 +2,11 @@ package dev.spiegl.flyingcarpet
 
 import android.app.AlertDialog
 import android.app.Dialog
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.util.TypedValue
+import android.widget.TextView
 import androidx.fragment.app.DialogFragment
 
 class Alert(private val message: String) : DialogFragment() {
@@ -26,8 +30,30 @@ class About : DialogFragment() {
                 .setTitle("About Flying Carpet")
                 .setMessage(AboutMessage.trimIndent())
 //                .setPositiveButton("OK") {_, _ -> }
-            builder.create()
+            val dialog = builder.create()
+            // Apply 白い熊's "About page" customizations (and the yellow-on-black fork defaults) once the
+            // dialog's title/message TextViews exist.
+            dialog.setOnShowListener {
+                val s = Settings(requireContext())
+                dialog.window?.setBackgroundDrawable(ColorDrawable(s.colorOrNull("aboutBg") ?: Defaults.BLACK))
+                dialog.findViewById<TextView>(android.R.id.message)?.let { tv -> styleAbout(s, tv, "aboutBody") }
+                val titleId = resources.getIdentifier("alertTitle", "id", "android")
+                if (titleId != 0) dialog.findViewById<TextView>(titleId)?.let { tv -> styleAbout(s, tv, "aboutTitle") }
+            }
+            dialog
         } ?: throw IllegalStateException("Activity cannot be null")
+    }
+
+    // Applies "<key>.color/family/style/size" to a dialog TextView, defaulting to yellow text.
+    private fun styleAbout(s: Settings, tv: TextView, key: String) {
+        tv.setTextColor(s.colorOrNull("$key.color") ?: Defaults.YELLOW)
+        val family = s.family("$key.family")
+        val style = s.style("$key.style")
+        if (family.isNotEmpty() || style >= 0) {
+            val eff = if (style >= 0) style else (tv.typeface?.style ?: Typeface.NORMAL)
+            tv.typeface = FontUtil.typeface(family, eff) ?: Typeface.create(tv.typeface, eff)
+        }
+        s.size("$key.size").let { if (it > 0f) tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
     }
 }
 

@@ -52,7 +52,8 @@
         <activity
             android:name="dev.spiegl.flyingcarpet.SettingsActivity"
             android:exported="false"
-            android:label="@string/uiSettingsTitle" />
+            android:label="@string/uiSettingsTitle"
+            android:theme="@style/Theme.FlyingCarpet.Settings" />
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
             android:screenOrientation="fullSensor"
