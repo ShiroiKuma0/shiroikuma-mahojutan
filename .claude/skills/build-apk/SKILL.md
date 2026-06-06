@@ -1,6 +1,6 @@
 ---
 name: build-apk
-description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying Carpet) Android fork, then always ask whether to push it to the connected phone via adb. Use whenever the user asks to build the app, build the APK, make a release build, or build and push to the phone.
+description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying Carpet) Android fork, then always ask whether to push it to the connected phone via adb. Use whenever the user asks to build the app, build the APK, make a release build, or build and push to the phone — AND proactively (without being asked) after completing any code, resource, asset, icon, or version change to the Android app, so the user always has an up-to-date APK to test.
 ---
 
 # Build the signed release APK and optionally push to phone
@@ -9,6 +9,17 @@ This is the **Android** app of the FlyingCarpet fork (`Android/FlyingCarpet/`). 
 (Tauri/Rust) app is **not** part of this fork and is never built here. The app has **no native
 code** — it is pure Kotlin, so there are no ABI splits: `assembleRelease` produces **one universal
 APK**. The `arm64-v8a` in the filename is a naming convention (the target device), not an ABI variant.
+
+## When to build — always, after any change
+
+**Build automatically after completing any change to the Android app** (code, resources, assets,
+icons, version bumps) — don't wait to be asked. Once the change is done and the working tree is in a
+testable state, run the build (these Steps), copy to `~/tmp`, then **ask** about pushing. The goal is
+that there is always a fresh, signed APK ready to install for testing. This does **not** relax the
+hard rules below: building is automatic, but committing, pushing to git, and `adb push`/install are
+**never** automatic — they still require an explicit request (push) or a per-build ask (adb). Skip an
+auto-build only when the change leaves the app uncompilable (mid-refactor) or touches nothing the APK
+ships (e.g. only docs, skills, or `~/tmp` scratch files).
 
 ## Hard rules (same as everyday development — see CLAUDE.md)
 
