@@ -14,4 +14,7 @@
     <color name="bluetoothColor">#000000</color>
     <color name="buttonColor">#005C50</color>
     <color name="statusBarColor">#281D0D</color>
+    <!-- 白い熊 魔法絨毯 launcher icon: pure black behind the yellow-traced carpet. Kept separate from
+         fc_logo_background (which the night theme reuses) so the icon can be black without touching the UI. -->
+    <color name="ic_launcher_background">#000000</color>
 </resources>
