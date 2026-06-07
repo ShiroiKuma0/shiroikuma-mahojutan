@@ -42,8 +42,9 @@ rebranded, and shipped** — the Tauri/Rust desktop app is left exactly as upstr
 
 - **Never `git commit` / `git push` unprompted; never `adb install`.** Build, copy to `~/tmp`, and only
   `adb push` to `/sdcard/tmp/` after asking — the user installs from the phone's file manager and tests
-  before anything is committed. Push (`--force-with-lease origin custom`, since rebases rewrite history)
-  only on an explicit **"Push"**.
+  before anything is committed. **Always ask the adb-push question as an explicit yes/no prompt via the
+  `AskUserQuestion` tool** (a Yes/No choice), never as plain prose — and wait for the answer before pushing.
+  Push (`--force-with-lease origin custom`, since rebases rewrite history) only on an explicit **"Push"**.
 
 ---
 
