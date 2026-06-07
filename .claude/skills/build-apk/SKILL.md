@@ -24,7 +24,9 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
 ## Hard rules (same as everyday development — see CLAUDE.md)
 
 - **Never `git commit`/`git push` unprompted**, and **never `adb install`.** Build, copy to `~/tmp`,
-  and only `adb push` to `/sdcard/tmp/` after asking. The user installs from the phone's file manager.
+  and only `adb push` to `/sdcard/tmp/` after asking — and the ask is always an explicit Yes/No
+  `AskUserQuestion` prompt (never plain prose), answered before pushing. The user installs from the
+  phone's file manager.
 - Always keep the unconditional `~/tmp/` copy so a missing/forgotten cable never costs the build.
 
 ## Steps
@@ -67,8 +69,9 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
      `shiroikuma.mahojutan`, `versionName='<ver>+<bn>'`, label `白い熊 魔法絨毯`.
    - `apksigner verify --print-certs <apk>` → `CN=shiroikuma mahojutan`.
 
-5. **Always ask** (via AskUserQuestion) whether to push the APK to the phone — every build, no
-   assuming. Options: "Yes, push via adb" / "No, just build".
+5. **Always ask** whether to push the APK to the phone — every build, no assuming. The ask **must** be
+   an explicit Yes/No prompt via the `AskUserQuestion` tool (never plain prose); options
+   "Yes, push via adb" / "No, just build". Wait for the answer before doing step 6.
 
 6. **If yes, push directly** (never `adb install`):
    - `adb devices` — confirm a device is connected.
