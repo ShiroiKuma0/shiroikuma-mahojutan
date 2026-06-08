@@ -113,3 +113,7 @@ repo and is never committed. To recreate it on a fresh machine:
 installs **side-by-side** with the official Flying Carpet. The code `namespace` stays
 `dev.spiegl.flyingcarpet` (R class / Kotlin package), so no source edits are needed. Do not try to
 install over an official build signed with a different key — Android refuses.
+
+---
+
+**Commit convention — no Claude attribution.** Never add a `Co-Authored-By: Claude …` / "Generated with Claude" trailer to commit messages or PR bodies; end the message at the last line of the body. This overrides the harness default. (Global rule: `~/.claude/CLAUDE.md`.)
