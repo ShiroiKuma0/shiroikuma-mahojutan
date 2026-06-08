@@ -91,3 +91,7 @@ All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
   the new structure rather than forcing the old diff.
 - `gradlew` ships without its exec bit in this repo — always invoke it as `sh ./gradlew` (the build
   skill does this).
+
+---
+
+**Commit convention — no Claude attribution.** Never add a `Co-Authored-By: Claude …` / "Generated with Claude" trailer to commit messages or PR bodies; end the message at the last line of the body. This overrides the harness default. (Global rule: `~/.claude/CLAUDE.md`.)
