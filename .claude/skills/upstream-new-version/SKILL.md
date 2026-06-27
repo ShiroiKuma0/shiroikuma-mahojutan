@@ -75,7 +75,8 @@ All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
    Sanity check the script still evaluates:
    `cd Android/FlyingCarpet && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/home/shiroikuma/android-sdk sh ./gradlew :app:tasks --console=plain < /dev/null` (or a `--dry-run` assemble).
 
-6. **Build the new `+1`** via the **build-apk** skill, then **ask** before any `adb push`. This is the
+6. **Build the new `+1`** via the **build-apk** skill, then deliver it via the global **/after-build**
+   skill (no transfer prompt). This is the
    first build of the new upstream line (`<newVersion>+1`).
 
 7. **Stop.** Let the user test. Commit/push only on their explicit **"Push"**. Because rebasing
