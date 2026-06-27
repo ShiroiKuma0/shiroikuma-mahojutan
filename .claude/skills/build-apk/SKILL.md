@@ -1,6 +1,6 @@
 ---
 name: build-apk
-description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying Carpet) Android fork, then always ask whether to scp it to skhw (first choice) or adb push it to the connected phone. Use whenever the user asks to build the app, build the APK, make a release build, or build and send to the phone — AND proactively (without being asked) after completing any code, resource, asset, icon, or version change to the Android app, so the user always has an up-to-date APK to test.
+description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying Carpet) Android fork, then deliver it automatically via the global /after-build skill (adb push if a phone is connected, else scp to skhw — no transfer prompt). Use whenever the user asks to build the app, build the APK, make a release build, or build and send to the phone — AND proactively (without being asked) after completing any code, resource, asset, icon, or version change to the Android app, so the user always has an up-to-date APK to test.
 ---
 
 # Build the signed release APK and optionally send to phone
@@ -14,20 +14,21 @@ APK**. The `arm64-v8a` in the filename is a naming convention (the target device
 
 **Build automatically after completing any change to the Android app** (code, resources, assets,
 icons, version bumps) — don't wait to be asked. Once the change is done and the working tree is in a
-testable state, run the build (these Steps), copy to `~/tmp`, then **ask** about the transfer. The goal is
+testable state, run the build (these Steps), copy to `~/tmp`, then deliver it via the global
+**/after-build** skill. The goal is
 that there is always a fresh, signed APK ready to install for testing. This does **not** relax the
-hard rules below: building is automatic, but committing, pushing to git, and `scp`/`adb push`/install are
-**never** automatic — they still require an explicit request (push) or a per-build ask (transfer). Skip an
+hard rules below: building and delivery are automatic, but committing and pushing to git are
+**never** automatic — they still require an explicit request ("Push"). Skip an
 auto-build only when the change leaves the app uncompilable (mid-refactor) or touches nothing the APK
 ships (e.g. only docs, skills, or `~/tmp` scratch files).
 
 ## Hard rules (same as everyday development — see CLAUDE.md)
 
 - **Never `git commit`/`git push` unprompted**, and **never `adb install`.** Build, copy to `~/tmp`,
-  and only transfer the APK after asking — and the ask is always an explicit `AskUserQuestion`
-  prompt (never plain prose) about how to transfer the APK, with options in this order:
-  "Scp to skhw" (FIRST choice) / "adb push" / "No, just build" — answered before transferring.
-  Any `adb push` goes to `/sdcard/tmp/`; the user installs from the phone's file manager.
+  then deliver the APK automatically via the global **/after-build** skill — it runs `/adb-check`
+  (UNSANDBOXED) then `/adb-push` to `/sdcard/tmp/` if a phone is connected, otherwise `/scp` to
+  `skhw:~/tmp/`, announcing the filename. No transfer prompt — never ask "scp or adb push?" or
+  "is the phone connected?". The user installs from the phone's file manager.
 - Always keep the unconditional `~/tmp/` copy so a missing/forgotten cable never costs the build.
 
 ## Steps
@@ -70,20 +71,12 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
      `shiroikuma.mahojutan`, `versionName='<ver>+<bn>'`, label `白い熊 魔法絨毯`.
    - `apksigner verify --print-certs <apk>` → `CN=shiroikuma mahojutan`.
 
-5. **Always ask** how to transfer the APK to the phone — every build, no assuming. The ask **must** be
-   an explicit prompt via the `AskUserQuestion` tool (never plain prose); options, in this order:
-   "Scp to skhw" (FIRST choice) / "adb push" / "No, just build". Wait for the answer before doing step 6.
-
-6. **Transfer per the answer** (never `adb install`):
-   - **Scp to skhw** — invoke the global **scp** skill (copies the newest APK in `~/tmp/` to
-     `skhw:~/tmp/`). If skhw is unreachable (its tunnel is served by the phone's sshd and may be
-     down), report that and offer the adb push instead.
-   - **adb push:**
-     - `adb devices` — confirm a device is connected.
-     - `adb shell mkdir -p /sdcard/tmp`
-     - `adb push ~/tmp/<apk name> /sdcard/tmp/<apk name>`
-     - Verify: `adb shell ls -l /sdcard/tmp/<apk name>` (size matches the local file).
-     - The user installs it from the phone's file manager.
+5. **Deliver automatically via the global /after-build skill** — every build, no asking. After the
+   signed APK is in `~/tmp/`, invoke **/after-build**: it runs `/adb-check` UNSANDBOXED (a sandboxed
+   check falsely reports no device), then `/adb-push` to `/sdcard/tmp/` if a phone is connected,
+   otherwise `/scp` to `skhw:~/tmp/`, and announces the filename that landed. Never prompt
+   "scp or adb push?" or "is the phone connected?" — /after-build decides on its own. Never
+   `adb install`; the user installs from the phone's file manager.
 
 ## Signing (prerequisite)
 
