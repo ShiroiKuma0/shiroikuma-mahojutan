@@ -6,7 +6,8 @@ description: Rebase the shiroikuma 魔法絨毯 fork onto a new upstream release
 # Rebase the fork onto a new upstream release
 
 This codifies the "new upstream version" half of the fork workflow: move `main` to the new upstream
-release, replay our `custom` customizations on top, and produce a fresh `+1` build.
+release, replay our `custom` customizations on top, and produce the release's two artifacts: a fresh
+`+1` Android build and the rebranded desktop amd64 `.deb` for Tuxedo OS (this host).
 
 > **Never `git push` or `git commit` unprompted, and never `adb install`.** Same hard rules as
 > everyday development (see CLAUDE.md). After the rebase + build you stop and let the user test; you
@@ -14,8 +15,9 @@ release, replay our `custom` customizations on top, and produce a fresh `+1` bui
 
 ## Background — how versioning works here
 
-This fork is **Android-only** (the Tauri/Rust desktop app is not built or shipped here). The Android
-app has no native code → one universal APK; `arm64-v8a` in the filename is a label, not an ABI split.
+Fork changes cover **both apps**: the Android app and the Tauri/Rust Linux desktop app, which each
+upstream release is built into as a rebranded amd64 `.deb` for 白い熊's Tuxedo OS machine, this host
+(rule added 2026-07-22; see step 7). The Android app has no native code → one universal APK; `arm64-v8a` in the filename is a label, not an ABI split.
 
 - **`versionName` tracks the FlyingCarpet *release* version** — the latest `v*` git tag, equal to the
   desktop `Cargo.toml` / `tauri.conf.json` version. **Upstream lets the Android `build.gradle`
@@ -30,6 +32,11 @@ app has no native code → one universal APK; `arm64-v8a` in the filename is a l
   line's codes all exceed the previous line's, keeping sideloaded upgrades monotonic.
 
 All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
+
+**The desktop `.deb` follows the same `+N` convention**, with its own independent counter: the
+`version` field of `Flying Carpet/src-tauri/tauri.conf.json` is `"<release>+<buildNumber>"`, resets to
+`+1` on each upstream rebase, and goes +1 per delivered `.deb`. Tauri derives the filename, the dpkg
+`Version:` field, and the app's own version label from it. See the **build-deb** skill.
 
 ## Steps
 
@@ -48,9 +55,14 @@ All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
 3. **Rebase `custom` onto the new `main`:**
    - `git checkout custom`
    - `git rebase main`
-   - Resolve conflicts so **all** our customizations survive (see the table in step 5). The only
-     conflict-prone files are `Android/FlyingCarpet/app/build.gradle` and
-     `Android/FlyingCarpet/app/src/main/res/values/strings.xml`.
+   - Resolve conflicts so **all** our customizations survive (see the table in step 5). The
+     conflict-prone files are `Android/FlyingCarpet/app/build.gradle`,
+     `Android/FlyingCarpet/app/src/main/res/values/strings.xml`, and on the desktop side
+     `Flying Carpet/src-tauri/tauri.conf.json` (upstream bumps `version` next to our
+     `productName`/`mainBinaryName` lines), `Flying Carpet/src/index.html`, and
+     `Flying Carpet/src/main.js` (our forkUI hooks: About dialog, start-button labels, logo tint).
+     `customize.js`/`customize.css` are fork-only files and never conflict. If upstream redraws
+     its logo, keep **our** yellow-traced icon set (`Flying Carpet/src-tauri/icons/`).
 
 4. **Re-derive versioning in `Android/FlyingCarpet/app/build.gradle`:**
    - Set `releaseVersionName` to the **new release version** (from the `v*` tag, step 1) — not the
@@ -71,6 +83,11 @@ All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
    | APK base name | `setProperty("archivesBaseName", …)` | `app/build.gradle` `defaultConfig` |
    | Release signing | `signingConfigs.release` from `keystore.properties` / `SIGNING_*` + `buildTypes.release.signingConfig` | `app/build.gradle` |
    | `keystore.properties` gitignored | present in `Android/FlyingCarpet/.gitignore` | `.gitignore` |
+   | Desktop dpkg package / binary | `shiroikuma-mahojutan` | `productName` + `mainBinaryName` in `Flying Carpet/src-tauri/tauri.conf.json` |
+   | Desktop launcher name | `白い熊 魔法絨毯` | `Flying Carpet/src-tauri/shiroikuma-mahojutan.desktop` (referenced by `bundle.linux.deb.desktopTemplate`) |
+   | Desktop window title + in-app heading | `白い熊 魔法絨毯` | window `title` in `tauri.conf.json`; `<title>`/`<h1>` in `Flying Carpet/src/index.html` |
+   | Desktop icon | yellow-traced carpet set (yellow line drawing on black) | `Flying Carpet/src-tauri/icons/*` |
+   | Desktop fork UI layer | `customize.js` + `customize.css` present; `index.html` loads both, has `#uiButton` / `data-logo` / ids; `main.js` calls `window.forkUI.showAbout` / `startLabel` / `applyLogoTint` | `Flying Carpet/src/*` |
 
    Sanity check the script still evaluates:
    `cd Android/FlyingCarpet && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/home/shiroikuma/android-sdk sh ./gradlew :app:tasks --console=plain < /dev/null` (or a `--dry-run` assemble).
@@ -79,7 +96,21 @@ All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
    skill (no transfer prompt). This is the
    first build of the new upstream line (`<newVersion>+1`).
 
-7. **Stop.** Let the user test. Commit/push only on their explicit **"Push"**. Because rebasing
+7. **Build the desktop `.deb` (amd64) for Tuxedo OS** via the **build-deb** skill:
+   - First **reset the desktop build number to `1`**: set `version` in
+     `Flying Carpet/src-tauri/tauri.conf.json` to `"<newRelease>+1"` (the same reset the Android
+     `buildNumber` gets in step 4; the two counters are independent from there on).
+   - Build from the **repo root**: `cargo tauri build --bundles deb`.
+   - The artifact lands at `target/release/bundle/deb/shiroikuma-mahojutan_<newRelease>+1_amd64.deb` —
+     copy it to `~/tmp/` as-is (name and version are baked in; no renaming).
+   - The rebrand is part of `custom` (verify in step 5): dpkg package + `/usr/bin` binary are
+     `shiroikuma-mahojutan`, the visible app name is `白い熊 魔法絨毯`, the icon is the yellow-traced
+     carpet, and the fork UI (yellow-on-black + Customize UI page) is present.
+   - **No adb/scp** — the `.deb` targets **this** machine; 白い熊 installs it locally (e.g.
+     `sudo apt install ~/tmp/shiroikuma-mahojutan_<newRelease>+1_amd64.deb`). Announce it alongside
+     the APK.
+
+8. **Stop.** Let the user test. Commit/push only on their explicit **"Push"**. Because rebasing
    rewrites `custom`'s history, the push is `git push --force-with-lease origin custom`; `main` is a
    plain fast-forward (`git push origin main`).
 
