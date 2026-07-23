@@ -7,7 +7,8 @@ description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying
 
 This is the **Android** app of the FlyingCarpet fork (`Android/FlyingCarpet/`). The desktop
 (Tauri/Rust) app is forked and rebranded too, but is built by its own **build-deb** skill — this one
-never touches it, and the two carry **independent** `+N` build counters. The app has **no native
+never builds it, but the two artifacts share **one** `+N` build counter: the same code must always
+build as the same `+N` on both, so a bump edits both version fields (see step 1). The app has **no native
 code** — it is pure Kotlin, so there are no ABI splits: `assembleRelease` produces **one universal
 APK**. The `arm64-v8a` in the filename is a naming convention (the target device), not an ABI variant.
 
@@ -38,10 +39,13 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
    - `grep -E 'releaseVersionName|buildNumber' Android/FlyingCarpet/app/build.gradle`
    - The clean APK name is `shiroikuma-mahojutan_<releaseVersionName>+<buildNumber>_arm64-v8a.apk`
      (e.g. `shiroikuma-mahojutan_9.0.10+1_arm64-v8a.apk`). `versionCode` = `21 * 10000 + buildNumber`.
-   - **If this is a new deliverable build** distinct from the last one the user kept, bump
-     `buildNumber` (+1) in `build.gradle` first so the install lands as an upgrade. Iterating an
-     unpushed build can reuse the current number (a same-code reinstall is fine). On an upstream
-     rebase the number resets to 1 — see the `upstream-new-version` skill.
+   - **If this is a new deliverable build** distinct from the last one the user kept, bump the
+     **shared** build counter (+1) first so the install lands as an upgrade — in **both** places,
+     which must always hold the same number: `buildNumber` in `build.gradle` **and** the `+N` in the
+     `version` field of `Flying Carpet/src-tauri/tauri.conf.json` (the same code must always build
+     as the same `+N` on APK and deb). Iterating an unpushed build can reuse the current number
+     (a same-code reinstall is fine). On an upstream rebase the counter resets to 1 — see the
+     `upstream-new-version` skill.
 
 2. **Build** (from the repo root). `gradlew` ships without its exec bit in this repo, so invoke it
    via `sh`. Pin JDK 21 and the SDK; the `< /dev/null` guarantees it never blocks on stdin:

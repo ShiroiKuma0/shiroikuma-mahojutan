@@ -3,7 +3,8 @@
 All notable changes this fork makes on top of stock
 [Flying Carpet](https://github.com/spieglt/FlyingCarpet). Versions are
 `<upstream release>+<fork build number>`; the build number resets on each upstream rebase and
-increases with every delivered build. The Android and desktop counters are independent.
+increases with every delivered build. The Android and desktop artifacts share one counter — the
+same code always builds as the same `+N` on both, though not every `+N` ships both artifacts.
 
 ## 9.0.10+20 — 2026-07-23
 
@@ -14,8 +15,9 @@ rebranded and themed just like the Android app, and ships as an amd64 `.deb`.
 
 - Android: `shiroikuma-mahojutan_9.0.10+20_arm64-v8a.apk` (app id `shiroikuma.mahojutan`,
   versionCode `210020`, signed with the fork keystore, universal — the app has no native code).
-- Linux desktop: `shiroikuma-mahojutan_9.0.10+1_amd64.deb` (dpkg package and binary
-  `shiroikuma-mahojutan`, first build of the desktop line).
+- Linux desktop: `shiroikuma-mahojutan_9.0.10+20_amd64.deb` (dpkg package and binary
+  `shiroikuma-mahojutan`, first build of the desktop line — same `+N` as the APK, from the shared
+  build counter).
 
 ### Major features
 
@@ -92,8 +94,9 @@ rebranded and themed just like the Android app, and ships as an amd64 `.deb`.
   `v*` tag rather than the value upstream leaves in the Android `build.gradle` (which lagged at
   `9.0.8` at the `v9.0.10` release); `versionCode = <upstream Android versionCode> * 10000 +
   <buildNumber>`, keeping sideloaded upgrades monotonic across upstream bumps.
-- The desktop `.deb` follows the same `+N` convention from its own independent counter; dpkg orders
-  `9.0.10+2 > 9.0.10+1 > 9.0.10`, so each build installs as an upgrade.
+- The desktop `.deb` carries the same `+N` as the APK — one build counter is shared across both
+  artifacts, so the same code always builds as the same version; dpkg orders
+  `9.0.10+20 > 9.0.10+1 > 9.0.10`, so each build installs as an upgrade.
 - Every build gets a unique filename — build numbers are never reused and older artifacts are never
   overwritten.
 - Non-interactive release signing from a gitignored `keystore.properties`, with `SIGNING_*`
