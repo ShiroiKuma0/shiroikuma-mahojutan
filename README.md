@@ -1,88 +1,105 @@
-## Version 9 adds Bluetooth for transfer negotiation
+<div align="center">
 
-### Download for Android:
+<img src="Android/FlyingCarpet/app/src/main/fc_logo-playstore.png" width="120" alt="白い熊 魔法絨毯 icon" />
 
-<a href="https://play.google.com/store/apps/details?id=dev.spiegl.flyingcarpet"><img alt="Get it on Google Play" src="screenshots/google-play.png" width="240"/></a>&nbsp;&nbsp;<a href="https://f-droid.org/packages/dev.spiegl.flyingcarpet"><img src="screenshots/f-droid.png" alt="Get it on F-Droid" width="240"></a>
+# 白い熊 魔法絨毯
 
-Or if you prefer to sideload, `android_FlyingCarpet_9.0.8.apk` is available on the [releases](https://github.com/spieglt/FlyingCarpet/releases/latest) page.
+**Encrypted, peer-to-peer file transfer over an ad hoc WiFi hotspot — no shared network, no cloud, no account.**
 
-### Download for iOS:
+A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**: a full
+yellow-on-black theme, an in-app *Customize UI* page that restyles every single surface, external font
+support, a custom icon, and a rebranded Linux desktop build shipped as an amd64 `.deb`.
 
-<a href="https://apps.apple.com/us/app/flying-carpet-file-transfer/id1637377410"><img alt="Get it on Apple App Store" src="screenshots/app-store.png" width="240"/></a>
+Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
+`shiroikuma-mahojutan`).
 
-Or search the App Store for "Flying Carpet File Transfer".
+**📥 Latest release: [`9.0.10+20`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
-### Linux, macOS, and Windows versions are available on the [releases](https://github.com/spieglt/FlyingCarpet/releases/latest) page. Installers and standalone executable versions available.
+</div>
 
-# Flying Carpet
+---
 
-Send and receive files between Android, iOS, Linux, macOS, and Windows over ad hoc WiFi. No shared network or cell connection required, just two devices with WiFi (and optionally Bluetooth) chips in close range.
+## 🎨 Yellow on black, everywhere
 
-Don't have a flash drive? Don't have access to a wireless network? Need to move a file larger than 2GB between different filesystems but don't want to set up a network share? Try it out!
+The whole app is rebuilt around a high-contrast yellow-on-black look: yellow text, thin yellow borders
+with rounded corners, black fills — on the title bar, the Send/Receive and peer-OS buttons, the file
+picker, the transfer log, the Bluetooth switch, the progress bar, the About dialog, and the window
+itself. Nothing is left half-styled: any property you haven't overridden falls back to the fork's own
+default rather than to stock's blue-on-white.
 
-[Demo video](https://youtu.be/52Xkrx2BXrg)
+---
 
-## Screenshots:
+## 🛠️ Customize UI — every surface, yours
 
-<img src="screenshots/android.png" width="240"> <img src="screenshots/ios.png" width="240"> <img src="screenshots/linux.png" width="280"> <br> <img src="screenshots/mac.png" width="360"> <img src="screenshots/windows.png" width="360">
+A dedicated settings page (the *Customize UI* button under the logo) turns the entire interface into
+something you can edit without touching code:
 
-## Use:
+- **Per-element text** — rename any label, and set its colour, font, style and size.
+- **Per-button colours** — every toggle button (Send, Receive, and each of the five peer-OS buttons)
+  carries its *own* selected and unselected fill and text colour, border colour, border-width slider
+  and corner-radius slider. No global "accent colour" compromise.
+- **Live preview** — changes land on the real UI as you make them.
+- **Reset anywhere** — per property, per group, or everything at once.
+- **The settings page styles itself**, so you can theme the theming tool.
 
-**Linux:** Download the `.AppImage` file from the [releases](https://github.com/spieglt/FlyingCarpet/releases) page for a standalone version, or if you're on a Debian-based distribution, download the `.deb` file and install it with `dpkg`.
+---
 
-**macOS:** Download the `.dmg` disk image file from the [releases](https://github.com/spieglt/FlyingCarpet/releases) page. Double-click to mount it and drag the `.app` bundle inside to your Applications folder. Or if you use Homebrew, run `brew install flying-carpet`.
+## 🔤 Bring your own fonts
 
-**Windows:** Download the `.msi` installer from the [releases](https://github.com/spieglt/FlyingCarpet/releases) page, or `FlyingCarpet.exe` for a standalone version.
+Every font menu ends with **Add external font…**. Pick a `.ttf`/`.otf` and it is stored with the app,
+then offered — rendered in its own glyphs — in every font dropdown from then on.
 
-## Compilation Instructions:
+---
 
-+ Install [Rust](https://www.rust-lang.org/tools/install).
+## 🖥️ A real Linux desktop build
 
-+ Run `cargo install tauri-cli` to install Tauri.
+The desktop app is rebranded as thoroughly as the phone app and shipped as an **amd64 `.deb`**: dpkg
+package and binary `shiroikuma-mahojutan`, launcher entry `白い熊 魔法絨毯`, the fork's yellow-traced
+carpet icon, and the same yellow-on-black theme and *Customize UI* page as Android — a port of the
+same catalog, not a lookalike. It installs alongside the official desktop build.
 
-+ For Linux, install dependencies. Ubuntu 20 example:
+---
+
+## 🖼️ A carpet of our own
+
+Custom launcher icon: the 「魔法」 kanji on a traced flying carpet, yellow on black, regenerated across
+every density (adaptive foreground, legacy launcher, round mask, store asset), plus a matching
+yellow-traced icon set for the desktop app. The in-app logo is tinted with a luminance-preserving
+colorize, so the carpet's line detail survives the recolour — while QR codes are never tinted, and
+stay scannable.
+
+---
+
+## 📦 Predictable builds
+
+Both artifacts are versioned `<upstream release>+<build number>`: the build number resets on every
+upstream rebase and increases with every delivered build, so no two builds share a filename and every
+install lands as a clean upgrade.
+
+---
+
+## Built on Flying Carpet
+
+A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) by Theron Spiegl (app id
+`shiroikuma.mahojutan`, so it coexists with the official build). All the hard parts — the AES-256-GCM
+wire protocol, the ad hoc hotspot setup, and the Bluetooth LE credential exchange that make
+phone-to-laptop transfers work without any shared network — are upstream's work, and this fork tracks
+its releases. The code remains under the **GPL-3.0**.
+
+## Building
+
+```bash
+git clone git@github.com:ShiroiKuma0/shiroikuma-mahojutan.git
+cd shiroikuma-mahojutan
+
+# Android (signed release APK; needs JDK 21 + the Android SDK)
+cd Android/FlyingCarpet
+sh ./gradlew :app:assembleRelease
+
+# Linux desktop (amd64 .deb; needs `cargo install tauri-cli` and the webkit2gtk-4.1 dev libs)
+cd ../..
+cargo tauri build --bundles deb
 ```
-sudo apt install libsoup2.4* libjavascriptcoregtk* libgdk-pixbuf2.0* librust-pango-sys-dev libgdk3.0* librust-atk-dev librust-atk-sys-dev librust-gdk* libwebkit2gtk* librsvg2-dev
-```
 
-+ Run `cargo tauri dev` to run a development version or `cargo tauri build` to create release artifacts.
-
-## Restrictions:
-
-+ Apple devices can only transfer to/from Android, Linux, and Windows as they can no longer programmatically run hotspots. Use AirDrop instead for Apple-to-Apple transfers.
-
-+ To use Bluetooth to send from macOS to Linux, the devices must be manually paired first, with the connection initiated by macOS[^1]. The "Use Bluetooth" switch can be turned off on both sides of the transfer when sending from macOS to Linux, to enter the WiFi information manually instead.
-
-+ Disables your wireless internet connection while in use. (Does not apply to Windows or Android when hosting the hotspot.)
-
-+ macOS sometimes switches back to a wireless network with internet connectivity during particularly long transfers.
-
-+ The Android version requires at least Android 10/API level 29. The Android version does not work on some Xiaomi, MIUI, or HarmonyOS devices, and possibly other Android-like OSes. I don't own these devices and so can't test, but it seems like this is due to lack of support for the [LocalOnlyHotspot](https://developer.android.com/develop/connectivity/wifi/localonlyhotspot) API. It has been confirmed to work on at least one Xiaomi phone.
-
-+ Requires Windows 10 or later.
-
-+ The Linux version was developed and tested on Linux Mint. I mainly intend for it to run on Debian-based distributions. I will try to help troubleshoot others if I can, but I may not be able to as I don't have access to spare machines. There has been at least one [issue](https://github.com/spieglt/FlyingCarpet/issues/64) running on Fedora, possibly related to SELinux but I don't really know.
-
-+ Sometimes when the Cancel button is hit on the desktop platforms, it can take time for the OS to finish trying to join or create a hotspot. Please only click the Cancel button once and wait a few seconds. This sounds like it should be easy to fix, but last time I tried it was not.
-
-## Planned Features
-
-+ Add Flying Carpet shortcut to iOS Share menu.
-
-## Questions That Could Be Asked at Some Point:
-
-+ **Wasn't this a Go repo?** Yes, carcinization has come for the gopher. There were several issues I didn't know how to solve in the Go/Qt paradigm, especially with Windows: not being able to make a single-file executable, needing to Run as Administrator, and having to write the WiFi Direct DLL to a temp folder and link to it at runtime because Go doesn't work with MSVC. Plus it was fun to use `tokio`/`async` and `windows-rs`, with which the Windows networking portions are written. The GUI framework is now Tauri which gives a native experience on all platforms with a very small footprint. The Android version is written in Kotlin and the code is in this repository. The iOS and macOS versions are written in Swift and that codebase is not public.
-
-+ **You're using SHA-256 to derive the key from a password. Isn't that bad? Shouldn't you be using a Password-Based Key Derivation Function like Scrypt or Argon2?** I was doing this before, but it wasn't strictly necessary because these keys are only used during the file transfer. For an attacker to intercept the data in transit, they'd need to be on the hotspot network, which is protected by WPA2, so they'd need to shoulder-surf the password or QR code. The change to SHA-256 was made because I couldn't find a good Scrypt or Argon2 implementation on all platforms when I added the mobile versions.
-
-+ **Why are you using AES-GCM at all if there's already WPA2 then?** When I started working on this project in 2017, I was trying to allow for IBSS WiFi networks on macOS that didn't use authentication. I was using the wrong encryption (and incorrectly) then, and later I added AES-GCM because it's the only good and official-ish AEAD implementation I could find in all of Go, Swift, Kotlin, and now Rust. If any cryptographers read this and find that I'm still being dumb, please let me know.
-
-## Complaints at Apple
-
-+ The [documentation](https://developer.apple.com/documentation/corewlan/cwinterface/scanfornetworks(withssid:)) for `scanForNetworks(withSSID:)` does not mention that it requires location permissions.
-
-+ There should be a way to programmatically start hotspots, or at least read the current hotspot configuration with the user's permission.
-
-If you've used Flying Carpet, please send feedback to theron@spiegl.dev. Thanks for your interest! Please also check out https://github.com/spieglt/cloaker, https://cloaker.mobi, and https://github.com/spieglt/whatfiles.
-
-[^1]: Flying Carpet has the sending end of the transfer act as the Bluetooth LE peripheral (GATT server). MacOS, when acting as peripheral, does not seem to like the pairing process to be initiated before the BLE central device tries to read an encrypted characteristic, and when this happens, the central device cannot enumerate its GATT services. This can be worked around with the Windows and Android Bluetooth libraries by connecting without pairing, but the Linux library does not seem to be able to do this. The iOS version works with Linux when acting as a peripheral, and uses the same CoreBluetooth code. If you know more information about this problem, please let me know.
+Android release signing reads a gitignored `Android/FlyingCarpet/keystore.properties` (or `SIGNING_*`
+environment variables); without either, the APK is unsigned and will not install.
