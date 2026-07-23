@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## This is a rebranded fork (read first)
 
 This is the **shiroikuma personal fork** of [spieglt/FlyingCarpet](https://github.com/spieglt/FlyingCarpet),
-following the same model as the other `shiroikuma-*` sister repos. **Only the Android app is forked,
-rebranded, and shipped** — the Tauri/Rust desktop app is left exactly as upstream and is never built here.
+following the same model as the other `shiroikuma-*` sister repos. **Both apps are forked and rebranded**:
+the Android app (APK for the phone) and the Tauri/Rust Linux desktop app (amd64 `.deb` for 白い熊's Tuxedo
+OS machine — this host). Each upstream release yields both artifacts — see the upstream-new-version skill.
 
 | Item | Value |
 |------|-------|
@@ -16,6 +17,12 @@ rebranded, and shipped** — the Tauri/Rust desktop app is left exactly as upstr
 | Code namespace (unchanged) | `dev.spiegl.flyingcarpet` (R class / Kotlin package — no source edits) |
 | App launcher label | `白い熊 魔法絨毯` (`app_name` in `Android/FlyingCarpet/app/src/main/res/values/strings.xml`) |
 | APK filename | `shiroikuma-mahojutan_<release>+<buildNumber>_arm64-v8a.apk` (e.g. `shiroikuma-mahojutan_9.0.10+1_arm64-v8a.apk`) |
+| Desktop `.deb` | `shiroikuma-mahojutan_<release>+<buildNumber>_amd64.deb` (e.g. `shiroikuma-mahojutan_9.0.10+1_amd64.deb`) — `cargo tauri build --bundles deb` from the repo root, copied to `~/tmp` (installed locally with apt, no adb/scp) |
+| Desktop dpkg package / binary | `shiroikuma-mahojutan` (`productName` / `mainBinaryName` in `Flying Carpet/src-tauri/tauri.conf.json`) → `/usr/bin/shiroikuma-mahojutan` |
+| Desktop app name | `白い熊 魔法絨毯` — launcher entry (`src-tauri/shiroikuma-mahojutan.desktop` template), window `title` in `tauri.conf.json`, `<title>`/`<h1>` in `Flying Carpet/src/index.html` |
+| Desktop icon | the yellow-traced carpet (yellow line drawing on black, source commit `191ab66`), full set regenerated via `cargo tauri icon` into `Flying Carpet/src-tauri/icons/` |
+| Desktop fork UI | yellow-on-black theme + “Customize UI” page — the desktop port of the Android fork UI (`Appearance.kt`/`Settings.kt` model): `Flying Carpet/src/customize.js` + `customize.css`, hooked into `index.html`/`main.js` (About dialog, start-button labels, logo tint); settings persist in localStorage key `shiroikuma_ui`, unset = fork default |
+| Desktop build tool | `cargo install tauri-cli` (v2); webkit2gtk-4.1/gtk/soup dev libs already installed on this host |
 | Keystore | `~/.android-keystores/shiroikuma-mahojutan.jks` (alias `mahojutan`); creds in gitignored `Android/FlyingCarpet/keystore.properties` |
 | Build JDK / SDK | JDK 21 (`/usr/lib/jvm/java-21-openjdk-amd64`), SDK `/home/shiroikuma/android-sdk` |
 
@@ -26,17 +33,28 @@ rebranded, and shipped** — the Tauri/Rust desktop app is left exactly as upstr
 
 ### Versioning
 
-- `versionName` = `"<release>+<buildNumber>"` where `<release>` is the FlyingCarpet **release** version
-  (the latest `v*` tag / desktop `Cargo.toml`), **not** the stale value upstream leaves in Android's
-  `build.gradle` (e.g. Android said `9.0.8` at the `v9.0.10` release).
-- `versionCode` = `<upstream Android versionCode> * 10000 + <buildNumber>` (currently `21 * 10000 + 1 = 210001`).
-- `buildNumber` resets to `1` on each upstream rebase, +1 per delivered build. All three live at the top
-  of `Android/FlyingCarpet/app/build.gradle`.
+**Both artifacts** — APK and `.deb` — are versioned `"<release>+<buildNumber>"`, where `<release>` is the
+FlyingCarpet **release** version (the latest `v*` tag / desktop `Cargo.toml`), **not** the stale value
+upstream leaves in Android's `build.gradle` (e.g. Android said `9.0.8` at the `v9.0.10` release).
+`buildNumber` resets to `1` on each upstream rebase and goes **+1 for every delivered build** — never
+reuse a number, never overwrite an older artifact in `~/tmp`.
+
+- **Android** (`Android/FlyingCarpet/app/build.gradle`, three values at the top): `versionName` =
+  `"<releaseVersionName>+<buildNumber>"`; `versionCode` = `<upstream Android versionCode> * 10000 +
+  <buildNumber>` (currently `21 * 10000 + 19 = 210019`).
+- **Desktop** (`Flying Carpet/src-tauri/tauri.conf.json`, the `version` field — the single source of
+  truth): `"<release>+<buildNumber>"`, e.g. `"9.0.10+1"`. Tauri feeds it straight into the `.deb`
+  filename and its `Version:` control field, and the app's title-bar version label reads it back via
+  `getVersion()`. dpkg orders `9.0.10+2 > 9.0.10+1`, so each build installs as an upgrade.
+- The **two counters are independent**: an APK build bumps only Android's `buildNumber`, a `.deb` build
+  only the desktop `version`. Android is at `+19`, the desktop line started at `+1` (2026-07-22).
 
 ### Skills (authoritative for project specifics)
 
 - `.claude/skills/build-apk` — build the signed release APK, copy to `~/tmp`, optionally `adb push`.
-- `.claude/skills/upstream-new-version` — rebase `custom` onto a new upstream release + re-derive versions.
+- `.claude/skills/build-deb` — bump the desktop `+N`, build the amd64 `.deb`, copy to `~/tmp`.
+- `.claude/skills/upstream-new-version` — rebase `custom` onto a new upstream release + re-derive versions,
+  then build both artifacts: the Android `+1` APK and the rebranded desktop amd64 `.deb`.
 
 ### Hard rules
 
@@ -58,7 +76,7 @@ This is a Cargo workspace (`Cargo.toml` at root) plus an independent Android Gra
 
 - `core/` — `flying-carpet-core` crate. The shared, platform-agnostic transfer engine for **desktop only** (Linux + Windows). This is where most logic lives.
 - `Flying Carpet/src-tauri/` — `flying-carpet` crate, the Tauri v2 desktop app (thin wrapper exposing `core` to the GUI via `#[tauri::command]`).
-- `Flying Carpet/src/` — desktop frontend: plain HTML/CSS/vanilla JS (`main.js`), no build step, no framework. Talks to Rust via `window.__TAURI__`.
+- `Flying Carpet/src/` — desktop frontend: plain HTML/CSS/vanilla JS (`main.js`), no build step, no framework. Talks to Rust via `window.__TAURI__`. The fork adds `customize.js`/`customize.css` (yellow-on-black theme + the Customize UI page, mirroring the Android fork UI).
 - `Android/FlyingCarpet/` — standalone Kotlin/Android app (see "Android is independent" below).
 - `fastlane/` — F-Droid/Play Store metadata only.
 

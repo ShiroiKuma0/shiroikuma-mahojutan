@@ -6,7 +6,8 @@ description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying
 # Build the signed release APK and optionally send to phone
 
 This is the **Android** app of the FlyingCarpet fork (`Android/FlyingCarpet/`). The desktop
-(Tauri/Rust) app is **not** part of this fork and is never built here. The app has **no native
+(Tauri/Rust) app is forked and rebranded too, but is built by its own **build-deb** skill — this one
+never touches it, and the two carry **independent** `+N` build counters. The app has **no native
 code** — it is pure Kotlin, so there are no ABI splits: `assembleRelease` produces **one universal
 APK**. The `arm64-v8a` in the filename is a naming convention (the target device), not an ABI variant.
 
