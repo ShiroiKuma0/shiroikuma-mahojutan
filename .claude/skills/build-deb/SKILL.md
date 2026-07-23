@@ -7,7 +7,8 @@ description: Build the rebranded amd64 .deb of the shiroikuma 魔法絨毯 (Flyi
 
 This is the **desktop** (Tauri/Rust) app of the FlyingCarpet fork (`Flying Carpet/` + `core/`),
 rebranded exactly like the Android app. The Android APK is built by the separate **build-apk** skill;
-the two artifacts carry **independent** `+N` build counters.
+the two artifacts share **one** `+N` build counter — the same code always builds as the same `+N`
+on both (see Versioning below).
 
 The `.deb` targets **this** machine (白い熊's Tuxedo OS host), so it is **never** `adb push`ed or
 `scp`ed anywhere — copy it to `~/tmp/` and let 白い熊 install it locally. Do **not** run
@@ -21,31 +22,45 @@ Building and copying to `~/tmp` are automatic; `git commit` / `git push` are **n
 still require an explicit "Push". Skip an auto-build only when the tree is mid-refactor and won't
 compile, or the change ships nothing in the `.deb` (docs, skills, Android-only files).
 
-## Versioning — every build is `+1` (hard rule)
+## Versioning — ONE shared `+N` counter for APK and deb (hard rule)
 
-The desktop version lives in **one** place: the `version` field of
-`Flying Carpet/src-tauri/tauri.conf.json`, formatted `"<release>+<buildNumber>"` (e.g. `"9.0.10+1"`).
+The fork has a **single** `+N` build counter shared by both artifacts: **the same code must always
+build as the same `+N` on the APK and the `.deb`.** The counter is stored in two places that must
+always hold the same number:
+
+- Android: `buildNumber` in `Android/FlyingCarpet/app/build.gradle`;
+- desktop: the `+N` in the `version` field of `Flying Carpet/src-tauri/tauri.conf.json`, formatted
+  `"<release>+<buildNumber>"` (e.g. `"9.0.10+20"`).
+
+Rules:
 
 - `<release>` = the FlyingCarpet **release** version — the latest upstream `v*` tag (equals
   `core/Cargo.toml`), **not** whatever Android's `build.gradle` says.
-- `<buildNumber>` **resets to 1 on each upstream rebase** and goes **+1 for every delivered build**.
-  Bump it *before* building. Never reuse a number, and never overwrite an older `.deb` in `~/tmp` —
+- The counter **resets to 1 on each upstream rebase** and goes **+1 for every delivered build of
+  either artifact**. Bump **both places together** *before* building — even if only one artifact is
+  being built this time. Never reuse a number, and never overwrite an older `.deb` in `~/tmp` —
   the numbered files are meant to accumulate there (the sister repos do the same, e.g.
   `shiroikuma-jiyudoga_0.25.1+27_amd64.deb`).
-- Tauri feeds this one value into the `.deb` **filename**, its `Version:` control field, and the app's
-  own title-bar version label (`getVersion()` in `customize.js`), so there is nothing else to edit.
-- dpkg orders `9.0.10+2 > 9.0.10+1 > 9.0.10`, so each build installs cleanly as an upgrade.
+- Not every `+N` ships both artifacts — an Android-only iteration still bumps the shared counter, so
+  the `.deb` line may have gaps (e.g. no deb exists for `+2`…`+19`). That is fine; what is **never**
+  fine is the two artifacts carrying different `+N` for the same code.
+- Tauri feeds the `version` value into the `.deb` **filename**, its `Version:` control field, and the
+  app's own title-bar version label (`getVersion()` in `customize.js`), so there is nothing else to
+  edit on the desktop side.
+- dpkg orders `9.0.10+20 > 9.0.10+1 > 9.0.10`, so each build installs cleanly as an upgrade.
 
 Iterating on a build 白い熊 has not yet kept may reuse the current number; anything delivered gets its
 own.
 
 ## Steps
 
-1. **Bump the build number** in `Flying Carpet/src-tauri/tauri.conf.json`:
+1. **Bump the shared build number in BOTH places** (they must stay equal):
    ```bash
    grep -n '"version"' "Flying Carpet/src-tauri/tauri.conf.json"
+   grep -nE 'buildNumber' Android/FlyingCarpet/app/build.gradle
    ```
-   Edit `"version": "<release>+<N>"` → `"<release>+<N+1>"`.
+   Edit `"version": "<release>+<N>"` → `"<release>+<N+1>"` in `tauri.conf.json` **and**
+   `buildNumber = <N>` → `<N+1>` in `build.gradle` (same new number in both).
 
 2. **Build** from the **repo root** (the Cargo workspace root). Needs `cargo install tauri-cli` (v2)
    once; the webkit2gtk-4.1 / gtk / soup dev libs are already installed on this host:
