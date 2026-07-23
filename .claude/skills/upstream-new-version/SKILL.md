@@ -33,10 +33,13 @@ upstream release is built into as a rebranded amd64 `.deb` for 白い熊's Tuxed
 
 All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
 
-**The desktop `.deb` follows the same `+N` convention**, with its own independent counter: the
-`version` field of `Flying Carpet/src-tauri/tauri.conf.json` is `"<release>+<buildNumber>"`, resets to
-`+1` on each upstream rebase, and goes +1 per delivered `.deb`. Tauri derives the filename, the dpkg
-`Version:` field, and the app's own version label from it. See the **build-deb** skill.
+**The desktop `.deb` shares the SAME `+N` counter as the APK** — the same code must always build as
+the same `+N` on both artifacts. The counter is stored in two places that must always hold the same
+number: `buildNumber` in `build.gradle` and the `+N` in the `version` field of
+`Flying Carpet/src-tauri/tauri.conf.json` (`"<release>+<buildNumber>"`). Both reset to `1` together
+on each upstream rebase and bump together (+1) per delivered build of either artifact. Tauri derives
+the `.deb` filename, the dpkg `Version:` field, and the app's own version label from the
+`tauri.conf.json` value. See the **build-deb** skill.
 
 ## Steps
 
@@ -97,9 +100,10 @@ All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
    first build of the new upstream line (`<newVersion>+1`).
 
 7. **Build the desktop `.deb` (amd64) for Tuxedo OS** via the **build-deb** skill:
-   - First **reset the desktop build number to `1`**: set `version` in
-     `Flying Carpet/src-tauri/tauri.conf.json` to `"<newRelease>+1"` (the same reset the Android
-     `buildNumber` gets in step 4; the two counters are independent from there on).
+   - The desktop `version` in `Flying Carpet/src-tauri/tauri.conf.json` must be `"<newRelease>+1"` —
+     the **same shared counter** the Android `buildNumber` was reset to in step 4 (the two fields
+     always hold the same `+N`; if a delivered build already bumped the counter past 1 in this line,
+     use the current shared value instead).
    - Build from the **repo root**: `cargo tauri build --bundles deb`.
    - The artifact lands at `target/release/bundle/deb/shiroikuma-mahojutan_<newRelease>+1_amd64.deb` —
      copy it to `~/tmp/` as-is (name and version are baked in; no renaming).

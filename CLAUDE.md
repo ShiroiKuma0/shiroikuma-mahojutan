@@ -41,13 +41,16 @@ reuse a number, never overwrite an older artifact in `~/tmp`.
 
 - **Android** (`Android/FlyingCarpet/app/build.gradle`, three values at the top): `versionName` =
   `"<releaseVersionName>+<buildNumber>"`; `versionCode` = `<upstream Android versionCode> * 10000 +
-  <buildNumber>` (currently `21 * 10000 + 19 = 210019`).
+  <buildNumber>` (currently `21 * 10000 + 20 = 210020`).
 - **Desktop** (`Flying Carpet/src-tauri/tauri.conf.json`, the `version` field — the single source of
-  truth): `"<release>+<buildNumber>"`, e.g. `"9.0.10+1"`. Tauri feeds it straight into the `.deb`
+  truth): `"<release>+<buildNumber>"`, e.g. `"9.0.10+20"`. Tauri feeds it straight into the `.deb`
   filename and its `Version:` control field, and the app's title-bar version label reads it back via
-  `getVersion()`. dpkg orders `9.0.10+2 > 9.0.10+1`, so each build installs as an upgrade.
-- The **two counters are independent**: an APK build bumps only Android's `buildNumber`, a `.deb` build
-  only the desktop `version`. Android is at `+19`, the desktop line started at `+1` (2026-07-22).
+  `getVersion()`. dpkg orders `9.0.10+20 > 9.0.10+1`, so each build installs as an upgrade.
+- The **counter is SHARED between the two artifacts** (hard rule): the same code must always build as
+  the same `+N` on both APK and `.deb`, so Android's `buildNumber` and the desktop `version`'s `+N`
+  must always hold the same number — a bump edits **both** fields together, even for a build of only
+  one artifact. Not every `+N` ships both artifacts, so one line may have gaps (no deb exists for
+  `+2`…`+19`); a mismatched `+N` for the same code is never allowed. Both are at `+20` (2026-07-23).
 
 ### Skills (authoritative for project specifics)
 
