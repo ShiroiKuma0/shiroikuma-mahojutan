@@ -1,0 +1,13 @@
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}} {{exec_arg}}
+Icon={{icon}}
+Name=白い熊 魔法絨毯
+Terminal=false
+Type=Application
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}

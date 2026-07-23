@@ -79,9 +79,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     canUseBluetooth = true;
   }
 
-  // about button
+  // about button (fork: themeable in-page dialog instead of the native alert)
   aboutButton.onclick = () => {
-    dialog.message(aboutMessage, { title: 'About Flying Carpet' });
+    window.forkUI.showAbout(aboutMessage);
   }
 
   // output handler
@@ -540,7 +540,10 @@ let bluetoothChange = () => {
 }
 
 let modeChange = async (button) => {
-  startButton.innerText = button === 'receive' ? 'Select Folder' : 'Select Files';
+  // fork: the two labels are customizable
+  startButton.innerText = window.forkUI
+    ? window.forkUI.startLabel(button)
+    : (button === 'receive' ? 'Select Folder' : 'Select Files');
   document.getElementById('sendFolderDiv').style.display = button === 'send' ? '' : 'none';
   selectedMode = button;
   checkStatus();
@@ -633,8 +636,9 @@ let enableUi = async () => {
   for (let i in radioButtons) {
     document.getElementById(radioButtons[i]).disabled = false;
   }
-  // replace logo
-  document.getElementById('qrcode').innerHTML = '<img src="assets/icon1024.png" style="width: 150px; height: 150px;">'
+  // replace logo (fork: data-logo marks it tintable — QR codes are never tinted)
+  document.getElementById('qrcode').innerHTML = '<img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">'
+  window.forkUI?.applyLogoTint();
 }
 
 let disableUi = async () => {
