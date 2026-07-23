@@ -3,11 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Flying Carpet</title>
+    <title>白い熊 魔法絨毯</title>
     <script type="module" src="/main.js" defer></script>
+    <script type="module" src="/customize.js" defer></script>
     <!-- <script type="module" src="/deps/bootstrap.bundle.min.js" defer></script> -->
     <link rel="stylesheet" href="/deps/bootstrap.min.css">
     <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="customize.css" />
   </head>
 
   <body style="height: 100%;">
@@ -16,14 +18,17 @@
       <!-- top bar -->
       <div class="horizontalContainer" style="flex-grow: 0; margin: 10px;">
         <div>
-          <h1 style="font-size: 40px; margin-bottom: 0px; padding-bottom: 0px;"><b>Flying Carpet</b></h1>
-          <small style="margin-top: 0px; padding-top: 0px;">Version 9</small>
-          <small style="margin-top: 0px; padding-top: 0px; color: blue; float: right; cursor: pointer;" id="aboutButton">
+          <h1 id="programTitle" style="font-size: 40px; margin-bottom: 0px; padding-bottom: 0px;"><b>白い熊 魔法絨毯</b></h1>
+          <small id="versionLabel" style="margin-top: 0px; padding-top: 0px;">Version 9</small>
+          <small style="margin-top: 0px; padding-top: 0px; float: right; cursor: pointer;" id="aboutButton">
             About
           </small>
         </div>
-        <div id="qrcode" style="width: 150px; height: 150px;">
-          <img src="assets/icon1024.png" style="width: 150px; height: 150px;">
+        <div class="verticalContainer" style="align-items: flex-end;">
+          <div id="qrcode" style="width: 150px; height: 150px;">
+            <img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">
+          </div>
+          <button type="button" id="uiButton" onclick="window.forkUI.openSettings()">Customize UI</button>
         </div>
       </div>
       <div class="horizontalContainer" style="flex-grow: 0; margin: 10px;">
@@ -38,7 +43,7 @@
       </div>
 
       <!-- mode box -->
-      <label style="margin-left: 10px">Select Mode</label>
+      <label id="modeInstruction" style="margin-left: 10px">Select Mode</label>
       <div class="btn-group" role="group" aria-label="Mode selector" id="modeBox" style="margin: 10px; margin-top: 0px;">
         <input type="radio" class="btn-check" name="moderadio" id="sendButton" autocomplete="off" onchange="modeChange('send')">
         <label class="btn btn-outline-primary" for="sendButton">Send</label>

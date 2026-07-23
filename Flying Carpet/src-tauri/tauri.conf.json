@@ -27,13 +27,14 @@
     "shortDescription": "",
     "linux": {
       "deb": {
-        "depends": []
+        "depends": [],
+        "desktopTemplate": "shiroikuma-mahojutan.desktop"
       }
     }
   },
-  "productName": "FlyingCarpet",
-  "mainBinaryName": "FlyingCarpet",
-  "version": "9.0.10",
+  "productName": "shiroikuma-mahojutan",
+  "mainBinaryName": "shiroikuma-mahojutan",
+  "version": "9.0.10+1",
   "identifier": "dev.spiegl",
   "plugins": {},
   "app": {
@@ -43,7 +44,7 @@
         "fullscreen": false,
         "height": 800,
         "resizable": true,
-        "title": "Flying Carpet",
+        "title": "白い熊 魔法絨毯",
         "width": 600,
         "useHttpsScheme": true
       }
