@@ -6,9 +6,10 @@ description: Build the rebranded amd64 .deb of the shiroikuma 魔法絨毯 (Flyi
 # Build the rebranded desktop `.deb` (amd64)
 
 This is the **desktop** (Tauri/Rust) app of the FlyingCarpet fork (`Flying Carpet/` + `core/`),
-rebranded exactly like the Android app. The Android APK is built by the separate **build-apk** skill;
-the two artifacts share **one** `+N` build counter — the same code always builds as the same `+N`
-on both (see Versioning below).
+rebranded exactly like the Android app. **Every build ships BOTH artifacts together** (hard rule,
+白い熊 2026-07-23): whenever this skill builds the `.deb`, also run the **build-apk** skill for the
+same `+N` — never deliver one artifact alone. The two artifacts share **one** `+N` build counter —
+the same code always builds as the same `+N` on both (see Versioning below).
 
 The `.deb` targets **this** machine (白い熊's Tuxedo OS host), so it is **never** `adb push`ed or
 `scp`ed anywhere — copy it to `~/tmp/` and let 白い熊 install it locally. Do **not** run
@@ -20,7 +21,11 @@ The `.deb` targets **this** machine (白い熊's Tuxedo OS host), so it is **nev
 `src-tauri/`, frontend in `Flying Carpet/src/`, icons, `tauri.conf.json`) — don't wait to be asked.
 Building and copying to `~/tmp` are automatic; `git commit` / `git push` are **never** automatic and
 still require an explicit "Push". Skip an auto-build only when the tree is mid-refactor and won't
-compile, or the change ships nothing in the `.deb` (docs, skills, Android-only files).
+compile, or the change ships nothing in either artifact (docs, skills, `~/tmp` scratch files).
+
+**A build is always BOTH artifacts:** whatever triggered it (desktop-only change, Android-only
+change), the same `+N` gets a `.deb` **and** an APK — after finishing the `.deb` here, run the
+**build-apk** skill's steps for the same number.
 
 ## Versioning — ONE shared `+N` counter for APK and deb (hard rule)
 
@@ -41,9 +46,10 @@ Rules:
   being built this time. Never reuse a number, and never overwrite an older `.deb` in `~/tmp` —
   the numbered files are meant to accumulate there (the sister repos do the same, e.g.
   `shiroikuma-jiyudoga_0.25.1+27_amd64.deb`).
-- Not every `+N` ships both artifacts — an Android-only iteration still bumps the shared counter, so
-  the `.deb` line may have gaps (e.g. no deb exists for `+2`…`+19`). That is fine; what is **never**
-  fine is the two artifacts carrying different `+N` for the same code.
+- **Every delivered `+N` ships both artifacts** (hard rule, 白い熊 2026-07-23): the APK and the
+  `.deb` are always built together as a pair — never one alone. Historical gaps predate this rule
+  (no deb exists for `+2`…`+19`, no APK for `+21`). Equally never allowed: the two artifacts
+  carrying different `+N` for the same code.
 - Tauri feeds the `version` value into the `.deb` **filename**, its `Version:` control field, and the
   app's own title-bar version label (`getVersion()` in `customize.js`), so there is nothing else to
   edit on the desktop side.
@@ -87,6 +93,10 @@ own.
 5. **Announce** the filename that landed in `~/tmp` and the install command
    (`sudo apt install ~/tmp/shiroikuma-mahojutan_<release>+<N>_amd64.deb`). Never install it yourself,
    and never `adb push` / `scp` a `.deb` — it is for this machine only.
+
+6. **Build the APK for the same `+N`** — every build ships both artifacts (hard rule): run the
+   **build-apk** skill's steps (the counter is already bumped, so skip its bump step) so the paired
+   APK also lands in `~/tmp/`.
 
 ## Visual check (optional, no desktop interference)
 
