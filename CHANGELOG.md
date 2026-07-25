@@ -4,7 +4,84 @@ All notable changes this fork makes on top of stock
 [Flying Carpet](https://github.com/spieglt/FlyingCarpet). Versions are
 `<upstream release>+<fork build number>`; the build number resets on each upstream rebase and
 increases with every delivered build. The Android and desktop artifacts share one counter — the
-same code always builds as the same `+N` on both, though not every `+N` ships both artifacts.
+same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
+artifacts as a pair.
+
+## 9.0.10+24 — 2026-07-25
+
+Built on upstream **Flying Carpet 9.0.10**. This release gives both apps a real backup surface and
+brings their settings pages to one shared house style.
+
+**Artifacts**
+
+- Android: `shiroikuma-mahojutan_9.0.10+24_arm64-v8a.apk` (app id `shiroikuma.mahojutan`,
+  versionCode `210024`, signed with the fork keystore, universal — the app has no native code).
+- Linux desktop: `shiroikuma-mahojutan_9.0.10+24_amd64.deb` (dpkg package and binary
+  `shiroikuma-mahojutan`).
+
+### Major features
+
+- **Export / Import, on both apps** — the first section of the UI page. A settable backup folder,
+  the newest backup in it reported whenever the page or the panel opens, per-category checkboxes
+  under a *Select all*, and a button bar with *Cancel* alone on the left and *Import* / *Export*
+  grouped on the right, all as round pills.
+- **One archive per export** — a single timestamped
+  `shiroikuma-mahojutan_<yyyy-MM-dd_HH-mm-ss>.zip` holding a `manifest.json` plus one entry per
+  category. Nothing is written beside it and nothing is split across files.
+- **Three independently selectable categories** — the main screen's appearance, the UI page's own
+  appearance, and the imported font files (the real `.ttf`/`.otf` bytes, not just their names).
+- **Import merges per key** rather than replacing wholesale, so restoring a backup never destroys
+  settings it did not cover, and re-importing the same file is idempotent. Categories the archive
+  does not carry are skipped silently.
+- **Cross-platform guard** — both apps write the same file name, so the manifest records which one
+  produced the archive and an import of the other kind is refused with a message instead of
+  corrupting settings (an Android colour is an ARGB integer, a desktop one is `#rrggbb`).
+- **Automation export (Android)** — the sister-app state-export contract, so an external automation
+  app can back this one up headlessly: `EXPORT_STATE` and `LIST_CATEGORIES` intents, gated by a
+  master switch that defaults to **off** and a token that must also match. The reply is a fresh
+  broadcast carrying the absolute path, the real byte count, a human-readable size and the category
+  count; failures reply with a specific reason (`automation disabled`, `bad token`, `no-directory`,
+  `no-storage-access`, `unknown category in items: …`). Progress broadcasts carry real counts and a
+  unit, never a percentage, throttled to one per 500 ms, with the final one always sent. The export
+  runs off the main thread under `goAsync()`, and exactly one terminal reply is ever sent.
+- **The token never travels** — it lives in its own preferences file, which the backup engine does
+  not read, so it cannot end up inside an archive. It is 24 `SecureRandom` bytes, generated on first
+  read, compared in constant time, shown abbreviated, copied whole on tap, and regenerable.
+
+### UI and theming
+
+- Both settings pages are restyled to one house look: a full-width hairline marking the boundary
+  between top-level sections, a **text-width** underline under every heading rather than a
+  full-width rule, and a fixed indentation ladder — section, element, control — replacing the
+  earlier very deep single indent.
+- The backup folder is shown in **red** everywhere it is unset: the UI page's summary line, the
+  panel's status line, and the folder box's own border.
+- Export and import finish in a black, yellow-bordered dialog. Acknowledging a **successful** one
+  closes the whole chain — the dialog, the panel beneath it, and the UI page — while a failure
+  closes only the dialog, leaving the panel open so the problem can be fixed on the spot. The import
+  dialog additionally offers *Restart now*.
+- Folder entry, the folder browser and the backup chooser are all fork-drawn black-and-yellow
+  surfaces rather than platform-default dialogs.
+
+### Desktop app
+
+- The backup engine runs in the frontend, because the desktop settings live in `localStorage` where
+  the Rust side cannot see them; Rust supplies only what a webview cannot do — read a file, write a
+  file, list a folder, restart the app.
+- Archive payloads cross the IPC bridge base64-encoded instead of as a JSON array of numbers, with a
+  small hand-written codec on the Rust side, so no new crate is pulled in for it.
+- The ZIP is written and read directly (stored entries, own CRC-32), again with no added dependency.
+
+### Fixes and behaviour
+
+- The desktop QR code is drawn inside a yellow quiet zone with yellow light modules, so it is
+  black-on-yellow with the 4-module margin the format requires — previously it was drawn straight
+  onto the black window with no quiet zone at all. The container is reset when the logo returns.
+
+### Packaging
+
+- Every delivered build now ships **both** artifacts for the same `+N`; the two build skills each
+  finish by running the other, which is what earlier gaps in the `.deb` and APK lines came from.
 
 ## 9.0.10+20 — 2026-07-23
 
