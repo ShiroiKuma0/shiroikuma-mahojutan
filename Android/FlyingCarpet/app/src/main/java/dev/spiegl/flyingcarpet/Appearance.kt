@@ -21,6 +21,10 @@ object Defaults {
     val YELLOW = 0xFFFFFF00.toInt()
     val BLACK = 0xFF000000.toInt()
     val SWITCH_TRACK_OFF = 0xFF555555.toInt()
+
+    // The one non-yellow accent in the fork: "you have to fix this" (no backup folder set). Used by
+    // the Export/Import panel and by the UI page's export-folder row.
+    val RED = 0xFFFF5252.toInt()
     const val BORDER_WIDTH = 1f   // dp
     const val CORNER_RADIUS = 10f // dp
 }

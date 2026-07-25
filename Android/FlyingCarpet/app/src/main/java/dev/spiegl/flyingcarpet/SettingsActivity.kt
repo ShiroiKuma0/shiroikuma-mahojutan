@@ -1,5 +1,8 @@
 package dev.spiegl.flyingcarpet
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
@@ -26,18 +29,27 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import com.google.android.material.button.MaterialButton
 import java.io.File
 
 // The "白い熊 魔法絨毯 UI" customization page. Built in code from UiCatalog so the surface list stays
-// in one place. Indentation is deliberately deep (3× the usual ~16dp) per 白い熊's request, so the
-// hierarchy — section → property → control — reads at a glance. Each text surface carries a live
-// preview that reflects its text, colour, font, style, and size as they are edited.
+// in one place, with the Export / Import section (backup folder + the automation surface) pinned at
+// the very top. Each text surface carries a live preview that reflects its text, colour, font,
+// style, and size as they are edited.
+//
+// The look is the shiroikuma-kxkb settings page (白い熊, 2026-07-25): every heading carries a
+// **text-width** underline, top-level sections are separated by a full-width 1 px hairline, and the
+// indentation ladder is kxkb's — section 36 dp → element 54 dp → control 72 dp.
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var settings: Settings
     private lateinit var fontPicker: ActivityResultLauncher<Array<String>>
     private var previewBaseColor: Int = Color.BLACK
+
+    // The Export/Import panel while it is open, so onResume can re-render it (it may have sent
+    // 白い熊 to the All-Files-Access screen, and the grant prompt has to clear on the way back).
+    private var exportPanel: ExportImportPanel? = null
 
     // Sentinel value for the "Add external font…" entry that lives in every font dropdown, and the
     // surface key whose dropdown launched the picker (so the new font auto-selects there).
@@ -48,9 +60,12 @@ class SettingsActivity : AppCompatActivity() {
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics,
     ).toInt()
 
-    // Base indentation unit for a section's controls. Deliberately deep so the section → element →
-    // control hierarchy reads at a glance (16dp normal × 3, then ×3 again per 白い熊's request).
-    private val indent get() = dp(144)
+    // kxkb's indentation ladder: section headings sit at 36 dp, element headings at 54 dp, and the
+    // controls (and every settings row) at 72 dp — so the section → element → control hierarchy
+    // reads at a glance without the page marching off the right edge.
+    private val sectionIndent get() = dp(36)
+    private val elementIndent get() = dp(54)
+    private val indent get() = dp(72)
 
     private val sampleText = "Aa Gg 0123 — 白い熊 魔法絨毯"
 
@@ -102,14 +117,22 @@ class SettingsActivity : AppCompatActivity() {
         })
         content.addView(topButtons)
 
+        // ── Export / Import ──
+        // First section on the page, matching the Kōjiki UI page: the backup folder and the panel
+        // that carries every setting in this app out to a .zip and back. The automation rows sit in
+        // this same section, directly below the panel entry — backup lives with backup (the
+        // sister-app convention), never in a section of its own.
+        content.addView(sectionHeader("Export / Import"))
+        content.addView(sectionNote("Carry everything you set in this app to another device, or put it back."))
+        addExportImportRows(content)
+
         // ── Sections ──
         // One block per logical area of the main screen (UiCatalog.sections). Each block carries its
         // own text surfaces and colour/border groups, so everything about an area lives together. Each
         // "Font" dropdown ends with "Add external font…", which adds a .ttf/.otf and makes it available
         // in every surface's font menu — so there's no separate fonts section.
-        UiCatalog.sections.forEachIndexed { i, section ->
-            if (i > 0) content.addView(divider())
-            content.addView(sectionTitle(section.title))
+        UiCatalog.sections.forEach { section ->
+            content.addView(sectionHeader(section.title))
             section.note?.let { content.addView(sectionNote(it)) }
 
             // The self-styling section's changes affect this very page, so offer a repaint button.
@@ -158,41 +181,72 @@ class SettingsActivity : AppCompatActivity() {
 
     // ── Builders ──
 
-    // Top level: a logical area of the main screen ("Main page", "Title bar", …). Flush left so the
-    // nested element headers and deeply-indented controls read as belonging under it.
-    private fun sectionTitle(text: String) = TextView(this).apply {
-        this.text = text
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(0, dp(20), 0, dp(2))
-        applyKind(this, "page.section")
+    // The page's accent — the colour headings, underlines and hairlines are drawn in. Follows
+    // "page.section.color" where 白い熊 set one, so a repainted page repaints its rules too.
+    private val accent: Int get() = settings.colorOrNull("page.section.color") ?: Defaults.YELLOW
+
+    /**
+     * Top level: a logical area of the app ("Export / Import", "Main page", "Title bar", …). The
+     * kxkb shape — a full-width 1 px hairline marking the boundary with the previous group, then an
+     * indented bold heading whose underline is only as wide as the words above it.
+     */
+    private fun sectionHeader(title: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        // Explicitly full width: the hairline below is MATCH_PARENT, and inside a wrap_content
+        // parent that would collapse to the heading's width instead of spanning the page.
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        setPadding(0, dp(10), 0, dp(2))
+        addView(
+            View(this@SettingsActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
+                setBackgroundColor(accent)
+            },
+        )
+        addView(underlinedHeading(title, sizeSp = 20f, indentPx = sectionIndent, rulePx = dp(3), kind = "page.section"))
     }
+
+    /** Middle level: one customizable element within a section. Indented one step, thinner rule. */
+    private fun elementHeader(title: String) =
+        underlinedHeading(title, sizeSp = 17f, indentPx = elementIndent, rulePx = dp(2), kind = "page.element")
+            .apply { setPadding(0, dp(12), 0, 0) }
+
+    /**
+     * A heading whose underline is **text-wide, never full-width** (白い熊, 2026-07-25): the label and
+     * the rule share a wrap_content column, so the rule stops where the words do.
+     */
+    private fun underlinedHeading(title: String, sizeSp: Float, indentPx: Int, rulePx: Int, kind: String) =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = indentPx }
+            setPadding(0, dp(8), 0, 0)
+            addView(
+                TextView(this@SettingsActivity).apply {
+                    text = title
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+                    setTypeface(typeface, Typeface.BOLD)
+                    applyKind(this, kind)
+                },
+            )
+            addView(
+                View(this@SettingsActivity).apply {
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rulePx)
+                        .apply { topMargin = dp(2) }
+                    setBackgroundColor(settings.colorOrNull("$kind.color") ?: accent)
+                },
+            )
+        }
 
     // The one-line explanation shown under some section titles.
     private fun sectionNote(text: String) = TextView(this).apply {
         this.text = text
-        setPadding(dp(12), 0, 0, dp(4))
+        setPadding(elementIndent, dp(6), dp(16), dp(2))
         alpha = 0.7f
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         applyKind(this, "page.note")
-    }
-
-    // A hairline between sections (faint white, visible on the dark page).
-    private fun divider() = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-            topMargin = dp(20)
-        }
-        setBackgroundColor(0x33FFFFFF)
-    }
-
-    // Middle level: one customizable element within a section (a button, a label, a colour group).
-    // Sub-item indent doubled (dp 36 → 72) per 白い熊's request.
-    private fun elementHeader(title: String) = TextView(this).apply {
-        text = title
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        setTypeface(typeface, Typeface.BOLD)
-        setPadding(dp(72), dp(16), 0, dp(2))
-        applyKind(this, "page.element")
     }
 
     private fun dpPx(v: Float) = (v * resources.displayMetrics.density).toInt()
@@ -257,7 +311,7 @@ class SettingsActivity : AppCompatActivity() {
         settings.size("$kind.size").let { if (it > 0f) tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
     }
 
-    // The indented container holding an element's controls (3× indent).
+    // The indented container holding an element's controls (the ladder's bottom step, 72 dp).
     private fun sectionBox() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(indent, 0, 0, 0)
@@ -473,6 +527,127 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    // ── Export / Import section ──────────────────────────────────────────────────────────────
+
+    // The folder line under "Export / Import…", kept so it can be refreshed in place after the panel
+    // closes or after a trip to the All-Files-Access screen.
+    private var exportSummaryView: TextView? = null
+
+    override fun onResume() {
+        super.onResume()
+        refreshExportSummary()
+        exportPanel?.refresh()
+    }
+
+    private fun refreshExportSummary() {
+        val view = exportSummaryView ?: return
+        val (summary, warn) = ExportImportStatus.summary(this)
+        view.text = summary
+        view.setTextColor(ExportImportStatus.color(this, warn))
+    }
+
+    /**
+     * The Export/Import section's three rows. The automation switch and token sit **inside** this
+     * section, directly below the panel entry — the sister-app convention: this is a backup feature,
+     * so 白い熊 finds it where backup lives, and every app looks the same.
+     */
+    private fun addExportImportRows(parent: LinearLayout) {
+        val (summary, warn) = ExportImportStatus.summary(this)
+        val summaryView = rowSummary(summary, ExportImportStatus.color(this, warn))
+        exportSummaryView = summaryView
+        parent.addView(
+            settingRow("Export / Import…", summaryView) {
+                val panel = ExportImportPanel(this) { finish() }
+                exportPanel = panel
+                panel.show(onDismiss = { exportPanel = null; refreshExportSummary() })
+            },
+        )
+
+        // Master switch — default OFF. Nothing on the automation surface answers until it is on.
+        val switch = SwitchCompat(this).apply {
+            isChecked = AutomationAuth.enabled(this@SettingsActivity)
+            thumbTintList = ColorStateList.valueOf(accent)
+            trackTintList = ColorStateList.valueOf(accent)
+            setOnCheckedChangeListener { _, checked -> AutomationAuth.setEnabled(this@SettingsActivity, checked) }
+        }
+        parent.addView(
+            settingRow(
+                "Automation export",
+                rowSummary("Let 白い熊 自由作業盤's 保存復元 run trigger this app's export over the token-gated intent.", null),
+                widget = switch,
+            ) { switch.toggle() },
+        )
+
+        // Token row — tap copies the WHOLE token, "Regenerate" replaces it.
+        val tokenSummary = rowSummary(AutomationAuth.abbreviate(AutomationAuth.token(this)), null)
+        val regenerate = TextView(this).apply {
+            text = "Regenerate"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(12), dp(8), dp(4), dp(8))
+            applyKind(this, "page.label")
+            setTextColor(accent)
+            setOnClickListener {
+                tokenSummary.text = AutomationAuth.abbreviate(AutomationAuth.regenerateToken(this@SettingsActivity))
+                toast("New token — update anywhere you pasted the old one.")
+            }
+        }
+        parent.addView(
+            settingRow("Automation token", tokenSummary, widget = regenerate) {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                clipboard?.setPrimaryClip(
+                    ClipData.newPlainText("mahojutan automation token", AutomationAuth.token(this)),
+                )
+                toast("Token copied to the clipboard.")
+            },
+        )
+    }
+
+    /** kxkb's settings-row shape: title over summary at the control indent, optional widget right. */
+    private fun settingRow(
+        title: String,
+        summaryView: TextView,
+        widget: View? = null,
+        onClick: (() -> Unit)? = null,
+    ): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(indent, dp(7), dp(16), dp(7))
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        onClick?.let {
+            isClickable = true
+            val value = TypedValue()
+            theme.resolveAttribute(android.R.attr.selectableItemBackground, value, true)
+            setBackgroundResource(value.resourceId)
+            setOnClickListener { _ -> it() }
+        }
+        addView(
+            LinearLayout(this@SettingsActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                addView(
+                    TextView(this@SettingsActivity).apply {
+                        text = title
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                        applyKind(this, "page.label")
+                    },
+                )
+                addView(summaryView)
+            },
+        )
+        widget?.let { addView(it) }
+    }
+
+    private fun rowSummary(text: String, color: Int?) = TextView(this).apply {
+        this.text = text
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        applyKind(this, "page.note")
+        color?.let { setTextColor(it) }
+        if (color == null) alpha = 0.75f
+    }
 
     private fun confirmResetAll() {
         AlertDialog.Builder(this)

@@ -32,6 +32,12 @@
     <!-- required for the MulticastLock used by shared network discovery -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- Fork: the Export / Import page writes its backup .zip into the folder 白い熊 picks (a real
+         path, not a SAF tree), and 自由作業盤's 保存復元 run may hand this app an absolute `path` to
+         write to. Both need All-Files-Access — the same reason renrakusaki and kxkb declare it. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
     <application
 
         android:allowBackup="true"
@@ -54,6 +60,18 @@
             android:exported="false"
             android:label="@string/uiSettingsTitle"
             android:theme="@style/Theme.FlyingCarpet.Settings" />
+        <!-- Fork: the sister-app state-export automation contract. No android:permission — the
+             caller (白い熊 自由作業盤) cannot hold one; the token in AutomationAuth is the gate, and
+             the master switch on the UI page defaults to OFF. -->
+        <receiver
+            android:name="dev.spiegl.flyingcarpet.StateExportReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="${applicationId}.action.EXPORT_STATE" />
+                <action android:name="${applicationId}.action.LIST_CATEGORIES" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
             android:screenOrientation="fullSensor"
