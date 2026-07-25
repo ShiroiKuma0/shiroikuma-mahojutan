@@ -7,13 +7,14 @@
 **Encrypted, peer-to-peer file transfer over an ad hoc WiFi hotspot — no shared network, no cloud, no account.**
 
 A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**: a full
-yellow-on-black theme, an in-app *Customize UI* page that restyles every single surface, external font
+yellow-on-black theme, an in-app *Customize UI* page that restyles every single surface, one-zip
+Export/Import of everything you have set, a token-gated hook for headless backups, external font
 support, a custom icon, and a rebranded Linux desktop build shipped as an amd64 `.deb`.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
 
-**📥 Latest release: [`9.0.10+20`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`9.0.10+24`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -41,6 +42,38 @@ something you can edit without touching code:
 - **Live preview** — changes land on the real UI as you make them.
 - **Reset anywhere** — per property, per group, or everything at once.
 - **The settings page styles itself**, so you can theme the theming tool.
+
+The page is laid out for scanning: a thin rule between top-level sections, a text-width underline
+under every heading, and a fixed indentation ladder from section to element to control — the same
+shape on the phone and on the desktop.
+
+---
+
+## 💾 Export / Import — everything, in one `.zip`
+
+The first thing on the UI page is a real backup surface. Point it at a folder once; from then on it
+tells you when the last backup was written and hands the whole configuration over in a single
+timestamped archive — `shiroikuma-mahojutan_2026-07-25_23-44-06.zip`.
+
+- **Pick what travels**: the main screen's look, the UI page's own look, and your imported font
+  files are separate, independently selectable categories.
+- **Import merges** rather than overwrites, key by key, so restoring a partial backup never wipes
+  what it didn't cover, and importing the same file twice changes nothing the second time.
+- **No backup folder set** is shown in red wherever it appears, so an unconfigured backup is
+  impossible to overlook.
+- The archive knows which app wrote it, so a phone backup is never poured into the desktop app by
+  mistake — the two store their colours differently.
+
+---
+
+## 🤖 Backed up without lifting a finger
+
+The Android app answers a token-gated intent, so an automation app can trigger its export headlessly
+— no screen, no tapping — and get back the path, the byte count and a human-readable size. Progress
+comes back as real counts, never a percentage. It stays completely closed until you turn the switch
+on: the master switch defaults to **off**, the 24-byte token is generated on the phone, compared in
+constant time, and lives in a file the backup itself never touches, so it can never leak into an
+archive.
 
 ---
 
