@@ -12,7 +12,7 @@ plugins {
 // bumps +1 per delivered build. See .claude/skills/upstream-new-version.
 def releaseVersionName = "9.0.10"   // = latest upstream `v*` tag / desktop Cargo version
 def upstreamVersionCode = 21        // = upstream Android defaultConfig.versionCode
-def buildNumber = 20                // fork build; reset to 1 each upstream bump
+def buildNumber = 24                // fork build; reset to 1 each upstream bump
 
 def forkVersionName = "${releaseVersionName}+${buildNumber}"
 def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210001

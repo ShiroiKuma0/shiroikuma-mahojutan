@@ -301,6 +301,10 @@ async fn main() {
             check_support,
             user_bluetooth_pair,
             has_network_connection,
+            fork_read_file,
+            fork_write_file,
+            fork_list_dir,
+            fork_restart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -362,6 +366,117 @@ fn get_network_interfaces() -> Vec<InterfaceInfo> {
 #[tauri::command]
 fn has_network_connection(interface: WiFiInterface) -> bool {
     network::has_network_connection(&interface).unwrap_or(false)
+}
+
+// ── Fork: Export / Import file access ─────────────────────────────────────────────────────────
+//
+// The desktop app's settings live in the webview's localStorage, which Rust cannot read — so the
+// backup engine itself (backup.js) stays in the frontend, and Rust supplies only the four things a
+// webview cannot do: read a file, write a file, list a folder, and restart the app.
+//
+// Payloads cross the IPC bridge base64-encoded. Handing a `Vec<u8>` to Tauri would serialize it as
+// a JSON array of numbers — five-ish bytes on the wire per byte of ZIP — while base64 costs 1.33×
+// and rides in a plain JSON string. The encoder/decoder below is 30 lines, so no new crate is
+// pulled in for it.
+
+const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn b64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(B64_ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(B64_ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { B64_ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64_ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn b64_decode(text: &str) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    for c in text.bytes() {
+        if c == b'=' || c.is_ascii_whitespace() {
+            continue;
+        }
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return Err(format!("invalid base64 character: {}", c as char)),
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
+#[derive(serde::Serialize)]
+struct ForkDirEntry {
+    name: String,
+    size: u64,
+    // Milliseconds since the epoch, so JavaScript can build a Date from it directly.
+    modified: u64,
+}
+
+#[tauri::command]
+fn fork_read_file(path: String) -> Result<String, String> {
+    fs::read(&path).map(|b| b64_encode(&b)).map_err(|e| e.to_string())
+}
+
+/// Writes `base64` to `path`, creating the parent directory if it isn't there yet.
+#[tauri::command]
+fn fork_write_file(path: String, base64: String) -> Result<u64, String> {
+    let bytes = b64_decode(&base64)?;
+    let target = PathBuf::from(&path);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&target, &bytes).map_err(|e| e.to_string())?;
+    Ok(bytes.len() as u64)
+}
+
+/// Files (not sub-directories) in `path`, so the frontend can find the newest backup in the folder.
+#[tauri::command]
+fn fork_list_dir(path: String) -> Result<Vec<ForkDirEntry>, String> {
+    let mut entries = vec![];
+    for entry in fs::read_dir(&path).map_err(|e| e.to_string())? {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let metadata = match entry.metadata() {
+            Ok(m) if m.is_file() => m,
+            _ => continue,
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        entries.push(ForkDirEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            size: metadata.len(),
+            modified,
+        });
+    }
+    Ok(entries)
+}
+
+/// "Restart now" on the import-finished dialog — the desktop twin of the Android app's restart.
+#[tauri::command]
+fn fork_restart(app: tauri::AppHandle) {
+    app.restart();
 }
 
 #[tauri::command]
