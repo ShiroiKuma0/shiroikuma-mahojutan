@@ -6,9 +6,11 @@ description: Build the signed release APK of the shiroikuma 魔法絨毯 (Flying
 # Build the signed release APK and optionally send to phone
 
 This is the **Android** app of the FlyingCarpet fork (`Android/FlyingCarpet/`). The desktop
-(Tauri/Rust) app is forked and rebranded too, but is built by its own **build-deb** skill — this one
-never builds it, but the two artifacts share **one** `+N` build counter: the same code must always
-build as the same `+N` on both, so a bump edits both version fields (see step 1). The app has **no native
+(Tauri/Rust) app is forked and rebranded too, built by its own **build-deb** skill — and **every
+build ships BOTH artifacts together** (hard rule, 白い熊 2026-07-23): after the APK is delivered,
+run the **build-deb** skill for the same `+N`, never deliver one artifact alone. The two artifacts
+share **one** `+N` build counter: the same code must always build as the same `+N` on both, so a
+bump edits both version fields (see step 1). The app has **no native
 code** — it is pure Kotlin, so there are no ABI splits: `assembleRelease` produces **one universal
 APK**. The `arm64-v8a` in the filename is a naming convention (the target device), not an ABI variant.
 
@@ -82,6 +84,10 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
    otherwise `/scp` to `skhw:~/tmp/`, and announces the filename that landed. Never prompt
    "scp or adb push?" or "is the phone connected?" — /after-build decides on its own. Never
    `adb install`; the user installs from the phone's file manager.
+
+6. **Build the `.deb` for the same `+N`** — every build ships both artifacts (hard rule): run the
+   **build-deb** skill's steps (the counter is already bumped, so skip its bump step) so the paired
+   desktop artifact also lands in `~/tmp/`.
 
 ## Signing (prerequisite)
 
