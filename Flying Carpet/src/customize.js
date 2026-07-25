@@ -8,6 +8,11 @@
 // Mirrors Android's Settings semantics: dims (border width / radius) store an explicit 0 as a valid
 // value distinct from "unset", texts store "" as "unset", colors/fonts/styles are absent when unset.
 
+import * as Backup from './backup.js';
+
+// The folder picker for the Export/Import panel (the dialog plugin is already in the capability set).
+const { dialog } = window.__TAURI__;
+
 const YELLOW = '#ffff00';
 const BLACK = '#000000';
 const SWITCH_TRACK_OFF = '#555555';
@@ -465,10 +470,18 @@ function buildThemeCss() {
   css += `#progressBar::-webkit-progress-value { background-color: ${prog}; }\n`;
 
   // Settings page + About dialog chrome (page.* / about*).
+  const accent = eColor('page.section.color', YELLOW);
   css += `#forkSettingsPage { background-color: ${eColor('page.bg', BLACK)}; }\n`;
   css += `#forkSettingsPage .fork-page-title { ${textDecls('page.title', true)} }\n`;
-  css += `#forkSettingsPage .fork-section-title { ${textDecls('page.section', true)} }\n`;
-  css += `#forkSettingsPage .fork-element-title { ${textDecls('page.element', true)} }\n`;
+  // The headings' underlines and the between-section hairlines follow the heading colour, so a
+  // repainted page repaints its rules too.
+  css += `#forkSettingsPage .fork-section-rule { background-color: ${accent}; }\n`;
+  css += `#forkSettingsPage .fork-section-title { ${textDecls('page.section', true)}` +
+    ` border-bottom-color: ${accent}; }\n`;
+  css += `#forkSettingsPage .fork-element-title { ${textDecls('page.element', true)}` +
+    ` border-bottom-color: ${eColor('page.element.color', YELLOW)}; }\n`;
+  css += `#forkSettingsPage .fork-setting-title { ${textDecls('page.label', true)} }\n`;
+  css += `#forkSettingsPage .fork-setting-summary:not(.fork-warn) { ${textDecls('page.note', true)} }\n`;
   css += `#forkSettingsPage label, #forkSettingsPage .fork-label { ${textDecls('page.label', true)} }\n`;
   css += `#forkSettingsPage .fork-note { ${textDecls('page.note', true)} }\n`;
   css += `#forkSettingsPage .fork-btn, #forkAboutModal .fork-btn { ${textDecls('page.button', true)}` +
@@ -791,10 +804,257 @@ function buildColorGroup(group, container) {
   container.appendChild(box);
 }
 
+// ── Export / Import ───────────────────────────────────────────────────────────────────────────
+//
+// The desktop twin of the Android app's Export/Import panel, and the same shapes: the Kōjiki sheet
+// for the panel, the ArcaneChat button bar at its foot, and a black/yellow-bordered info dialog on
+// the way out. Closing behaviour (白い熊, 2026-07-25): acknowledging a **successful** export or
+// import closes the whole chain — info dialog, panel, and the UI page beneath them. Failures close
+// only the info dialog, so the panel stays open and the problem can be fixed on the spot.
+
+/** A yellow-bordered black dialog with right-aligned pills. Each action decides what to close. */
+function forkInfo(title, body, actions) {
+  const overlay = el('div', 'fork-overlay');
+  const box = el('div', 'fork-info-box');
+  box.appendChild(el('div', 'fork-info-title', title));
+  box.appendChild(el('div', 'fork-info-body', body));
+  const row = el('div', 'fork-info-actions');
+  const close = () => overlay.remove();
+  for (const action of actions) {
+    const btn = el('button', 'fork-pill', action.label);
+    btn.type = 'button';
+    btn.onclick = () => action.onClick(close);
+    row.appendChild(btn);
+  }
+  box.appendChild(row);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+/** Single-OK dialog that closes only itself — every failure message uses this. */
+function forkAlert(title, body) {
+  forkInfo(title, body, [{ label: 'OK', onClick: (close) => close() }]);
+}
+
+/** A black/yellow chooser: one clickable row per item, plus a Cancel pill. */
+function forkChooser(title, items, onPick) {
+  const overlay = el('div', 'fork-overlay');
+  const box = el('div', 'fork-info-box');
+  box.appendChild(el('div', 'fork-info-title', title));
+  box.appendChild(el('div', 'fork-hairline'));
+  items.forEach((label, i) => {
+    const row = el('div', 'fork-setting-row');
+    row.style.marginLeft = '0';
+    row.appendChild(el('div', 'fork-info-body', label));
+    row.onclick = () => { overlay.remove(); onPick(i); };
+    box.appendChild(row);
+  });
+  box.appendChild(el('div', 'fork-hairline'));
+  const row = el('div', 'fork-info-actions');
+  const cancel = el('button', 'fork-pill', 'Cancel');
+  cancel.type = 'button';
+  cancel.onclick = () => overlay.remove();
+  row.appendChild(cancel);
+  box.appendChild(row);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+}
+
+/** The folder line shown on the UI page: the folder plus its newest backup, red while unset. */
+async function exportSummary() {
+  const dir = Backup.exportDir();
+  if (!dir) return { text: 'No backup folder set', warn: true };
+  const newest = (await Backup.listBackups())[0];
+  if (!newest) return { text: `${dir} — no backup yet`, warn: true };
+  const stamp = new Date(newest.modified).toLocaleString();
+  return { text: `${dir} — latest ${stamp}`, warn: false };
+}
+
+async function refreshExportSummary() {
+  const view = document.getElementById('forkExportSummary');
+  if (!view) return;
+  const { text, warn } = await exportSummary();
+  view.innerText = text;
+  view.classList.toggle('fork-warn', warn);
+}
+
+function openExportPanel() {
+  const overlay = el('div', 'fork-overlay');
+  const box = el('div', 'fork-panel-box');
+  overlay.appendChild(box);
+
+  const selected = new Set(Backup.CATEGORIES.map((c) => c.id));
+
+  const closePanel = () => { overlay.remove(); refreshExportSummary(); };
+  const closeChain = () => {
+    overlay.remove();
+    const page = document.getElementById('forkSettingsPage');
+    if (page) page.style.display = 'none';
+  };
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closePanel(); });
+  document.body.appendChild(overlay);
+
+  async function pickFolder() {
+    const picked = await dialog.open({ multiple: false, directory: true, defaultPath: Backup.exportDir() || undefined });
+    if (!picked) return;
+    Backup.setExportDir(picked);
+    render();
+  }
+
+  async function onExport() {
+    if (!Backup.exportDir()) { await pickFolder(); return; }
+    if (!selected.size) { forkAlert('Export', 'No categories selected.'); return; }
+    try {
+      const result = await Backup.runExport(selected, appVersion);
+      const body = [
+        result.path,
+        `${Backup.humanSize(result.bytes)} · ${result.lines.length} categories`,
+        ...result.lines.map((line) => `· ${line}`),
+      ].join('\n');
+      forkInfo('Export finished', body, [
+        { label: 'OK', onClick: (close) => { close(); closeChain(); } },
+      ]);
+    } catch (e) {
+      forkAlert('Export failed', String((e && e.message) || e));
+    }
+  }
+
+  async function onImport() {
+    if (!Backup.exportDir()) { await pickFolder(); return; }
+    if (!selected.size) { forkAlert('Import', 'No categories selected.'); return; }
+    const backups = await Backup.listBackups();
+    if (!backups.length) {
+      forkAlert('Import', 'No backup of this app was found in the backup folder.');
+      return;
+    }
+    forkChooser(
+      'Choose a backup',
+      backups.map((b) => `${b.name}\n${Backup.humanSize(b.size)}`),
+      async (which) => {
+        const dir = Backup.exportDir().replace(/\/+$/, '');
+        try {
+          const result = await Backup.runImport(`${dir}/${backups[which].name}`, selected);
+          // The theme engine caches the store in memory — reload it and repaint immediately.
+          Settings.load();
+          registerFonts();
+          applyAll();
+          const body = [
+            ...(result.lines.length ? result.lines.map((line) => `· ${line}`)
+              : ['Nothing in this backup matched the selected categories.']),
+            '',
+            'Restart the app for everything to take effect.',
+          ].join('\n');
+          forkInfo('Import finished', body, [
+            { label: 'Later', onClick: (close) => { close(); closeChain(); } },
+            { label: 'Restart now', onClick: () => Backup.restartApp() },
+          ]);
+        } catch (e) {
+          forkAlert('Import failed', String((e && e.message) || e));
+        }
+      },
+    );
+  }
+
+  async function render() {
+    box.innerHTML = '';
+    box.appendChild(el('div', 'fork-panel-title', 'Export / Import'));
+    box.appendChild(el('div', 'fork-panel-desc',
+      'Save everything you have set in this app to one .zip in your backup folder, or restore it ' +
+      'from one. Importing merges: categories the file doesn’t carry are left alone.'));
+
+    const dir = Backup.exportDir();
+    const dirBox = el('div', `fork-dirbox${dir ? '' : ' unset'}`);
+    dirBox.appendChild(el('div', 'fork-dirbox-label', 'Backup folder'));
+    const dirValue = el('div', `fork-dirbox-value${dir ? '' : ' fork-warn'}`,
+      dir || 'No backup folder set — click to choose one');
+    dirBox.appendChild(dirValue);
+    dirBox.onclick = pickFolder;
+    box.appendChild(dirBox);
+
+    const status = el('div', 'fork-status-line', 'Reading the backup folder…');
+    box.appendChild(status);
+    if (!dir) {
+      status.innerText = 'No backup folder set.';
+      status.classList.add('fork-warn');
+    } else {
+      const newest = (await Backup.listBackups())[0];
+      if (newest) {
+        status.innerText = `Latest export: ${new Date(newest.modified).toLocaleString()} ` +
+          `(${Backup.humanSize(newest.size)})`;
+      } else {
+        status.innerText = 'No backup in this folder yet.';
+        status.classList.add('fork-warn');
+      }
+    }
+
+    box.appendChild(el('div', 'fork-hairline'));
+
+    const allRow = el('div', 'fork-check-row');
+    const allBox = document.createElement('input');
+    allBox.type = 'checkbox';
+    allBox.checked = selected.size === Backup.CATEGORIES.length;
+    allBox.onchange = () => {
+      if (allBox.checked) Backup.CATEGORIES.forEach((c) => selected.add(c.id));
+      else selected.clear();
+      render();
+    };
+    allRow.appendChild(allBox);
+    const allLabel = el('span', null, 'Select all');
+    allLabel.style.fontWeight = 'bold';
+    allRow.appendChild(allLabel);
+    box.appendChild(allRow);
+
+    for (const cat of Backup.CATEGORIES) {
+      const row = el('div', 'fork-check-row');
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = selected.has(cat.id);
+      check.onchange = () => { if (check.checked) selected.add(cat.id); else selected.delete(cat.id); };
+      row.appendChild(check);
+      row.appendChild(el('span', null, cat.label));
+      box.appendChild(row);
+    }
+
+    box.appendChild(el('div', 'fork-hairline'));
+
+    // The ArcaneChat button bar: Cancel alone on the left, Import + Export grouped on the right.
+    const bar = el('div', 'fork-pill-bar');
+    const cancel = el('button', 'fork-pill', 'Cancel');
+    cancel.type = 'button';
+    cancel.onclick = closePanel;
+    bar.appendChild(cancel);
+    bar.appendChild(el('div', 'fork-pill-spacer'));
+    const importBtn = el('button', 'fork-pill', 'Import');
+    importBtn.type = 'button';
+    importBtn.onclick = onImport;
+    bar.appendChild(importBtn);
+    const exportBtn = el('button', 'fork-pill', 'Export');
+    exportBtn.type = 'button';
+    exportBtn.onclick = onExport;
+    bar.appendChild(exportBtn);
+    box.appendChild(bar);
+  }
+
+  render();
+}
+
+// ── Settings page ─────────────────────────────────────────────────────────────────────────────
+
 function rebuildSettingsPage() {
   const page = document.getElementById('forkSettingsPage');
   if (!page || page.style.display === 'none') return;
   openSettings(); // rebuilds in place
+}
+
+/** A top-level section: the thin full-width spacer, then the text-width underlined heading. */
+function sectionEl(title, note) {
+  const sec = el('div', 'fork-section');
+  sec.appendChild(el('div', 'fork-section-rule'));
+  sec.appendChild(el('div', 'fork-section-title', title));
+  if (note) sec.appendChild(el('div', 'fork-note', note));
+  return sec;
 }
 
 function openSettings() {
@@ -828,10 +1088,27 @@ function openSettings() {
   header.appendChild(buttons);
   page.appendChild(header);
 
+  // First section on the page, matching the Kōjiki UI page: the backup folder and the panel that
+  // carries every setting in this app out to a .zip and back.
+  const exportSection = sectionEl(
+    'Export / Import',
+    'Carry everything you set in this app to another device, or put it back.',
+  );
+  const row = el('div', 'fork-setting-row');
+  const rowText = el('div', null);
+  rowText.style.flex = '1 1 auto';
+  rowText.appendChild(el('div', 'fork-setting-title', 'Export / Import…'));
+  const summary = el('div', 'fork-setting-summary', 'Reading the backup folder…');
+  summary.id = 'forkExportSummary';
+  rowText.appendChild(summary);
+  row.appendChild(rowText);
+  row.onclick = openExportPanel;
+  exportSection.appendChild(row);
+  page.appendChild(exportSection);
+  refreshExportSummary();
+
   for (const section of SECTIONS) {
-    const sec = el('div', 'fork-section');
-    sec.appendChild(el('div', 'fork-section-title', section.title));
-    if (section.note) sec.appendChild(el('div', 'fork-note', section.note));
+    const sec = sectionEl(section.title, section.note);
     for (const surface of (section.surfaces || [])) buildSurface(surface, sec);
     for (const group of (section.colorGroups || [])) buildColorGroup(group, sec);
     page.appendChild(sec);
@@ -854,9 +1131,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   applyTexts();
   document.addEventListener('keyup', (e) => {
     if (e.key !== 'Escape') return;
+    // Innermost first: an open panel or dialog swallows Escape before the page does.
+    const overlays = document.querySelectorAll('body > .fork-overlay');
+    const topmost = overlays[overlays.length - 1];
+    if (topmost && topmost.id !== 'forkAboutModal') { topmost.remove(); refreshExportSummary(); return; }
+    const modal = document.getElementById('forkAboutModal');
+    if (modal && modal.style.display !== 'none') { modal.style.display = 'none'; return; }
     const page = document.getElementById('forkSettingsPage');
     if (page && page.style.display !== 'none') page.style.display = 'none';
-    const modal = document.getElementById('forkAboutModal');
-    if (modal && modal.style.display !== 'none') modal.style.display = 'none';
   });
 });
