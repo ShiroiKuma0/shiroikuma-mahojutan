@@ -76,40 +76,89 @@ body {
   gap: 10px;
 }
 
+/* The heading system is the shiroikuma-kxkb settings page (白い熊, 2026-07-25): a full-width 1 px
+   hairline marks the boundary between top-level sections, every heading carries a **text-width**
+   underline (never full-width — hence inline-block), and the indentation ladder is kxkb's:
+   section 36 px → element 54 px → control 72 px. */
+
 .fork-section {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
+}
+
+/* The thin spacer between one section and the next. */
+.fork-section-rule {
+  height: 1px;
+  background-color: #ffff00;
+  margin-bottom: 10px;
 }
 
 .fork-section-title {
-  font-size: 22px;
+  display: inline-block;
+  font-size: 20px;
   font-weight: bold;
-  border-bottom: 1px solid #ffff00;
-  margin-bottom: 6px;
+  margin-left: 36px;
+  padding-bottom: 2px;
+  border-bottom: 3px solid #ffff00;
 }
 
 .fork-note {
   font-size: 13px;
   opacity: 0.8;
-  margin-bottom: 8px;
+  margin-left: 54px;
+  margin-top: 6px;
+  margin-bottom: 4px;
 }
 
-/* Deep indentation, mirroring the Android page: elements indented, their controls indented deeper. */
 .fork-element {
-  margin-left: 24px;
   margin-bottom: 12px;
 }
 
 .fork-element-title {
+  display: inline-block;
   font-size: 17px;
   font-weight: bold;
-  margin-bottom: 4px;
+  margin-left: 54px;
+  margin-top: 12px;
+  padding-bottom: 2px;
+  border-bottom: 2px solid #ffff00;
 }
 
 .fork-controls {
-  margin-left: 48px;
+  margin-left: 72px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* A kxkb settings row: title over summary at the control indent, optional widget on the right. */
+.fork-setting-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  margin-left: 72px;
+  padding: 7px 16px 7px 0;
+  cursor: pointer;
+}
+
+.fork-setting-row:hover {
+  background-color: rgba(255, 255, 0, 0.08);
+}
+
+.fork-setting-title {
+  font-size: 16px;
+}
+
+.fork-setting-summary {
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+/* "No backup folder set" — the one non-yellow accent in the fork, everywhere it appears. */
+.fork-warn {
+  color: #ff5252 !important;
+  opacity: 1 !important;
 }
 
 .fork-row {
@@ -168,4 +217,152 @@ input[type='color'] {
   width: 48px;
   height: 26px;
   padding: 1px;
+}
+
+/* ── Export / Import panel + info dialogs ──
+   The visual format is the shiroikuma-kojiki export/import sheet: one bordered rounded box carries
+   the whole panel — centred bold title, dim description, a bordered tappable folder box (red while
+   unset), the last-export line, a hairline, Select all + the category checkboxes, a hairline, then
+   the ArcaneChat button bar: Cancel alone on the left, Import and Export grouped on the right, all
+   round pills. */
+
+.fork-panel-box {
+  width: 92%;
+  max-width: 640px;
+  max-height: 88%;
+  overflow-y: auto;
+  padding: 20px 22px 16px;
+  background-color: #000000;
+  border: 2px solid #ffff00;
+  border-radius: 16px;
+}
+
+.fork-panel-title {
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+  padding-bottom: 6px;
+}
+
+.fork-panel-desc {
+  font-size: 13px;
+  opacity: 0.85;
+  margin-bottom: 10px;
+}
+
+.fork-dirbox {
+  border: 2px solid #ffff00;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 6px 0;
+  cursor: pointer;
+}
+
+.fork-dirbox.unset {
+  border-color: #ff5252;
+}
+
+.fork-dirbox-label {
+  font-size: 12px;
+}
+
+.fork-dirbox-value {
+  font-size: 15px;
+  font-weight: bold;
+}
+
+.fork-status-line {
+  font-size: 14px;
+  opacity: 0.8;
+  padding: 0 0 8px 2px;
+}
+
+.fork-hairline {
+  height: 1px;
+  background-color: #ffff00;
+  opacity: 0.4;
+}
+
+.fork-check-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  font-size: 15px;
+}
+
+.fork-check-row input[type='checkbox'] {
+  accent-color: #ffff00;
+  width: 16px;
+  height: 16px;
+}
+
+/* An ArcaneChat-style round pill: black fill, thin accent stroke, accent text. */
+.fork-pill {
+  border-radius: 999px;
+  border: 1.5px solid #ffff00;
+  background-color: #000000;
+  color: #ffff00;
+  padding: 7px 20px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.fork-pill:hover {
+  background-color: rgba(255, 255, 0, 0.12);
+}
+
+.fork-pill-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.fork-pill-bar .fork-pill-spacer {
+  flex: 1 1 auto;
+}
+
+/* The Export/Import finished dialog: black, yellow-bordered, pills right-aligned. */
+.fork-info-box {
+  width: 92%;
+  max-width: 560px;
+  max-height: 85%;
+  overflow-y: auto;
+  padding: 20px 22px 16px;
+  background-color: #000000;
+  border: 2px solid #ffff00;
+  border-radius: 16px;
+}
+
+.fork-info-title {
+  font-size: 19px;
+  font-weight: bold;
+}
+
+.fork-info-body {
+  white-space: pre-wrap;
+  font-size: 14px;
+  padding-top: 10px;
+}
+
+.fork-info-actions {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 16px;
+}
+
+/* Disabled controls: Bootstrap's default dim is opacity .65, which turns the pure yellow into a
+   gold that reads as a "wrong colour". Dim much harder so the disabled state is unmistakable. */
+button:disabled,
+.btn:disabled,
+.btn.disabled,
+.form-check-input:disabled,
+.form-check-input[disabled] ~ .form-check-label,
+.form-check-input:disabled ~ .form-check-label {
+  opacity: 0.35 !important;
 }
