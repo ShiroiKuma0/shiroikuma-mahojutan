@@ -185,10 +185,18 @@ function output(msg) {
 function makeQRCode(str) {
   let elem = document.getElementById('qrcode');
   elem.innerHTML = '';
+  // fork: yellow quiet zone (4+ modules) so the code doesn't bleed into the black page
+  // background; the QR's light modules are yellow too, so the whole block is black-on-yellow.
+  // Bootstrap makes everything border-box, so 150 total = 118 QR + 2*16 quiet zone
+  elem.style.background = '#ffff00';
+  elem.style.padding = '16px';
+  elem.style.width = '150px';
+  elem.style.height = '150px';
   new QRCode(elem, {
     text: str,
-    width: 150,
-    height: 150,
+    width: 118,
+    height: 118,
+    colorLight: '#ffff00',
   });
 }
 
@@ -394,7 +402,13 @@ let enableUi = async () => {
   // enable password box
   document.getElementById('passwordBox').disabled = false;
   // replace logo (fork: data-logo marks it tintable — QR codes are never tinted)
-  document.getElementById('qrcode').innerHTML = '<img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">'
+  let qrElem = document.getElementById('qrcode');
+  qrElem.style.background = 'transparent';
+  qrElem.style.padding = '0';
+  qrElem.style.border = 'none';
+  qrElem.style.width = '150px';
+  qrElem.style.height = '150px';
+  qrElem.innerHTML = '<img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">'
   window.forkUI?.applyLogoTint();
 }
 
