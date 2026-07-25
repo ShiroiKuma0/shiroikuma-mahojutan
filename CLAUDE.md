@@ -22,6 +22,9 @@ OS machine — this host). Each upstream release yields both artifacts — see t
 | Desktop app name | `白い熊 魔法絨毯` — launcher entry (`src-tauri/shiroikuma-mahojutan.desktop` template), window `title` in `tauri.conf.json`, `<title>`/`<h1>` in `Flying Carpet/src/index.html` |
 | Desktop icon | the yellow-traced carpet (yellow line drawing on black, source commit `191ab66`), full set regenerated via `cargo tauri icon` into `Flying Carpet/src-tauri/icons/` |
 | Desktop fork UI | yellow-on-black theme + “Customize UI” page — the desktop port of the Android fork UI (`Appearance.kt`/`Settings.kt` model): `Flying Carpet/src/customize.js` + `customize.css`, hooked into `index.html`/`main.js` (About dialog, start-button labels, logo tint); settings persist in localStorage key `shiroikuma_ui`, unset = fork default |
+| UI page look (both apps) | the shiroikuma-kxkb settings page: a full-width 1 px hairline between top-level sections, **text-width** underlines under every heading, indentation ladder section 36 → element 54 → control 72 |
+| Export / Import (both apps) | first section of the UI page (the Kōjiki flow): a settable backup folder, the newest export queried on open, category checkboxes, and an ArcaneChat pill bar (Cancel left, Import + Export right). Android `Backup.kt` + `ExportImport.kt` + `ForkDialog.kt`; desktop `Flying Carpet/src/backup.js` + the panel in `customize.js`. One `shiroikuma-mahojutan_<yyyy-MM-dd_HH-mm-ss>.zip` per export, categories `appearance` / `page` / `fonts`, `manifest.json` carries `platform` so an Android backup is never imported into the desktop app or vice versa |
+| Automation (Android only) | the sister-app 保存復元 state-export contract: `AutomationAuth.kt` (switch default OFF + 24-byte token) and `StateExportReceiver.kt` (`<pkg>.action.EXPORT_STATE` / `.LIST_CATEGORIES`, reply + progress broadcasts). Its rows live **inside** the UI page's Export/Import section. Token: UI page → Export / Import → Automation token → tap to copy |
 | Desktop build tool | `cargo install tauri-cli` (v2); webkit2gtk-4.1/gtk/soup dev libs already installed on this host |
 | Keystore | `~/.android-keystores/shiroikuma-mahojutan.jks` (alias `mahojutan`); creds in gitignored `Android/FlyingCarpet/keystore.properties` |
 | Build JDK / SDK | JDK 21 (`/usr/lib/jvm/java-21-openjdk-amd64`), SDK `/home/shiroikuma/android-sdk` |
@@ -41,30 +44,35 @@ reuse a number, never overwrite an older artifact in `~/tmp`.
 
 - **Android** (`Android/FlyingCarpet/app/build.gradle`, three values at the top): `versionName` =
   `"<releaseVersionName>+<buildNumber>"`; `versionCode` = `<upstream Android versionCode> * 10000 +
-  <buildNumber>` (currently `21 * 10000 + 20 = 210020`).
+  <buildNumber>` (currently `21 * 10000 + 24 = 210024`).
 - **Desktop** (`Flying Carpet/src-tauri/tauri.conf.json`, the `version` field — the single source of
   truth): `"<release>+<buildNumber>"`, e.g. `"9.0.10+20"`. Tauri feeds it straight into the `.deb`
   filename and its `Version:` control field, and the app's title-bar version label reads it back via
   `getVersion()`. dpkg orders `9.0.10+20 > 9.0.10+1`, so each build installs as an upgrade.
 - The **counter is SHARED between the two artifacts** (hard rule): the same code must always build as
   the same `+N` on both APK and `.deb`, so Android's `buildNumber` and the desktop `version`'s `+N`
-  must always hold the same number — a bump edits **both** fields together, even for a build of only
-  one artifact. Not every `+N` ships both artifacts, so one line may have gaps (no deb exists for
-  `+2`…`+19`); a mismatched `+N` for the same code is never allowed. Both are at `+20` (2026-07-23).
+  must always hold the same number — a bump edits **both** fields together.
+- **Every build ships BOTH artifacts together** (hard rule, 白い熊 2026-07-23): whatever triggered
+  the build, the same `+N` always gets an APK **and** a `.deb` — never one alone. Historical gaps
+  predate this rule (no deb for `+2`…`+19`, no APK for `+21`); a mismatched `+N` for the same code
+  is never allowed. Both are at `+24` (2026-07-25).
 
 ### Skills (authoritative for project specifics)
 
 - `.claude/skills/build-apk` — build the signed release APK, copy to `~/tmp`, optionally `adb push`.
-- `.claude/skills/build-deb` — bump the desktop `+N`, build the amd64 `.deb`, copy to `~/tmp`.
+- `.claude/skills/build-deb` — bump the shared `+N`, build the amd64 `.deb`, copy to `~/tmp`.
+- The two build skills are **always paired**: either one finishes by running the other, so every
+  `+N` ships APK + `.deb` together.
 - `.claude/skills/upstream-new-version` — rebase `custom` onto a new upstream release + re-derive versions,
   then build both artifacts: the Android `+1` APK and the rebranded desktop amd64 `.deb`.
 
 ### Hard rules
 
-- **Never `git commit` / `git push` unprompted; never `adb install`.** Build, copy to `~/tmp`, and only
-  `adb push` to `/sdcard/tmp/` after asking — the user installs from the phone's file manager and tests
-  before anything is committed. **Always ask the adb-push question as an explicit yes/no prompt via the
-  `AskUserQuestion` tool** (a Yes/No choice), never as plain prose — and wait for the answer before pushing.
+- **Never `git commit` / `git push` unprompted; never `adb install`.** Build, copy to `~/tmp`, then
+  deliver via the global **/after-build** skill — it decides on its own (adb push to `/sdcard/tmp/` if
+  a phone is reachable, else scp to skhw) and **never asks** (白い熊 2026-07-23: respect /after-build
+  always, no adb-push prompts). The user installs from the phone's file manager and tests before
+  anything is committed.
   Push (`--force-with-lease origin custom`, since rebases rewrite history) only on an explicit **"Push"**.
 
 ---
