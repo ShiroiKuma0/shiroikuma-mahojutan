@@ -264,7 +264,9 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // something actually reads or writes one of OUR characteristics, which only the
                 // real Flying Carpet peer does.
             } else {
-                outputText("Device disconnected")
+                // Not a failure: the BLE link has done its job by this point and is released so
+                // the transfer can move to WiFi. Worded so it does not read as an error.
+                outputText("Bluetooth connection released")
             }
         }
 
