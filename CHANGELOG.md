@@ -7,6 +7,74 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 9.0.10+052 — 2026-08-03
+
+Built on upstream **Flying Carpet 9.0.10**. Bluetooth transfers between the Android app and the
+Linux desktop app now work end to end, and a transfer tells you what it is doing while it runs.
+
+### Bluetooth — Android
+- Advertising failed outright with EMUI error 18 (HCI `0x12`, invalid command parameters). The
+  advertisement included the adapter name, guarded by `name.length <= 8`, which counts UTF-16 units:
+  “白い熊” is 3 of those but **9 UTF-8 bytes**, overflowing the 31-byte packet by one. Measured in
+  bytes now, and the log says when the name is dropped.
+- The GATT server stopped advertising on *any* incoming LE connection. On EMUI that callback fires
+  for links unrelated to this app — a watch, earbuds, a system service — taking the sender off the
+  air seconds after it started. It now stops only once something reads or writes one of our own
+  characteristics, which only the real peer does.
+- Advertise and scan failures are reported by name instead of a bare integer, and say what to do
+  next rather than silently ending the transfer.
+- The hotspot join is retried automatically: the system network picker gives up after one empty
+  scan, which is the “no device found, hit retry” everyone runs into. A WiFi scan is also requested
+  before the network request, so the framework has fresh results to match against.
+- The pairing is cleared on both sides after a transfer, in step with the desktop.
+
+### Bluetooth — Linux desktop
+- `scan()` returned the first device BlueZ announced, including devices it merely knows about — a
+  paired headset in the room was enough to end a transfer. It now requires our service UUID, prefers
+  whatever is actually on the air (by RSSI), and remembers what it has rejected.
+- A wrong candidate is no longer fatal: each gets a bounded attempt covering both the characteristic
+  lookup and the handshake, generous enough for a passkey to be typed on both devices.
+- Discovery is LE-only. With `Auto`, BlueZ merges the peer's BR/EDR record into the same device and
+  `Connect()` brings up classic profiles instead of an ATT link, after which every read fails with
+  “Not connected”.
+- Reading a characteristic's properties that early returns “No such property 'MTU'” — a diagnostic
+  print that was aborting the whole handshake. Diagnostics can no longer fail a transfer.
+- The device is removed after each transfer, so every transfer pairs afresh. Reusing the bond was
+  tried twice and cannot work: BlueZ stops announcing a paired peer during discovery, and its
+  identity record does not carry our service UUID, so a bonded peer is unfindable.
+- The hotspot is brought up **during** the handshake, before the peer is told the credentials, so it
+  is beaconing by the time the peer looks. It used to be created after the handshake returned,
+  leaving the peer scanning for an SSID that did not exist yet.
+
+### Transfer progress — both apps
+- A readout above the bar: bytes sent of total, current speed, and ETA.
+- A **second bar and second line for the whole transfer**, so multi-file transfers show overall
+  position instead of restarting at zero for every file. Shown only when there is more than one file.
+- Sending is byte-exact (all sizes known up front); receiving is weighted by file count and reports
+  bytes received, because the wire protocol carries filename + size per file and a grand total would
+  break compatibility with the other platforms.
+- Redraws throttled to 4 Hz.
+- The desktop cleared neither line at the end of a transfer, leaving stale figures on screen.
+
+### Receiving directory — both apps
+- A second button beside *Select directory* reads **Receive in “~/tmp”** and starts listening in the
+  directory picked last time, with no dialog. Android persists the tree Uri with a persistable grant
+  (without which it would be a dead link after a restart); the desktop stores the path and
+  abbreviates `$HOME` to `~`.
+- “Select Folder” is now “Select directory”, in normal capitalization — Android was shouting it via
+  Material's default `allCaps` — and the desktop button no longer spans the full width.
+
+### UI & wording
+- The *Customize UI* pill is **白い熊 魔法絨毯 UI** on both apps.
+- The desktop page uses the same Kanji logo as Android instead of the stock Flying Carpet icon.
+- “Device disconnected” is now “Bluetooth connection released”: it is the normal handover to WiFi,
+  and it read like a failure.
+
+### Packaging
+- The shared build counter is **zero-padded to three digits** (`+052`, never `+52`) in the
+  versionName, both artifact filenames, and the release tag, so builds sort in build order. The
+  `versionCode` keeps the plain integer. Builds up to `+25` predate the rule and keep their names.
+
 ## 9.0.10+24 — 2026-07-25
 
 Built on upstream **Flying Carpet 9.0.10**. This release gives both apps a real backup surface and
