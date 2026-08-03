@@ -164,7 +164,7 @@ const SECTIONS = [
       toggleSurface('receive', '“Receive” button'),
       textSurface('start', '“Select Files” button', [
         labelField('start.filesText', '“Select Files” text'),
-        labelField('start.folderText', '“Select Folder” text (receive mode)'),
+        labelField('start.folderText', '“Select directory” text (receive mode)'),
       ], {
         extraColors: [
           colorField('start.fill', 'Background', BLACK),
@@ -205,7 +205,7 @@ const SECTIONS = [
       textSurface('title', 'Title', [labelField('title.text', 'Title text')]),
       textSurface('version', 'Version label', [labelField('version.text', 'Label text')]),
       textSurface('about', '“About” link', [labelField('about.text', 'Link text')]),
-      textSurface('uiButton', '“Customize UI” button', [labelField('uiButton.text', 'Button text')], {
+      textSurface('uiButton', '“白い熊 魔法絨毯 UI” button', [labelField('uiButton.text', 'Button text')], {
         extraColors: [
           colorField('uiButton.bg', 'Background', BLACK),
           colorField('uiButton.stroke', 'Border colour', YELLOW),
@@ -327,7 +327,7 @@ const SECTIONS = [
 const DEFAULT_TEXTS = {
   'title.text': '白い熊 魔法絨毯',
   'about.text': 'About',
-  'uiButton.text': 'Customize UI',
+  'uiButton.text': '白い熊 魔法絨毯 UI',
   'bluetooth.text': 'Use Bluetooth',
   'modeInstruction.text': 'Select Mode',
   'peerInstruction.text': 'Select Peer OS',
@@ -341,7 +341,7 @@ const DEFAULT_TEXTS = {
   'cancel.text': 'Cancel Transfer',
   'sendFolder.text': 'Send Folder',
   'start.filesText': 'Select Files',
-  'start.folderText': 'Select Folder',
+  'start.folderText': 'Select directory',
   'output.hint': 'Welcome to Flying Carpet!\nOnce other options are selected, drag and drop can be used to start a transfer.',
 };
 
@@ -365,7 +365,7 @@ const TEXT_SELECTORS = {
   linuxOs: 'label[for=linuxButton]',
   macOs: 'label[for=macButton]',
   windowsOs: 'label[for=windowsButton]',
-  start: '#startButton',
+  start: '#startButton, #lastFolderButton',
   cancel: '#cancelButton',
   sendFolder: 'label[for=sendFolderCheckbox]',
   output: '#outputBox',
@@ -421,7 +421,8 @@ function buildThemeCss() {
   css += `#modeBox, #peerBox { gap: 6px; }\n`;
 
   // Select Files / Start button.
-  css += `#startButton { background-color: ${eColor('start.fill', BLACK)} !important;` +
+  // the remembered-directory button beside it is styled identically, so the pair reads as one control
+  css += `#startButton, #lastFolderButton { background-color: ${eColor('start.fill', BLACK)} !important;` +
     ` border: ${eDim('start.strokeWidth', BORDER_WIDTH)}px solid ${eColor('start.stroke', YELLOW)} !important;` +
     ` border-radius: ${eDim('start.cornerRadius', CORNER_RADIUS)}px !important; ${textDecls('start', true)} }\n`;
 
@@ -468,6 +469,11 @@ function buildThemeCss() {
   css += `#progressBar { accent-color: ${prog}; }\n`;
   css += `#progressBar::-webkit-progress-bar { background-color: ${eColor('window.bg', BLACK)}; border: 1px solid ${prog}; }\n`;
   css += `#progressBar::-webkit-progress-value { background-color: ${prog}; }\n`;
+  // the sent/total, rate and ETA line above the bar follows the bar's colour
+  css += `#progressDetails, #progressTotalDetails { color: ${prog}; }\n`;
+  css += `#totalProgressBar { accent-color: ${prog}; }\n`;
+  css += `#totalProgressBar::-webkit-progress-bar { background-color: ${eColor('window.bg', BLACK)}; border: 1px solid ${prog}; }\n`;
+  css += `#totalProgressBar::-webkit-progress-value { background-color: ${prog}; }\n`;
 
   // Settings page + About dialog chrome (page.* / about*).
   const accent = eColor('page.section.color', YELLOW);

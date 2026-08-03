@@ -20,6 +20,12 @@ struct Payload {
 }
 
 #[derive(Clone, serde::Serialize)]
+struct Details {
+    current: String,
+    total: String,
+}
+
+#[derive(Clone, serde::Serialize)]
 struct Progress {
     value: u8,
 }
@@ -54,6 +60,26 @@ impl UI for GUI {
             .lock()
             .expect("Couldn't lock GUI mutex")
             .emit("updateProgressBar", Progress { value: percent })
+            .expect("could not emit event");
+    }
+    fn update_total_progress_bar(&self, percent: u8) {
+        self.window
+            .lock()
+            .expect("Couldn't lock GUI mutex")
+            .emit("updateTotalProgressBar", Progress { value: percent })
+            .expect("could not emit event");
+    }
+    fn update_progress_details(&self, current: &str, total: &str) {
+        self.window
+            .lock()
+            .expect("Couldn't lock GUI mutex")
+            .emit(
+                "updateProgressDetails",
+                Details {
+                    current: current.to_string(),
+                    total: total.to_string(),
+                },
+            )
             .expect("could not emit event");
     }
     fn enable_ui(&self) {

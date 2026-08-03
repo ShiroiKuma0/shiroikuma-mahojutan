@@ -19,6 +19,14 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
     }
     var bytesLeft = file.length()
     val buffer = ByteArray(chunkSize)
+    progressDetailsMut.postValue(progressDetails(0, file.length(), 0.0))
+    totals?.snapshot(0, file.length())?.let { (pct, text) ->
+        totalProgressBarMut.postValue(pct)
+        progressTotalDetailsMut.postValue(text)
+    }
+    // Throttled: at 1 MB a chunk a fast link would redraw this dozens of times a second, and it is
+    // a line of text a human is reading.
+    var lastDetails = 0L
     while (bytesLeft > 0) {
         val bytesRead = withContext(Dispatchers.IO) {
             fileStream.read(buffer)
@@ -32,6 +40,16 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
         sendChunk(buffer.sliceArray(0 until bytesRead))
         val percentDone = ((file.length() - bytesLeft).toDouble() / file.length()) * 100
         progressBarMut.postValue(percentDone.toInt())
+        val now = System.currentTimeMillis()
+        if (now - lastDetails >= 250) {
+            lastDetails = now
+            val done = file.length() - bytesLeft
+            progressDetailsMut.postValue(progressDetails(done, file.length(), (now - start) / 1000.0))
+            totals?.snapshot(done, file.length())?.let { (pct, text) ->
+                totalProgressBarMut.postValue(pct)
+                progressTotalDetailsMut.postValue(text)
+            }
+        }
     }
 
     // send chunkSize of 0 to signal end of transfer
@@ -39,6 +57,13 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
         outputStream.write(zero)
     }
     progressBarMut.postValue(100)
+
+    totals?.let { t ->
+        t.bytesDone += file.length()
+        val (pct, text) = t.snapshot(0, 0)
+        totalProgressBarMut.postValue(pct)
+        progressTotalDetailsMut.postValue(text)
+    }
 
     // listen for receiving end to confirm that they have everything
     readNBytes(8, inputStream)

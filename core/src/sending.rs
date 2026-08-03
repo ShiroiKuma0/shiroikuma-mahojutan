@@ -3,7 +3,7 @@ use std::{
     fs::{metadata, File},
     io::Read,
     path::Path,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -17,6 +17,7 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     file: &Path,
     relative_name: &str,
     stream: &mut S,
+    totals: &mut crate::Totals,
     ui: &T,
 ) -> Result<(), FCError> {
     let start = Instant::now();
@@ -38,6 +39,10 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
 
     // show progress bar
     ui.show_progress_bar();
+    let (total_pct, total_text) = totals.snapshot(0, size);
+    ui.update_total_progress_bar(total_pct);
+    ui.update_progress_details(&utils::progress_details(0, size, 0.0), &total_text);
+    let mut last_details = Instant::now();
 
     let mut buffer = vec![0u8; CHUNKSIZE];
 
@@ -54,6 +59,18 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
                 send_chunk(&buffer[..bytes_read], stream).await?;
                 let percent_done = ((size - bytes_left) as f64 / size as f64) * 100.;
                 ui.update_progress_bar(percent_done as u8);
+                // Throttled: at 1 MB a chunk a fast link would otherwise redraw this dozens of
+                // times a second, and it is a line of text a human is reading.
+                if last_details.elapsed() >= Duration::from_millis(250) {
+                    last_details = Instant::now();
+                    let done = size - bytes_left;
+                    let (total_pct, total_text) = totals.snapshot(done, size);
+                    ui.update_total_progress_bar(total_pct);
+                    ui.update_progress_details(
+                        &utils::progress_details(done, size, start.elapsed().as_secs_f64()),
+                        &total_text,
+                    );
+                }
             }
             Err(e) => Err(e)?,
         }
@@ -64,6 +81,10 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
 
     // stats
     ui.update_progress_bar(100);
+    totals.bytes_done += size;
+    let (total_pct, total_text) = totals.snapshot(0, 0);
+    ui.update_total_progress_bar(total_pct);
+    ui.update_progress_details(&utils::progress_details(size, size, start.elapsed().as_secs_f64()), &total_text);
     let finish = Instant::now();
     let elapsed = (finish - start).as_secs_f64();
     ui.output(&format!("Sending took {}", utils::format_time(elapsed)));
