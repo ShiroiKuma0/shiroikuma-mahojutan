@@ -11,7 +11,8 @@
     <string name="welcome">Welcome to Flying Carpet!</string>
     <string name="selectFiles">Select Files</string>
     <string name="cancel">Cancel Transfer</string>
-    <string name="selectFolder">Select Folder</string>
+    <string name="selectFolder">Select directory</string>
+    <string name="receiveIn">Receive in “%1$s”</string>
     <string name="step2">Select OS of the other device</string>
     <string name="qrCodeDescription">Flying Carpet logo / QR code</string>
     <string name="programTitle">白い熊 魔法絨毯</string>
@@ -20,5 +21,5 @@
     <string name="sendFolderText">Send Folder</string>
     <string name="bluetooth">Use Bluetooth</string>
     <string name="uiSettingsTitle">白い熊 魔法絨毯 UI</string>
-    <string name="uiSettingsLink">Customize UI</string>
+    <string name="uiSettingsLink">白い熊 魔法絨毯 UI</string>
 </resources>

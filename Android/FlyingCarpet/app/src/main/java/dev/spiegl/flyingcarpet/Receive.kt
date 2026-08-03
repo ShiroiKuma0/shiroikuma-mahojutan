@@ -34,6 +34,13 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
     val fileOutputStream = getOutputStreamForFile(destinationFolder, newFilename)
 
     // receive file
+    progressDetailsMut.postValue(progressDetails(0, fileSize, 0.0))
+    totals?.snapshot(0, fileSize)?.let { (pct, text) ->
+        totalProgressBarMut.postValue(pct)
+        progressTotalDetailsMut.postValue(text)
+    }
+    // Throttled: see the matching comment in Send.kt.
+    var lastDetails = 0L
     while (true) {
         val chunk = receiveAndDecryptChunk()
         if (chunk.isEmpty()) {
@@ -45,6 +52,22 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
         bytesRead += chunk.size
         val percentDone = (bytesRead.toDouble() / fileSize) * 100
         progressBarMut.postValue(percentDone.toInt())
+        val now = System.currentTimeMillis()
+        if (now - lastDetails >= 250) {
+            lastDetails = now
+            progressDetailsMut.postValue(progressDetails(bytesRead, fileSize, (now - start) / 1000.0))
+            totals?.snapshot(bytesRead, fileSize)?.let { (pct, text) ->
+                totalProgressBarMut.postValue(pct)
+                progressTotalDetailsMut.postValue(text)
+            }
+        }
+    }
+
+    totals?.let { t ->
+        t.bytesDone += fileSize
+        val (pct, text) = t.snapshot(0, 0)
+        totalProgressBarMut.postValue(pct)
+        progressTotalDetailsMut.postValue(text)
     }
 
     // tell sending end we're finished

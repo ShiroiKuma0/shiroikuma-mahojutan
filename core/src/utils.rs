@@ -119,6 +119,41 @@ pub fn format_time(seconds: f64) -> String {
     }
 }
 
+// Compact "2m 05s" for a countdown, as opposed to format_time()'s prose, which reads well in the
+// log after the fact but is far too long for a line that is rewritten several times a second.
+pub fn format_eta(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return "--".to_string();
+    }
+    let total = seconds.round() as u64;
+    match total {
+        t if t >= 3600 => format!("{}h {:02}m", t / 3600, (t % 3600) / 60),
+        t if t >= 60 => format!("{}m {:02}s", t / 60, t % 60),
+        t => format!("{}s", t),
+    }
+}
+
+// The line shown above the progress bar: how far along, how fast, how much longer.
+pub fn progress_details(done: u64, total: u64, elapsed_secs: f64) -> String {
+    let rate = if elapsed_secs > 0.0 {
+        done as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+    let eta = if rate > 0.0 {
+        format_eta((total.saturating_sub(done)) as f64 / rate)
+    } else {
+        "--".to_string()
+    };
+    format!(
+        "{} / {}  ·  {}/s  ·  {} left",
+        make_size_readable(done),
+        make_size_readable(total),
+        make_size_readable(rate as u64),
+        eta,
+    )
+}
+
 pub fn is_compatible(peer_version: u64) -> bool {
     // compatible with version 8. if transferring with higher version, that version will decide compatibility.
     peer_version >= 8

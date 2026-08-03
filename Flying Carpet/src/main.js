@@ -12,6 +12,10 @@ let outputBox;
 let startButton;
 let cancelButton;
 let progressBar;
+let lastFolderButton;
+let progressDetails;
+let progressTotalDetails;
+let totalProgressBar;
 let appWindow;
 
 let selectedMode;
@@ -34,6 +38,9 @@ window.onunload = () => {
     passwordBoxValue: passwordBox.value,
     progressBarValue: progressBar.value,
     progressBarVisible: progressBar.style.display !== 'none',
+    progressDetailsText: progressDetails.innerText,
+    progressTotalText: progressTotalDetails.innerText,
+    totalProgressValue: totalProgressBar.value,
   };
   let uiJSON = JSON.stringify(uiState);
   sessionStorage.setItem('pageState', uiJSON);
@@ -47,6 +54,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   startButton = document.getElementById('startButton');
   cancelButton = document.getElementById('cancelButton');
   progressBar = document.getElementById('progressBar');
+  lastFolderButton = document.getElementById('lastFolderButton');
+  progressDetails = document.getElementById('progressDetails');
+  progressTotalDetails = document.getElementById('progressTotalDetails');
+  totalProgressBar = document.getElementById('totalProgressBar');
   bluetoothSwitch = document.getElementById('bluetoothSwitch');
   sendFolderCheckbox = document.getElementById('sendFolderCheckbox');
 
@@ -81,13 +92,40 @@ window.addEventListener('DOMContentLoaded', async () => {
   // progress bar handlers
   await appWindow.listen('showProgressBar', (_event) => {
     progressBar.style.display = '';
+    progressDetails.style.display = '';
+    // the second bar and line only earn their space when there is more than one file
+    let multi = totalProgressBar.dataset.multiFile === 'true';
+    totalProgressBar.style.display = multi ? '' : 'none';
+    progressTotalDetails.style.display = multi ? '' : 'none';
   });
   await appWindow.listen('updateProgressBar', (event) => {
     progressBar.value = event.payload.value;
   });
+  await appWindow.listen('updateProgressDetails', (event) => {
+    progressDetails.innerText = event.payload.current;
+    progressTotalDetails.innerText = event.payload.total;
+    // "File 1 of 1" needs no second row; anything else does
+    let multi = !/^File 1 of 1\b/.test(event.payload.total);
+    totalProgressBar.dataset.multiFile = multi ? 'true' : 'false';
+    totalProgressBar.style.display = multi ? '' : 'none';
+    progressTotalDetails.style.display = multi ? '' : 'none';
+  });
+  await appWindow.listen('updateTotalProgressBar', (event) => {
+    totalProgressBar.value = event.payload.value;
+  });
 
   // enable UI when transfer finishes
   await appWindow.listen('enableUi', (_event) => {
+    // clear the readout: leaving the last file's figures on screen reads as if a transfer is
+    // still in flight (Android already clears its line on finish).
+    progressDetails.innerText = '';
+    progressTotalDetails.innerText = '';
+    progressDetails.style.display = 'none';
+    progressTotalDetails.style.display = 'none';
+    progressBar.style.display = 'none';
+    totalProgressBar.style.display = 'none';
+    progressBar.value = 0;
+    totalProgressBar.value = 0;
     enableUi();
   });
 
@@ -132,6 +170,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       let is_dir = await core.invoke('is_dir', { path: event.payload[0] });
       if (is_dir) {
         selectedFolder = event.payload[0];
+        rememberFolder(selectedFolder);
       } else {
         output('Error: if receiving, must select folder as destination.');
       }
@@ -143,6 +182,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   checkStatus();
+  await resolveHomeDir();
+  refreshLastFolderButton();
 
   // rehydrate UI if user refreshed
   let uiState = JSON.parse(sessionStorage.getItem('pageState'));
@@ -169,13 +210,72 @@ window.addEventListener('DOMContentLoaded', async () => {
     outputBox.innerText = uiState.output;
     progressBar.style.display = uiState.progressBarVisible ? '' : 'none';
     progressBar.value = uiState.progressBarValue;
+    progressDetails.innerText = uiState.progressDetailsText || '';
+    progressDetails.style.display = uiState.progressBarVisible ? '' : 'none';
+    progressTotalDetails.innerText = uiState.progressTotalText || '';
+    totalProgressBar.value = uiState.totalProgressValue || 0;
+    let hadTotal = uiState.progressBarVisible && !!uiState.progressTotalText;
+    progressTotalDetails.style.display = hadTotal ? '' : 'none';
+    totalProgressBar.style.display = hadTotal ? '' : 'none';
     modeChange(selectedMode);
     if (uiState.transferRunning) {
       disableUi();
     }
     checkStatus();
   }
+  refreshLastFolderButton();
 });
+
+// The directory picked last time, remembered across restarts so receiving is one tap.
+const LAST_FOLDER_KEY = 'shiroikuma_last_receive_folder';
+
+// Home directory, resolved once, so a path inside it can be shown as "~/tmp" rather than spelled
+// out in full. Left empty if the path API is unavailable, in which case paths show verbatim.
+let homeDir = '';
+async function resolveHomeDir() {
+  try {
+    homeDir = (await window.__TAURI__.path.homeDir()).replace(/\/+$/, '');
+  } catch (e) {
+    homeDir = '';
+  }
+}
+
+function prettyPath(p) {
+  if (homeDir && (p === homeDir || p.startsWith(homeDir + '/'))) {
+    return '~' + p.slice(homeDir.length);
+  }
+  return p;
+}
+
+function refreshLastFolderButton() {
+  if (!lastFolderButton) {
+    return;
+  }
+  let last = localStorage.getItem(LAST_FOLDER_KEY);
+  let show = selectedMode === 'receive' && !!last && startButton.style.display !== 'none';
+  lastFolderButton.style.display = show ? '' : 'none';
+  if (last) {
+    lastFolderButton.innerText = `Receive in \u201c${prettyPath(last)}\u201d`;
+    lastFolderButton.title = last;
+  }
+}
+
+// Same as picking that directory again: skip the file dialog and start listening.
+window.useLastFolder = () => {
+  let last = localStorage.getItem(LAST_FOLDER_KEY);
+  if (!last) {
+    return;
+  }
+  selectedFolder = last;
+  startTransfer(true);
+};
+
+function rememberFolder(folder) {
+  if (folder) {
+    localStorage.setItem(LAST_FOLDER_KEY, folder);
+    refreshLastFolderButton();
+  }
+}
 
 function output(msg) {
   outputBox.innerText += '\n' + msg;
@@ -317,6 +417,7 @@ let selectFolder = async () => {
     multiple: false,
     directory: true,
   });
+  rememberFolder(selectedFolder);
   checkStatus();
 }
 
@@ -329,9 +430,12 @@ let modeChange = async (button) => {
   // fork: the two labels are customizable
   startButton.innerText = window.forkUI
     ? window.forkUI.startLabel(button)
-    : (button === 'receive' ? 'Select Folder' : 'Select Files');
+    : (button === 'receive' ? 'Select directory' : 'Select Files');
   document.getElementById('sendFolderDiv').style.display = button === 'send' ? '' : 'none';
   selectedMode = button;
+  // after selectedMode is set, not before: refreshing first tested the mode we were leaving, which
+  // is why the button turned up in Send mode
+  refreshLastFolderButton();
   checkStatus();
 }
 
@@ -384,6 +488,7 @@ let showPassword = async () => {
 }
 
 let enableUi = async () => {
+  refreshLastFolderButton();
   // show start button
   startButton.style.display = '';
   // hide cancel button
@@ -413,6 +518,9 @@ let enableUi = async () => {
 }
 
 let disableUi = async () => {
+  if (lastFolderButton) {
+    lastFolderButton.style.display = 'none';
+  }
   // hide start button
   startButton.style.display = 'none';
   // show cancel button

@@ -37,7 +37,7 @@
         android:textColorHint="?android:attr/textColorPrimary"
         android:textIsSelectable="true"
         android:textSize="16sp"
-        app:layout_constraintBottom_toTopOf="@+id/progressBar"
+        app:layout_constraintBottom_toTopOf="@+id/progressDetails"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.476"
         app:layout_constraintStart_toStartOf="parent"
@@ -47,12 +47,30 @@
         android:id="@+id/startButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:textAllCaps="false"
         android:text="@string/selectFiles"
         android:textColor="@color/white"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.497"
+        app:layout_constraintEnd_toStartOf="@+id/lastFolderButton"
+        app:layout_constraintHorizontal_chainStyle="packed"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/peerGroup"
+        app:strokeColor="@color/startButtonStrokeColor"
+        app:strokeWidth="2dp" />
+
+    <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
+    <Button
+        android:id="@+id/lastFolderButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:ellipsize="middle"
+        android:maxLines="1"
+        android:textAllCaps="false"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@+id/startButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/startButton"
+        app:layout_constraintTop_toTopOf="@+id/startButton"
         app:strokeColor="@color/startButtonStrokeColor"
         app:strokeWidth="2dp" />
 
@@ -68,6 +86,38 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="@+id/startButton" />
 
+    <!-- sent/total, rate and ETA, shown above the bar while a transfer runs -->
+    <TextView
+        android:id="@+id/progressDetails"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingHorizontal="20dp"
+        android:paddingBottom="2dp"
+        android:text=""
+        android:textColor="?android:attr/textColorPrimary"
+        android:textSize="14sp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/progressTotalDetails"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- whole-transfer counterpart of progressDetails; hidden unless there is more than one file -->
+    <TextView
+        android:id="@+id/progressTotalDetails"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingHorizontal="20dp"
+        android:paddingBottom="2dp"
+        android:text=""
+        android:textColor="?android:attr/textColorPrimary"
+        android:textSize="14sp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/progressBar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
     <ProgressBar
         android:id="@+id/progressBar"
         style="@android:style/Widget.DeviceDefault.Light.ProgressBar.Horizontal"
@@ -75,6 +125,20 @@
         android:layout_height="24dp"
         android:layout_marginBottom="8dp"
         android:paddingHorizontal="20dp"
+        app:layout_constraintBottom_toTopOf="@+id/totalProgressBar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.0"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- second bar: the whole transfer. Hidden unless there is more than one file. -->
+    <ProgressBar
+        android:id="@+id/totalProgressBar"
+        style="@android:style/Widget.DeviceDefault.Light.ProgressBar.Horizontal"
+        android:layout_width="0dp"
+        android:layout_height="24dp"
+        android:layout_marginBottom="8dp"
+        android:paddingHorizontal="20dp"
+        android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.0"

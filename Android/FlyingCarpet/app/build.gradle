@@ -17,11 +17,11 @@ plugins {
 // before "+3". The versionCode keeps the plain integer; padding is text only.
 def releaseVersionName = "9.0.10"   // = latest upstream `v*` tag / desktop Cargo version
 def upstreamVersionCode = 21        // = upstream Android defaultConfig.versionCode
-def buildNumber = 44                // fork build; reset to 1 each upstream bump
+def buildNumber = 52                // fork build; reset to 1 each upstream bump
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
-def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210044
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210052
 
 // Release signing: read from a gitignored keystore.properties at the Gradle
 // project root, falling back to SIGNING_* env vars. Without either, the release

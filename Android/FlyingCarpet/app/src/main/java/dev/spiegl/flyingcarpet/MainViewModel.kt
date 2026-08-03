@@ -100,6 +100,23 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     val progressBar: LiveData<Int>
         get() = progressBarMut
 
+    // "123 MB / 1.2 GB · 8.7 MB/s · 2m 05s left", shown above the bar. Empty hides the line.
+    var progressDetailsMut = MutableLiveData("")
+    val progressDetails: LiveData<String>
+        get() = progressDetailsMut
+
+    // The same for the transfer as a whole; empty hides the second line and the second bar, which
+    // is what happens whenever there is only one file to move.
+    var progressTotalDetailsMut = MutableLiveData("")
+    val progressTotalDetails: LiveData<String>
+        get() = progressTotalDetailsMut
+
+    var totalProgressBarMut = MutableLiveData(0)
+    val totalProgressBar: LiveData<Int>
+        get() = totalProgressBarMut
+
+    var totals: Totals? = null
+
     private var _transferFinished = MutableLiveData(false)
     val transferFinished: LiveData<Boolean>
         get() = _transferFinished
@@ -127,8 +144,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 outputStream.write(numFilesBytes) // write to receiving end
             }
 
+            // sizes are all known here, so the overall bar can be byte-accurate when sending
+            totals = Totals(fileStreams.size, files.sumOf { it.length() })
             // send files
             for (i in 0 until fileStreams.size) {
+                totals?.fileIndex = i + 1
                 outputText("=========================")
                 outputText("Sending file ${i + 1} of ${fileStreams.size}. Filename: ${files[i].name}.")
                 val path = if (i < filePaths.size) { filePaths[i] } else { "" }
@@ -140,8 +160,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             val numFilesBytes = readNBytes(8, inputStream)
             val numFiles = ByteBuffer.wrap(numFilesBytes).long
 
+            // no grand total on this side: sizes arrive one file at a time
+            totals = Totals(numFiles.toInt(), null)
             // receive files
             for (i in 0 until numFiles) {
+                totals?.fileIndex = (i + 1).toInt()
                 outputText("=========================")
                 outputText("Receiving file ${i + 1} of $numFiles")
                 receiveFile(i == numFiles - 1)
@@ -154,6 +177,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     fun cleanUpTransfer() {
         transferIsRunning = false
         joinAttempts = 0
+        progressDetailsMut.postValue("")
+        progressTotalDetailsMut.postValue("")
+        totalProgressBarMut.postValue(0)
+        totals = null
         // cancel transfer
         if (transferCoroutine != null) {
             transferCoroutine!!.cancel()
@@ -330,6 +357,17 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         val callback = NetworkCallback()
         joinAttempts += 1
         outputText("Joining $ssid")
+        // The peer's AP was created seconds ago, so it is not in our scan cache and the framework
+        // has to run its own scan cycle before it can match the specifier -- that is the pause
+        // before the network picker settles. Asking for a scan first gives it fresh results to work
+        // from. Deprecated since API 28 and throttled to a few calls a minute, so it is best-effort:
+        // it can shorten the wait, never lengthen it.
+        try {
+            @Suppress("DEPRECATION")
+            wifiManager.startScan()
+        } catch (e: Exception) {
+            Log.i("WiFi", "startScan() before joining was refused: $e")
+        }
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
             .setWpa2Passphrase(password)

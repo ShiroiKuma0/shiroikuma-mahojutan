@@ -42,6 +42,61 @@ fun makeSizeReadable(size: Long): String {
     }
 }
 
+// Compact "2m 05s" for a countdown, as opposed to formatTime()'s prose, which reads well in the log
+// after the fact but is far too long for a line rewritten several times a second.
+fun formatEta(seconds: Double): String {
+    if (!seconds.isFinite() || seconds < 0) {
+        return "--"
+    }
+    val total = Math.round(seconds)
+    return when {
+        total >= 3600 -> "${total / 3600}h %02dm".format((total % 3600) / 60)
+        total >= 60 -> "${total / 60}m %02ds".format(total % 60)
+        else -> "${total}s"
+    }
+}
+
+// Progress across the whole transfer, so the second bar and second line can say where we are
+// overall and not just within the file in flight. Sending, every size is known up front and the
+// figure is byte-accurate; receiving, sizes arrive one file at a time (the wire protocol carries
+// filename + size per file, and a grand total would break the other platforms), so it is weighted
+// by file count instead.
+class Totals(val numFiles: Int, val totalBytes: Long?) {
+    var fileIndex = 0      // 1-based
+    var bytesDone = 0L     // completed files only
+    val start = System.currentTimeMillis()
+
+    // Pair(percent, text) for the whole transfer, given how far into the current file we are.
+    fun snapshot(currentDone: Long, currentSize: Long): Pair<Int, String> {
+        val files = "File ${maxOf(fileIndex, 1)} of $numFiles"
+        val total = totalBytes
+        return if (total != null && total > 0) {
+            val done = minOf(bytesDone + currentDone, total)
+            val elapsed = (System.currentTimeMillis() - start) / 1000.0
+            Pair(
+                Math.round(done.toDouble() / total * 100).toInt(),
+                "$files  ·  ${progressDetails(done, total, elapsed)}",
+            )
+        } else {
+            val within = if (currentSize > 0) currentDone.toDouble() / currentSize else 0.0
+            val completed = maxOf(fileIndex - 1, 0).toDouble()
+            val pct = Math.round((completed + within) / maxOf(numFiles, 1) * 100).toInt()
+            Pair(
+                minOf(pct, 100),
+                "$files  ·  ${makeSizeReadable(bytesDone + currentDone)} received",
+            )
+        }
+    }
+}
+
+// The line shown above the progress bar: how far along, how fast, how much longer.
+fun progressDetails(done: Long, total: Long, elapsedSecs: Double): String {
+    val rate = if (elapsedSecs > 0) done / elapsedSecs else 0.0
+    val eta = if (rate > 0) formatEta((total - done) / rate) else "--"
+    return "${makeSizeReadable(done)} / ${makeSizeReadable(total)}  ·  " +
+            "${makeSizeReadable(rate.toLong())}/s  ·  $eta left"
+}
+
 fun formatTime(seconds: Double): String {
     return if (seconds > 60) {
         val minutes = seconds.toInt() / 60

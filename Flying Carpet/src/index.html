@@ -28,7 +28,7 @@
           <div id="qrcode" style="width: 150px; height: 150px;">
             <img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">
           </div>
-          <button type="button" id="uiButton" onclick="window.forkUI.openSettings()">Customize UI</button>
+          <button type="button" id="uiButton" onclick="window.forkUI.openSettings()">白い熊 魔法絨毯 UI</button>
         </div>
       </div>
       <div class="horizontalContainer" style="flex-grow: 0; margin: 10px;">
@@ -75,7 +75,12 @@
       <input type="password" placeholder="Password (start transfer on other end):" id="passwordBox" style="display: none; padding: 5px; margin: 10px;" autocapitalize="off" autocorrect="off" spellcheck="false">
 
       <!-- start/cancel buttons -->
-      <button type="button" id="startButton" class="btn btn-success" onclick="startTransfer(false)" style="margin: 10px; min-height: 25px;" disabled>Select Files</button>
+      <!-- the two directory buttons share one centred row; the second only appears once something is remembered -->
+      <div id="startRow" style="display: flex; justify-content: center; align-items: center; gap: 10px; margin: 10px; flex-grow: 0; flex-shrink: 0;">
+        <button type="button" id="startButton" class="btn btn-success" onclick="startTransfer(false)" style="min-height: 25px; padding-left: 24px; padding-right: 24px; flex: 0 0 auto;" disabled>Select Files</button>
+        <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
+        <button type="button" id="lastFolderButton" class="btn btn-success" onclick="useLastFolder()" style="display: none; min-height: 25px; padding-left: 24px; padding-right: 24px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto;"></button>
+      </div>
       <button type="button" id="cancelButton" class="btn btn-danger" onclick="cancelTransfer()" style="display: none; margin: 10px; min-height: 25px;">Cancel Transfer</button>
 
       <!-- output box -->
@@ -83,8 +88,13 @@
         Welcome to Flying Carpet!<br>Once other options are selected, drag and drop can be used to start a transfer.
       </div>
 
-      <!-- progress bar -->
-      <progress id="progressBar" value="0" max="100" style="display: none; appearance: none; width: 100%; margin-top: 5px; margin-bottom: 5px; padding-left: 5px; padding-right: 5px; height: 15px; min-height: 15px;"></progress>
+      <!-- two lines above the bars while a transfer runs: the current file, then the whole transfer -->
+      <div id="progressDetails" style="display: none; text-align: center; margin-top: 5px; font-variant-numeric: tabular-nums;"></div>
+      <div id="progressTotalDetails" style="display: none; text-align: center; font-variant-numeric: tabular-nums;"></div>
+      <!-- progress bar: current file -->
+      <progress id="progressBar" value="0" max="100" style="display: none; appearance: none; width: 100%; margin-top: 5px; margin-bottom: 2px; padding-left: 5px; padding-right: 5px; height: 15px; min-height: 15px;"></progress>
+      <!-- progress bar: whole transfer -->
+      <progress id="totalProgressBar" value="0" max="100" style="display: none; appearance: none; width: 100%; margin-bottom: 5px; padding-left: 5px; padding-right: 5px; height: 15px; min-height: 15px;"></progress>
     </div>
   </body>
 </html>

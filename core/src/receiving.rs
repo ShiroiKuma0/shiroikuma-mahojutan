@@ -17,6 +17,7 @@ pub async fn receive_file<T: UI>(
     folder: &Path,
     key: &[u8],
     stream: &mut TcpStream,
+    totals: &mut crate::Totals,
     ui: &T,
     last_file: bool,
 ) -> Result<(), FCError> {
@@ -67,6 +68,10 @@ pub async fn receive_file<T: UI>(
 
     // show progress bar
     ui.show_progress_bar();
+    let (total_pct, total_text) = totals.snapshot(0, file_size);
+    ui.update_total_progress_bar(total_pct);
+    ui.update_progress_details(&utils::progress_details(0, file_size, 0.0), &total_text);
+    let mut last_details = Instant::now();
 
     // receive file
     loop {
@@ -79,6 +84,16 @@ pub async fn receive_file<T: UI>(
         out_file.write_all(&decrypted_bytes)?;
         let percent_done = ((file_size - bytes_left) as f64 / file_size as f64) * 100.0;
         ui.update_progress_bar(percent_done as u8);
+        if last_details.elapsed() >= Duration::from_millis(250) {
+            last_details = Instant::now();
+            let done = file_size - bytes_left;
+            let (total_pct, total_text) = totals.snapshot(done, file_size);
+            ui.update_total_progress_bar(total_pct);
+            ui.update_progress_details(
+                &utils::progress_details(done, file_size, start.elapsed().as_secs_f64()),
+                &total_text,
+            );
+        }
     }
 
     // tell sending end we're finished
@@ -86,6 +101,10 @@ pub async fn receive_file<T: UI>(
 
     // stats
     ui.update_progress_bar(100);
+    totals.bytes_done += file_size;
+    let (total_pct, total_text) = totals.snapshot(0, 0);
+    ui.update_total_progress_bar(total_pct);
+    ui.update_progress_details(&utils::progress_details(file_size, file_size, start.elapsed().as_secs_f64()), &total_text);
     let output_size = out_file
         .metadata()
         .expect("could not get output file metadata")
