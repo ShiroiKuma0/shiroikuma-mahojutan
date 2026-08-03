@@ -7,6 +7,77 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 9.0.10+067 — 2026-08-04
+
+Built on upstream **Flying Carpet 9.0.10**. Android-to-Android transfers now complete: the
+Bluetooth handshake between two phones used to stall with both sides sitting on “Bluetooth
+connection released”, and every fault behind it failed in silence. Six builds of diagnosis
+(`+061`…`+067`), each of which is below.
+
+### Bluetooth — the handshake between two Android phones
+- **The central opened a second GATT client.** The scan callback was changed to call
+  `connectGatt()` directly, but the bond receiver's own `connectGatt()` — left over from when the
+  scan callback only called `createBond()` — was never removed, so both fired. `bluetoothGatt` was
+  then set by whichever connection changed state last and the characteristics by whichever
+  discovered services last; when those were different instances, `readCharacteristic()` could not
+  find the characteristic in its own handle map, returned `false`, and never called back. The
+  handshake stopped there with nothing in the log for 26 seconds until the link timed out. The bond
+  handler now resumes the pending read on the connection it already has.
+- **A second GATT *server* could be opened**, putting two copies of the service in the GATT
+  database while `sendResponse()` only ever answers through the current one — so a read landing on
+  the orphaned copy got no reply at all. The server is now closed before another is opened.
+- **`MainActivity` is `singleTask`.** Without a launch mode, a share from a file manager started a
+  second Activity instance, with its own `ViewModel`, its own `Bluetooth` object and therefore its
+  own `openGattServer()` — the actual source of the second server. The existing `onNewIntent()`
+  handler was written for exactly this and could never fire.
+- **`readCharacteristic()` and `writeCharacteristic()` had their results discarded.** Both refuse
+  requests by returning a failure and never calling back, so an unchecked call stalled the
+  handshake in total silence. Both are now checked, retried once, and reported. Writing our OS back
+  is the step that triggers `connectToPeer()`, so a lost write stranded both sides.
+- **`onCharacteristicRead()` ignored `status`.** A failed read still delivers a value — an empty
+  one — so a failure was passed on as though the peer ran an OS called `""`. Insufficient
+  authentication/encryption is the *expected* first answer for the `ENCRYPTED_MITM`
+  characteristics: it now waits for the bond and asks again.
+- **GATT clients are `close()`d, not merely dropped.** Dropping the reference leaks the client
+  interface registration; ours stayed registered long after a transfer ended.
+- **The bond receiver registers once**, against the application rather than the Activity, since it
+  belongs to the ViewModel and outlives any one Activity instance.
+- **Pairing is announced once.** The stack emits `BOND_BONDING` twice for a single pairing; echoing
+  every transition made the log read as though the phones had paired two separate times.
+- **Our own `clearBond()` is no longer reported as a failure.** The `BOND_NONE` raised by the
+  deliberate post-transfer bond removal was announced as “Pairing did not complete” one line after
+  “Cleared pairing with peer” had reported the same event as a success.
+
+### Transfer — hotspot and teardown
+- **The one-tap “receive in the last folder” button never armed the transfer.** The start button
+  sets `transferIsRunning` and the share-target path sets it; the fork's own one-tap button set the
+  directory and mode and went. The hotspot's `onStarted` callback reads that flag as “the user
+  cancelled”, so every one-tap receive handed the access point back 110 ms after the framework
+  granted it — through the one branch that returned without printing anything. It now arms the
+  transfer and locks orientation exactly as the start button does, and that branch says what it is
+  doing.
+- **`transferFinished` was a one-way latch.** `finishTransfer` posted `true` and nothing ever posted
+  `false`; LiveData is sticky, so every observer registered afterwards was immediately handed
+  `true` — and the Activity re-registers on each recreation, which a fold or a permission dialog is
+  enough to cause. That redelivery called `cleanUpTransfer()` in the middle of the *next* transfer.
+- **The joining phone never got its WiFi back.** Nothing ever called
+  `unregisterNetworkCallback()`. While a `WifiNetworkSpecifier` request is registered the framework
+  deliberately holds the device on that network, so the sender stayed on the peer's hotspot after
+  the transfer instead of returning to its own WiFi. The retry path made it worse, building another
+  callback and registering another request without releasing the last — leaking one per attempt for
+  the life of the process, against a platform ceiling of about a hundred. The callback is now kept
+  and released, before each retry and at the end of every transfer once the sockets are closed.
+- **The one-tap receive button stopped disappearing after a completed transfer.** `toggleUI()`
+  refreshed it first, but that decides visibility partly from the start button's, which `toggleUI()`
+  only updates ten lines later — so it read the value left over from the transfer that had just
+  ended.
+
+### Diagnostics
+- **The on-screen log is mirrored to logcat** (tag `FlyingCarpet`). The sending side says everything
+  interesting through `outputText`, and with it going only to a `LiveData`, half of a stalled
+  handshake could only be read off a photograph of the screen. This is what made the remaining
+  faults findable.
+
 ## 9.0.10+052 — 2026-08-03
 
 Built on upstream **Flying Carpet 9.0.10**. Bluetooth transfers between the Android app and the
