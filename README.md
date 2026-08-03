@@ -11,12 +11,12 @@ yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles 
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a token-gated hook for headless backups, external font
 support, a custom icon, and a rebranded Linux desktop build shipped as an amd64 `.deb` — plus a
-Bluetooth handshake that actually completes between Android and Linux.
+Bluetooth handshake that actually completes — between Android and Linux, and between two Androids.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
 
-**📥 Latest release: [`9.0.10+052`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`9.0.10+067`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
