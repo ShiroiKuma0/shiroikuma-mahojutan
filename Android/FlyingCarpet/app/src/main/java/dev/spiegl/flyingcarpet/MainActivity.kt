@@ -85,25 +85,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // What the file picker does once files are chosen: hand off to Bluetooth if it is on, otherwise
-    // fall through to the manual (QR / password) path. Shared files take the same route.
-    // Android ties BLE scan results to the master Location toggle: with it off, startScan()
+    // The device's master Location switch, which is a different thing from holding the location
+    // permission: granting the app ACCESS_FINE_LOCATION does not turn this on, and it is this that
+    // older Androids gate scan results on. Unreadable means "on" -- never block a transfer over a
+    // question we could not ask.
+    private fun locationServicesOn(): Boolean = try {
+        (getSystemService(LOCATION_SERVICE) as android.location.LocationManager).isLocationEnabled
+    } catch (e: Exception) {
+        true
+    }
+
+    // Android used to tie BLE scan results to the master Location toggle: with it off, startScan()
     // succeeds, onScanFailed never fires, and not one result is ever delivered. The app looks like
     // it is searching and finding nothing, with every permission granted -- indistinguishable from
     // "the other device is not there". So check before scanning, and offer the setting.
     private fun locationEnabledForScanning(): Boolean {
-        val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
-        val enabled = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                lm.isLocationEnabled
-            } else {
-                @Suppress("DEPRECATION")
-                android.provider.Settings.Secure.getInt(contentResolver, android.provider.Settings.Secure.LOCATION_MODE, 0) != 0
+        // From Android 12 our BLUETOOTH_SCAN is declared neverForLocation, which takes scan results
+        // out from under the Location toggle entirely -- so there is nothing to test and nothing to
+        // ask 白い熊 for, and refusing to scan here would block a transfer that would have worked.
+        // Below 31 the flag does not exist and the toggle still decides whether a single result is
+        // ever delivered.
+        //
+        // The disavowal is honoured by the framework, but it is honoured by *this* framework: if
+        // some vendor build ignored it we would be back to scanning into silence, and the dialog
+        // that used to explain that is now switched off here. So when Location happens to be off,
+        // leave one line in the log saying so. It costs nothing when the scan works, and when it
+        // does not it is the difference between a mystery and a one-line answer.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!locationServicesOn()) {
+                viewModel.outputText(
+                    "Location is off — this version of Android does not need it for Bluetooth " +
+                            "scanning, so that is fine. If the other device is never found, turn " +
+                            "Location on and try again."
+                )
             }
-        } catch (e: Exception) {
-            true // if we cannot tell, do not block the transfer
+            return true
         }
-        if (enabled) {
+        if (locationServicesOn()) {
             return true
         }
         viewModel.outputText(
@@ -271,17 +289,15 @@ class MainActivity : AppCompatActivity() {
                     viewModel.receiveDir = it
                     rememberReceiveDir(it)
                 }
-                // if using bluetooth, start the process of exchanging OS and wifi information
-                if (viewModel.bluetooth.active) {
-                    if (viewModel.mode == Mode.Sending) {
-                        viewModel.bluetooth.advertise()
-                    } else if (viewModel.mode == Mode.Receiving) {
-                        viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
-                        viewModel.bluetooth.scan()
-                    }
-                } else {
-                    viewModel.connectToPeer()
-                }
+                // If using bluetooth, start the process of exchanging OS and wifi information --
+                // through the shared function, not a copy of its body. This block used to repeat
+                // beginTransferWithSelection() minus its Location check, and picking the
+                // destination folder is how a receive normally starts, so this was the one path
+                // that reached scan() unguarded: with Location off, startScan() returned success,
+                // onScanFailed never fired, not one result was ever delivered, and the app sat on
+                // "Scanning for Bluetooth peripherals..." indefinitely with nothing to say -- while
+                // the sender two feet away was advertising perfectly well.
+                beginTransferWithSelection()
             } ?: run {
                 viewModel.outputText("No folder selected.")
                 viewModel.cleanUpTransfer()
@@ -684,16 +700,28 @@ class MainActivity : AppCompatActivity() {
 
     // bluetooth
 
-    private var permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        arrayOf(
-            // Manifest.permission.ACCESS_COARSE_LOCATION,
+    // What we ask for at startup. The Bluetooth half is settled from Android 12; the WiFi half is
+    // what moves. NEARBY_WIFI_DEVICES took over from ACCESS_FINE_LOCATION as the permission
+    // startLocalOnlyHotspot() wants in Android 13, and asking for it here rather than leaving
+    // startHotspot() to request it means the prompt lands with the others at startup instead of
+    // interrupting a transfer that is already half-negotiated over Bluetooth. Location is not in
+    // the 33+ list at all -- BLUETOOTH_SCAN carries neverForLocation, so scanning no longer needs
+    // it, and the manifest stops declaring it above API 32.
+    private var permissions = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        )
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> arrayOf(
+            // NEARBY_WIFI_DEVICES does not exist below 33, so the hotspot still needs this one
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.BLUETOOTH_ADVERTISE,
             Manifest.permission.BLUETOOTH_CONNECT,
             Manifest.permission.BLUETOOTH_SCAN,
         )
-    } else {
-        arrayOf(
+        else -> arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.BLUETOOTH_ADMIN,
             Manifest.permission.BLUETOOTH,

@@ -8,13 +8,30 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <!-- Fork: neverForLocation is a promise to the framework that we never use a scan result to
+         work out where the phone is, and in return Android 12+ stops gating scan results on the
+         master Location toggle. Without it, receiving with Location off left the app scanning for
+         ever: startScan() returned success, onScanFailed never fired, and not one result was
+         delivered while the sender advertised a metre away. The documented cost is that some
+         beacon formats are filtered out of the results; we look for a plain 128-bit service UUID,
+         which is not one of them. Below API 31 the flag does not exist and the Location toggle
+         still governs every scan result — locationEnabledForScanning() covers that case. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Fork: location is only ever wanted for WiFi here, and only up to Android 12L —
+         startLocalOnlyHotspot() takes NEARBY_WIFI_DEVICES instead from API 33, and BLE scanning
+         stopped needing location at all once BLUETOOTH_SCAN carried neverForLocation (above).
+         Declaring these on 33+ would tie the app back to location for nothing, and the scan
+         disavowal is a weaker promise while they are held. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

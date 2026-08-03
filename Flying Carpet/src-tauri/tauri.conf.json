@@ -34,7 +34,7 @@
   },
   "productName": "shiroikuma-mahojutan",
   "mainBinaryName": "shiroikuma-mahojutan",
-  "version": "9.0.10+067",
+  "version": "9.0.10+070",
   "identifier": "dev.spiegl",
   "plugins": {},
   "app": {
