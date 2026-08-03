@@ -119,14 +119,18 @@ pub async fn negotiate_bluetooth<T: UI>(
             };
 
         println!("Removing advertisement");
+        ui.output("Receiving device found us, stopped advertising");
         drop(adv_handle);
 
         if is_hosting(&Peer::from(peer_os.as_str()), mode) {
             // wait for peer to read our ssid and password
+            ui.output("Waiting for it to read our hotspot details...");
             process_bluetooth_message(BluetoothMessage::PeerReadSsid, &mut rx, ui).await?;
             println!("Peer read SSID");
+            ui.output("It has the network name");
             process_bluetooth_message(BluetoothMessage::PeerReadPassword, &mut rx, ui).await?;
             println!("Peer read password");
+            ui.output("It has the password too — starting our hotspot next");
         } else {
             // wait for peer to write its ssid and password
             ssid = match process_bluetooth_message(
@@ -145,6 +149,7 @@ pub async fn negotiate_bluetooth<T: UI>(
                 })?,
             };
             println!("Peer's SSID: {}", ssid);
+            ui.output(&format!("Its hotspot is {}", ssid));
             password = match process_bluetooth_message(
                 BluetoothMessage::Password("".to_string()),
                 &mut rx,
@@ -161,6 +166,7 @@ pub async fn negotiate_bluetooth<T: UI>(
                 })?,
             };
             println!("Peer's password: {}", password);
+            ui.output("Got its password — joining that hotspot next");
         }
 
         sleep(Duration::from_secs(1)).await;
@@ -192,8 +198,8 @@ pub async fn negotiate_bluetooth<T: UI>(
             // wrong device does not need this long; it fails with an error in a second or two, and
             // only a genuine hang spends the whole budget.
             let attempt = timeout(Duration::from_secs(180), async {
-                let characteristics = find_characteristics(&device).await?;
-                exchange_info(characteristics, mode, &interface.0).await
+                let characteristics = find_characteristics(&device, ui).await?;
+                exchange_info(characteristics, mode, &interface.0, ui).await
             })
             .await;
             match attempt {

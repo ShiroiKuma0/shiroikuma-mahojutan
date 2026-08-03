@@ -200,7 +200,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             Log.i("Bluetooth", "In serverCallback")
             super.onConnectionStateChange(device, status, newState)
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                outputText("Device connected")
+                outputText("A device connected over Bluetooth")
                 peerDevice = device
                 // deliberately NOT stopping the advertiser here. this callback fires for LE links
                 // that have nothing to do with us -- on EMUI/Kirin a watch, earbuds or a system
@@ -237,6 +237,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             when (characteristic.uuid) {
                 // tell peer we're android
                 OS_CHARACTERISTIC_UUID -> {
+                    outputText("Receiving device asked what we are, told it Android")
                     bluetoothGattServer.sendResponse(
                         device, requestId, BluetoothGatt.GATT_SUCCESS, 0, "android".toByteArray()
                     )
@@ -244,12 +245,17 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // if we've started wifi hotspot, this will send the details. if not, it will send a blank string and the peer will need to wait and try again
                 SSID_CHARACTERISTIC_UUID -> {
                     val (ssid, _) = getWifiInfo()
+                    outputText(
+                        if (ssid.isEmpty()) "It asked for our network name before the hotspot was ready; it will ask again"
+                        else "Gave it our network name ($ssid)"
+                    )
                     bluetoothGattServer.sendResponse(
                         device, requestId, BluetoothGatt.GATT_SUCCESS, 0, ssid.toByteArray()
                     )
                 }
                 PASSWORD_CHARACTERISTIC_UUID -> {
                     val (_, password) = getWifiInfo()
+                    outputText("Gave it our password — it should join the hotspot now")
                     bluetoothGattServer.sendResponse(
                         device, requestId, BluetoothGatt.GATT_SUCCESS, 0, password.toByteArray()
                     )
@@ -304,18 +310,31 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                     // now we know peer's OS
                     // thought we had to figure out hosting and connect here, but that doesn't
                     // happen till central writes wifi info
-                    value?.let { gotPeer(it.toString(Charsets.UTF_8)) }
+                    value?.let {
+                        val os = it.toString(Charsets.UTF_8)
+                        // This is the long quiet stretch on the sending side: the receiver goes off
+                        // to tear down its WiFi and bring a hotspot up, which takes the better part
+                        // of twenty seconds, and only then writes us the details. Say so, rather
+                        // than leaving the log looking stalled.
+                        outputText("The other device is $os")
+                        outputText("It is setting up its hotspot now — that takes a few seconds, since it has to drop its own WiFi first")
+                        outputText("Waiting for it to send us the network name and password...")
+                        gotPeer(os)
+                    }
                 }
                 SSID_CHARACTERISTIC_UUID -> {
                     // central has written ssid to us as peripheral. if they wrote an ssid, we need to store it.
                     // if they didn't, we don't need to do anything, and just wait for them to write the password,
                     // at which point we can calculate the ssid and key.
                     if (value != null) {
-                        gotSsid(value.toString(Charsets.UTF_8))
+                        val theirSsid = value.toString(Charsets.UTF_8)
+                        outputText("Its hotspot will be $theirSsid — waiting for the password")
+                        gotSsid(theirSsid)
                     }
                 }
                 PASSWORD_CHARACTERISTIC_UUID -> {
                     if (value != null) {
+                        outputText("Got the password — joining its hotspot next")
                         gotPassword(value.toString(Charsets.UTF_8))
                     }
                 }
@@ -642,6 +661,16 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 intent?.getParcelableExtra(EXTRA_DEVICE)
             }
             val bondState = intent?.getIntExtra(EXTRA_BOND_STATE, -1)
+            // The sending device is the passive half of pairing -- the system dialog is raised on
+            // its behalf and nothing in the app hears about it except this broadcast. Report it, so
+            // the sender's log tracks the pairing the receiver is already narrating.
+            when (bondState) {
+                BluetoothDevice.BOND_BONDING ->
+                    outputText("Pairing with the other device — accept the passkey on BOTH")
+                BOND_BONDED -> outputText("Paired with the other device")
+                BluetoothDevice.BOND_NONE ->
+                    outputText("Pairing did not complete — it may ask again")
+            }
             if (bondState != BOND_BONDED) {
                 Log.i("Bluetooth", "Not bonded")
                 return

@@ -39,14 +39,19 @@ pub async fn connect_to_peer<T: UI>(
         Ok(PeerResource::LinuxHotspot)
     } else {
         // join hotspot and find gateway
-        ui.output(&format!("Joining hotspot {}", ssid));
+        ui.output(&format!(
+            "Joining hotspot {} — this drops your WiFi connection until the transfer is done",
+            ssid
+        ));
         join_hotspot(&ssid, &password, &interface.0, ui).await?;
+        ui.output("Joined. Waiting for the network to hand out an address...");
         loop {
             // println!("looking for gateway");
             task::yield_now().await;
             match find_gateway(&interface.0) {
                 Ok(gateway) => {
                     if gateway != "" {
+                        ui.output(&format!("Got an address, peer is at {}", gateway));
                         return Ok(PeerResource::WifiClient(gateway));
                     }
                 }
@@ -57,9 +62,25 @@ pub async fn connect_to_peer<T: UI>(
     }
 }
 
-// True if NetworkManager already has a connection with this name up. The hotspot is now started
-// during the Bluetooth handshake, before the peer is told the credentials, so by the time
-// connect_to_peer() runs it is usually already serving and must not be built a second time.
+// Delete any flyingCarpet_* profile left behind by an earlier run. One that outlives its transfer
+// leaves the WiFi card serving an ad hoc network instead of joining real ones, which is not
+// something a user should have to unpick with nmcli.
+pub fn clean_up_stale_hotspots() {
+    let list = match run_command("nmcli", Some(vec!["-t", "-f", "NAME", "con", "show"])) {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(_) => return,
+    };
+    for name in list.lines().filter(|l| l.starts_with("flyingCarpet_")) {
+        match run_command("nmcli", Some(vec!["connection", "delete", name])) {
+            Ok(_) => println!("Removed leftover hotspot profile {}", name),
+            Err(e) => println!("Could not remove leftover hotspot profile {}: {}", name, e),
+        }
+    }
+}
+
+// True if NetworkManager already has a connection with this name up. The hotspot is started during
+// the Bluetooth handshake, before the peer is told the credentials, so by the time connect_to_peer()
+// runs it is usually already serving and must not be built a second time.
 pub(crate) fn hotspot_is_up(ssid: &str) -> bool {
     match run_command("nmcli", Some(vec!["-t", "-f", "NAME", "con", "show", "--active"])) {
         Ok(out) => String::from_utf8_lossy(&out.stdout)
@@ -82,8 +103,12 @@ pub(crate) fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Resu
             &interface,
             "con-name",
             ssid,
+            // NEVER "yes": an autoconnecting profile is resurrected by NetworkManager whenever the
+            // radio is free, so a profile that outlives the app (crash, window closed mid-transfer,
+            // process killed) keeps the card in AP mode for good -- no normal networks, until it is
+            // deleted by hand. The transfer activates it explicitly, so autoconnect buys nothing.
             "autoconnect",
-            "yes",
+            "no",
             "ssid",
             ssid,
             "connection.permissions",
@@ -156,8 +181,12 @@ async fn join_hotspot<T: UI>(ssid: &str, password: &str, interface: &str, ui: &T
             &interface,
             "con-name",
             ssid,
+            // NEVER "yes": an autoconnecting profile is resurrected by NetworkManager whenever the
+            // radio is free, so a profile that outlives the app (crash, window closed mid-transfer,
+            // process killed) keeps the card in AP mode for good -- no normal networks, until it is
+            // deleted by hand. The transfer activates it explicitly, so autoconnect buys nothing.
             "autoconnect",
-            "yes",
+            "no",
             "ssid",
             ssid,
             "connection.permissions",

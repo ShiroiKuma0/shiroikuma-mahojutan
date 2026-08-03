@@ -81,20 +81,161 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            // if using bluetooth, start the process of exchanging OS and wifi information
-            if (viewModel.bluetooth.active) {
-                if (viewModel.bluetooth.bluetoothGattServer.getService(SERVICE_UUID) == null) {
-                    viewModel.bluetooth.bluetoothGattServer.addService(viewModel.bluetooth.service)
-                }
-                if (viewModel.mode == Mode.Sending) {
-                    viewModel.bluetooth.advertise()
-                } else if (viewModel.mode == Mode.Receiving) {
-                    viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
-                    viewModel.bluetooth.scan()
-                }
+            beginTransferWithSelection()
+        }
+    }
+
+    // What the file picker does once files are chosen: hand off to Bluetooth if it is on, otherwise
+    // fall through to the manual (QR / password) path. Shared files take the same route.
+    // Android ties BLE scan results to the master Location toggle: with it off, startScan()
+    // succeeds, onScanFailed never fires, and not one result is ever delivered. The app looks like
+    // it is searching and finding nothing, with every permission granted -- indistinguishable from
+    // "the other device is not there". So check before scanning, and offer the setting.
+    private fun locationEnabledForScanning(): Boolean {
+        val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        val enabled = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                lm.isLocationEnabled
             } else {
-                viewModel.connectToPeer()
+                @Suppress("DEPRECATION")
+                android.provider.Settings.Secure.getInt(contentResolver, android.provider.Settings.Secure.LOCATION_MODE, 0) != 0
             }
+        } catch (e: Exception) {
+            true // if we cannot tell, do not block the transfer
+        }
+        if (enabled) {
+            return true
+        }
+        viewModel.outputText(
+            "Location is switched off. Android returns no Bluetooth scan results at all while it is, " +
+                    "so the other device can never be found — even though every permission is granted."
+        )
+        // ForkDialog, not AlertDialog: the fork's own black/yellow chrome, like every other dialog
+        // in the app. A stock Material dialog here would be the one white box in the whole UI.
+        ForkDialog.info(
+            this,
+            "Location is off",
+            "Android only returns Bluetooth scan results when Location is on, so 白い熊 魔法絨毯 " +
+                    "cannot find the sending device until you turn it on.\n\n" +
+                    "Turn Location on, then start receiving again.",
+            listOf(
+                "Cancel" to { d: android.app.Dialog -> d.dismiss() },
+                "Open settings" to { d: android.app.Dialog ->
+                    d.dismiss()
+                    startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                },
+            ),
+            cancelable = true,
+        )
+        viewModel.cleanUpTransfer()
+        return false
+    }
+
+    private fun beginTransferWithSelection() {
+        if (viewModel.mode == Mode.Receiving && viewModel.bluetooth.active
+            && !locationEnabledForScanning()) {
+            return
+        }
+        if (viewModel.bluetooth.active) {
+            if (viewModel.bluetooth.bluetoothGattServer.getService(SERVICE_UUID) == null) {
+                viewModel.bluetooth.bluetoothGattServer.addService(viewModel.bluetooth.service)
+            }
+            if (viewModel.mode == Mode.Sending) {
+                viewModel.bluetooth.advertise()
+            } else if (viewModel.mode == Mode.Receiving) {
+                viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
+                viewModel.bluetooth.scan()
+            }
+        } else {
+            viewModel.connectToPeer()
+        }
+    }
+
+    // ── Share target ──────────────────────────────────────────────────────────
+    // Files shared from a file manager (or anywhere else) arrive here. We preselect them for
+    // sending and start looking for the receiving device, so sharing is one action rather than
+    // opening the app and picking the same files again.
+    private fun handleShareIntent(intent: Intent?): Boolean {
+        val action = intent?.action ?: return false
+        val uris: List<Uri> = when (action) {
+            Intent.ACTION_SEND -> {
+                val uri = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+                }
+                listOfNotNull(uri)
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val list = if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                list ?: emptyList()
+            }
+            else -> return false
+        }
+        // Consume it either way, so a rotation or a return to the app does not re-fire the share.
+        intent.action = null
+        if (uris.isEmpty()) {
+            viewModel.outputText("Nothing shared: no files in that share.")
+            return false
+        }
+
+        viewModel.files = mutableListOf()
+        viewModel.fileStreams = mutableListOf()
+        viewModel.filePaths = mutableListOf()
+        for (uri in uris) {
+            val file = DocumentFile.fromSingleUri(applicationContext, uri)
+            val stream = try {
+                contentResolver.openInputStream(uri)
+            } catch (e: Exception) {
+                null
+            }
+            if (file == null || stream == null) {
+                viewModel.outputText("Could not open a shared file, ignoring it.")
+                continue
+            }
+            viewModel.files.add(file)
+            viewModel.fileStreams.add(stream)
+        }
+        if (viewModel.files.isEmpty()) {
+            viewModel.outputText("Could not open any of the shared files.")
+            return false
+        }
+
+        findViewById<MaterialButtonToggleGroup>(id.modeGroup).check(id.sendButton)
+        viewModel.mode = Mode.Sending
+        viewModel.outputText(
+            "Sharing ${viewModel.files.size} file${if (viewModel.files.size == 1) "" else "s"} from another app."
+        )
+        return true
+    }
+
+    // Run the shared selection once the activity is set up: permissions are requested during
+    // onCreate, and Bluetooth is initialized from their result, so starting inline would race both.
+    private fun startSharedTransferWhenReady() {
+        window.decorView.post {
+            if (!checkForBluetoothPermissions()) {
+                // Permissions are still being asked for. The files stay selected; the transfer is
+                // one tap on the start button rather than a silent failure.
+                viewModel.outputText("Grant the permissions, then press the button to send.")
+                return@post
+            }
+            toggleUI(false)
+            viewModel.transferIsRunning = true
+            beginTransferWithSelection()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (handleShareIntent(intent)) {
+            startSharedTransferWhenReady()
         }
     }
 
@@ -347,13 +488,9 @@ class MainActivity : AppCompatActivity() {
         lastFolderButton.setOnClickListener {
             val uri = lastReceiveDir() ?: return@setOnClickListener
             viewModel.receiveDir = uri
+            viewModel.mode = Mode.Receiving
             toggleUI(false)
-            if (viewModel.bluetooth.active) {
-                viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
-                viewModel.bluetooth.scan()
-            } else {
-                viewModel.connectToPeer()
-            }
+            beginTransferWithSelection()
         }
 
         // about button
@@ -369,6 +506,11 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
+        // Launched from the share sheet? Preselect what was shared and start looking for the peer.
+        // Skipped on a recreate (rotation), where the files are already in the ViewModel.
+        if (savedInstanceState == null && handleShareIntent(intent)) {
+            startSharedTransferWhenReady()
+        }
     }
 
     override fun onResume() {

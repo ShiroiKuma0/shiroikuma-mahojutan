@@ -488,7 +488,6 @@ let showPassword = async () => {
 }
 
 let enableUi = async () => {
-  refreshLastFolderButton();
   // show start button
   startButton.style.display = '';
   // hide cancel button
@@ -511,6 +510,9 @@ let enableUi = async () => {
   qrElem.style.background = 'transparent';
   qrElem.style.padding = '0';
   qrElem.style.border = 'none';
+  // last, once the start button is back: the check looks at whether that button is showing, so
+  // refreshing earlier left the receive-in button hidden until a mode was tapped again
+  refreshLastFolderButton();
   qrElem.style.width = '150px';
   qrElem.style.height = '150px';
   qrElem.innerHTML = '<img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">'

@@ -25,7 +25,10 @@ use crate::{
 
 // the keys are the UUID string constants, so they outlive the device -- spelling that out lets the
 // caller keep the characteristics after deciding which device to keep
-pub async fn find_characteristics(device: &Device) -> Result<HashMap<&'static str, Characteristic>> {
+pub async fn find_characteristics<T: crate::UI>(
+    device: &Device,
+    ui: &T,
+) -> Result<HashMap<&'static str, Characteristic>> {
     let addr = device.address();
     let uuids = device.uuids().await?.unwrap_or_default();
 
@@ -38,6 +41,7 @@ pub async fn find_characteristics(device: &Device) -> Result<HashMap<&'static st
 
     if uuids.contains(&Uuid::parse_str(SERVICE_UUID).unwrap()) {
         println!("    Device provides our service!");
+        ui.output(&format!("Found {}, connecting to it", addr));
         let mut characteristics = HashMap::new();
 
         sleep(Duration::from_secs(2)).await;
@@ -63,6 +67,7 @@ pub async fn find_characteristics(device: &Device) -> Result<HashMap<&'static st
             }
         }
         println!("    Connected");
+        ui.output("Connected, looking up its Flying Carpet service");
 
         // Enumerating before BlueZ has resolved services yields whatever happens to be cached,
         // which is how a stale service list reached the code above in the first place.
@@ -129,6 +134,7 @@ pub async fn find_characteristics(device: &Device) -> Result<HashMap<&'static st
                     }
                     if uuid == os_characteristic_uuid {
                         println!("    (reading this one will ask both devices to pair)");
+                        ui.output("Pairing: accept the passkey on BOTH devices when it appears");
                         characteristics.insert(OS_CHARACTERISTIC_UUID, char);
                         println!("found OS characteristic")
                     } else if uuid == ssid_characteristic_uuid {
@@ -351,10 +357,11 @@ pub async fn scan(adapter: &Adapter, rejected: &HashSet<Address>) -> bluer::Resu
     })
 }
 
-pub async fn exchange_info(
+pub async fn exchange_info<T: crate::UI>(
     characteristics: HashMap<&str, Characteristic>,
     mode: &Mode,
     interface: &str,
+    ui: &T,
 ) -> bluer::Result<(String, String, String)> {
     // have to use this with write_ext() for the write requests: iOS wouldn't receive unconfirmed writes, which WriteOp::Request provides.
     // not sure if iOS requires it or if i did somehow. bluer seems to default to WriteOp::Command which has no confirmation.
@@ -370,6 +377,7 @@ pub async fn exchange_info(
     let value = os_char.read().await?;
     let peer_os = String::from_utf8(value).expect("Peer OS value was not utf-8");
     println!("Peer OS: {}", peer_os);
+    ui.output(&format!("Paired. The other device is {}", peer_os));
     sleep(Duration::from_secs(1)).await;
     // write our OS
     os_char.write_ext(OS.as_bytes(), &write_req).await?;
@@ -388,6 +396,10 @@ pub async fn exchange_info(
         // means nmcli tearing down the current WiFi association and bringing the radio up in AP
         // mode, which is the several seconds the peer would otherwise spend searching for nothing.
         println!("Starting hotspot {} before handing over credentials", ssid);
+        ui.output(&format!(
+            "Starting hotspot {} — this drops your WiFi connection until the transfer is done",
+            ssid
+        ));
         crate::network::start_hotspot(&ssid, &password, interface).map_err(|e| bluer::Error {
             kind: ErrorKind::Failed,
             message: format!("Could not start hotspot: {}", e),
@@ -396,8 +408,10 @@ pub async fn exchange_info(
         // before the radio is actually beaconing. The peer scans the instant it has the
         // credentials, so without this its first scan comes back empty and the user has to hit
         // retry on the system's network picker.
+        ui.output("Hotspot created, giving it a few seconds to get on the air");
         sleep(Duration::from_secs(3)).await;
         println!("Hotspot {} is up and beaconing", ssid);
+        ui.output("Hotspot is on the air, sending its details to the other device");
         // write ssid and password
         ssid_char.write_ext(ssid.as_bytes(), &write_req).await?;
         // let CharacteristicWriteRequest
@@ -408,6 +422,7 @@ pub async fn exchange_info(
             .write_ext(password.as_bytes(), &write_req)
             .await?;
         println!("Wrote password to peer");
+        ui.output("Details sent. Waiting for the other device to join the hotspot...");
         sleep(Duration::from_secs(1)).await;
         Ok((peer_os, ssid, password))
     } else {

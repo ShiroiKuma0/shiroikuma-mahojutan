@@ -191,6 +191,13 @@ fn start_async(
 async fn main() {
     tauri::async_runtime::set(tokio::runtime::Handle::current());
     tauri::Builder::default()
+        .setup(|_app| {
+            // Sweep up any hotspot profile a previous run left behind, before the user notices
+            // their WiFi is serving an ad hoc network instead of joining their own.
+            #[cfg(target_os = "linux")]
+            network::clean_up_stale_hotspots();
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .manage(Transfer::new())
