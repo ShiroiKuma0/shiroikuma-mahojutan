@@ -66,6 +66,10 @@ pub async fn check_support() -> Result<(), FCError> {
 pub async fn negotiate_bluetooth<T: UI>(
     mode: &Mode,
     ble_ui_rx: mpsc::Receiver<bool>,
+    // Linux starts its hotspot during the handshake, before handing the peer the credentials, so it
+    // needs the interface here. Windows still starts its hotspot in connect_to_peer(). Kept in the
+    // signature so both platforms match, as lib.rs calls this generically.
+    _interface: &crate::WiFiInterface,
     ui: &T,
 ) -> Result<(String, String, String), FCError> {
     let (tx, mut rx) = mpsc::channel(1);

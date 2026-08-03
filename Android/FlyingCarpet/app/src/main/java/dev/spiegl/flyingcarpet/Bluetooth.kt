@@ -35,6 +35,21 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import java.util.UUID
 
+// how many UTF-8 bytes of the adapter name still fit in a 31-byte advertisement alongside
+// the flags (3 bytes) and our 128-bit service UUID (18 bytes), minus the name AD header (2 bytes)
+const val MAX_ADVERTISED_NAME_BYTES = 8
+
+// Whether to drop the pairing with the peer after every transfer. It costs two dialogs per transfer
+// on Android -- the authorize prompt and the passkey -- and keeping the bond instead was tried
+// twice and fails for a reason that has nothing to do with the keys: once the peer is paired, BlueZ
+// stops announcing it during discovery (it only emits DeviceAdded for an object it had pruned and
+// sees again, and paired devices are never pruned), and the bonded identity record does not carry
+// our service UUID, so the by-address lookup skips it too. A bonded peer is simply unfindable from
+// Linux. Clearing the bond keeps it an ordinary unpaired device that discovery reports normally.
+// Must stay in step with the Linux side, which removes the device in ConnectedPeripheral::drop --
+// if one side keeps its keys and the other does not, the next transfer dies mid-handshake.
+const val CLEAR_BOND_AFTER_TRANSFER = true
+
 val SERVICE_UUID: UUID = UUID.fromString("A70BF3CA-F708-4314-8A0E-5E37C259BE5C")
 val OS_CHARACTERISTIC_UUID: UUID = UUID.fromString("BEE14848-CC55-4FDE-8E9D-2E0F9EC45946")
 val SSID_CHARACTERISTIC_UUID: UUID = UUID.fromString("0D820768-A329-4ED4-8F53-BDF364EDAC75")
@@ -68,6 +83,58 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
     val status: LiveData<Boolean>
         get() = _status
 
+    // the three characteristics that belong to us -- a request for any of them proves the device
+    // talking to our GATT server is the Flying Carpet peer and not some unrelated LE link
+    private val ourCharacteristics = setOf(
+        OS_CHARACTERISTIC_UUID, SSID_CHARACTERISTIC_UUID, PASSWORD_CHARACTERISTIC_UUID
+    )
+    private var advertising = false
+
+    // The peer we talked to this transfer, so its bond can be dropped afterwards. Linux removes the
+    // device (and therefore its keys) when a transfer ends; if we keep ours, the two sides disagree
+    // and the next transfer's read of an ENCRYPTED_MITM characteristic dies with the link. A freshly
+    // made bond works every time -- a reused one never did -- so both sides start clean each run.
+    private var peerDevice: BluetoothDevice? = null
+
+    @SuppressLint("MissingPermission")
+    private fun clearBond() {
+        val device = peerDevice ?: return
+        peerDevice = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+        {
+            return
+        }
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            return
+        }
+        // removeBond() has no public API. If the platform blocks the reflective call we simply stay
+        // bonded -- the transfer already finished, and the failure is visible in the log.
+        try {
+            val removed = device.javaClass.getMethod("removeBond").invoke(device) as? Boolean ?: false
+            outputText(if (removed) "Cleared pairing with peer" else "Could not clear pairing with peer")
+        } catch (e: Exception) {
+            outputText("Could not clear pairing with peer: ${e.javaClass.simpleName}")
+        }
+    }
+
+    // stop advertising once the peer has actually engaged with our service. never call this from
+    // onConnectionStateChange -- see the comment there.
+    @SuppressLint("MissingPermission")
+    private fun stopAdvertisingForPeer() {
+        if (!advertising) {
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED)
+        {
+            return
+        }
+        advertising = false
+        bluetoothManager.adapter.bluetoothLeAdvertiser.stopAdvertising(advertiseCallback)
+        outputText("Peer found us, stopped advertising")
+    }
+
     fun stop(application: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
             && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
@@ -82,6 +149,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         bluetoothReceiver.bluetoothGatt = null
         // peripheral
         if (this::bluetoothManager.isInitialized) {
+            advertising = false
             bluetoothManager.adapter.bluetoothLeAdvertiser.stopAdvertising(advertiseCallback)
         }
         // this prevents android from sending twice? but disabling it leaves it advertising or offering services even after the stopAdvertising() above?
@@ -89,6 +157,9 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         // bluetoothGattServer.close()
         if (this::bluetoothGattServer.isInitialized) {
             bluetoothGattServer.clearServices()
+        }
+        if (CLEAR_BOND_AFTER_TRANSFER) {
+            clearBond()
         }
     }
 
@@ -130,9 +201,14 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             super.onConnectionStateChange(device, status, newState)
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 outputText("Device connected")
-                val bluetoothLeAdvertiser = bluetoothManager.adapter.bluetoothLeAdvertiser
-                bluetoothLeAdvertiser.stopAdvertising(advertiseCallback)
-                outputText("Stopped advertising")
+                peerDevice = device
+                // deliberately NOT stopping the advertiser here. this callback fires for LE links
+                // that have nothing to do with us -- on EMUI/Kirin a watch, earbuds or a system
+                // service connecting is enough -- and stopping here took us silently off the air
+                // moments after "Advertiser started", so the peer scanning right next to us never
+                // found anything. we come off the air in stopAdvertisingForPeer() instead, once
+                // something actually reads or writes one of OUR characteristics, which only the
+                // real Flying Carpet peer does.
             } else {
                 outputText("Device disconnected")
             }
@@ -152,6 +228,9 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             }
             if (characteristic == null) {
                 return
+            }
+            if (characteristic.uuid in ourCharacteristics) {
+                stopAdvertisingForPeer()
             }
             when (characteristic.uuid) {
                 // tell peer we're android
@@ -215,6 +294,9 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             if (characteristic == null) {
                 return
             }
+            if (characteristic.uuid in ourCharacteristics) {
+                stopAdvertisingForPeer()
+            }
             when (characteristic.uuid) {
                 OS_CHARACTERISTIC_UUID -> {
                     // now we know peer's OS
@@ -275,11 +357,21 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         }
         val settings = settingsBuilder.build()
 
+        // an advertisement is 31 bytes: 3 for flags, 18 for our 128-bit service UUID, leaving 10,
+        // of which the name AD structure spends 2 on its header. so the name fits in 8 bytes -- and
+        // the packet counts UTF-8 BYTES, not characters: a 3-character name like "白い熊" is 9 bytes
+        // and overflows. (String.length counts UTF-16 units, so it says 3 and lets the packet through,
+        // after which the controller rejects it -- EMUI surfaces that as advertise error 18, HCI 0x12
+        // "Invalid HCI Command Parameters".)
+        val nameBytes = bluetoothManager.adapter.name?.toByteArray(Charsets.UTF_8)?.size ?: 0
         val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(bluetoothManager.adapter.name.length <= 8)
+            .setIncludeDeviceName(nameBytes in 1..MAX_ADVERTISED_NAME_BYTES)
             .setIncludeTxPowerLevel(false)
             .addServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
+        if (nameBytes > MAX_ADVERTISED_NAME_BYTES) {
+            outputText("Bluetooth name is $nameBytes bytes, advertising without it")
+        }
         bluetoothLeAdvertiser.startAdvertising(settings, data, advertiseCallback)
     }
 
@@ -287,15 +379,37 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             super.onStartSuccess(settingsInEffect)
             _status.postValue(true)
+            advertising = true
             outputText("Advertiser started")
         }
 
         override fun onStartFailure(errorCode: Int) {
             super.onStartFailure(errorCode)
-            outputText("Advertiser failed to start: $errorCode")
+            outputText("Advertiser failed to start: ${advertiseErrorName(errorCode)}")
+            outputText("Bluetooth turned off. Select the other device's OS, then pick your files again.")
+            advertising = false
             active = false
             bluetoothFailed()
         }
+    }
+
+    // android documents exactly five failure codes; anything else is the vendor stack's own status
+    // leaking through the framework wrapper, so print the number rather than pretending to know it
+    private fun advertiseErrorName(code: Int) = when (code) {
+        AdvertiseCallback.ADVERTISE_FAILED_DATA_TOO_LARGE -> "advertisement too large ($code)"
+        AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "too many advertisers ($code)"
+        AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> "already started ($code)"
+        AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> "internal error ($code)"
+        AdvertiseCallback.ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "not supported by this device ($code)"
+        else -> "vendor error $code"
+    }
+
+    private fun scanErrorName(code: Int) = when (code) {
+        ScanCallback.SCAN_FAILED_ALREADY_STARTED -> "already started ($code)"
+        ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED -> "registration failed ($code)"
+        ScanCallback.SCAN_FAILED_INTERNAL_ERROR -> "internal error ($code)"
+        ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED -> "not supported by this device ($code)"
+        else -> "vendor error $code"
     }
 
     // central
@@ -348,6 +462,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                     outputText("Stopped scanning")
                     //                address = result.device.address
                     bluetoothReceiver.result = result
+                    peerDevice = result.device
 
 //                    if (result.device.bondState == BOND_BONDED) {
                     result.device.connectGatt(
@@ -370,6 +485,8 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         override fun onScanFailed(errorCode: Int) {
             Log.e("Bluetooth", "Scan failed: $errorCode")
             super.onScanFailed(errorCode)
+            outputText("Bluetooth scan failed: ${scanErrorName(errorCode)}")
+            outputText("Bluetooth turned off. Select the other device's OS, then pick your folder again.")
             active = false
             bluetoothFailed()
         }

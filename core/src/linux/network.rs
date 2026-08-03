@@ -28,9 +28,14 @@ pub async fn connect_to_peer<T: UI>(
     ui: &T,
 ) -> Result<PeerResource, FCError> {
     if is_hosting(&peer, &mode) {
-        // start hotspot
-        ui.output(&format!("Starting hotspot {}", ssid));
-        start_hotspot(&ssid, &password, &interface.0)?;
+        // Usually already running: the Bluetooth handshake brings it up before handing the peer
+        // the credentials, so the peer does not go looking for an SSID that is not on the air yet.
+        if hotspot_is_up(&ssid) {
+            ui.output(&format!("Hotspot {} already running", ssid));
+        } else {
+            ui.output(&format!("Starting hotspot {}", ssid));
+            start_hotspot(&ssid, &password, &interface.0)?;
+        }
         Ok(PeerResource::LinuxHotspot)
     } else {
         // join hotspot and find gateway
@@ -52,7 +57,19 @@ pub async fn connect_to_peer<T: UI>(
     }
 }
 
-fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Result<(), FCError> {
+// True if NetworkManager already has a connection with this name up. The hotspot is now started
+// during the Bluetooth handshake, before the peer is told the credentials, so by the time
+// connect_to_peer() runs it is usually already serving and must not be built a second time.
+pub(crate) fn hotspot_is_up(ssid: &str) -> bool {
+    match run_command("nmcli", Some(vec!["-t", "-f", "NAME", "con", "show", "--active"])) {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(|line| line == ssid),
+        Err(_) => false,
+    }
+}
+
+pub(crate) fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Result<(), FCError> {
     let nmcli = "nmcli";
     let user_str = &format!("user:{}", get_username());
     let commands = vec![

@@ -3,14 +3,18 @@ mod peripheral;
 
 use bluer::{Adapter, Address, Session};
 use central::{exchange_info, find_characteristics};
-use std::{mem::discriminant, time::Duration};
-use tokio::{spawn, sync::mpsc, time::sleep};
+use std::{collections::HashSet, mem::discriminant, time::Duration};
+use tokio::{
+    spawn,
+    sync::mpsc,
+    time::{sleep, timeout},
+};
 
 use crate::{
     error::{fc_error, FCError},
     network::is_hosting,
     utils::{generate_password, get_key_and_ssid, BluetoothMessage},
-    Mode, Peer, UI,
+    Mode, Peer, WiFiInterface, UI,
 };
 
 impl From<bluer::Error> for FCError {
@@ -47,6 +51,7 @@ pub async fn get_adapter() -> Result<Adapter, FCError> {
 pub async fn negotiate_bluetooth<T: UI>(
     mode: &Mode,
     _ble_ui_rx: mpsc::Receiver<bool>, // only used on windows
+    interface: &WiFiInterface,
     ui: &T,
 ) -> Result<(String, String, String), FCError> {
     // TODO: dedup with check_support(), but can't return adapter from it because windows doesn't, unless we stub which is annoying to pass it back into this.
@@ -62,23 +67,34 @@ pub async fn negotiate_bluetooth<T: UI>(
 
     impl Drop for ConnectedPeripheral {
         fn drop(&mut self) {
-            // don't want to unpair from the peripheral if it's macOS. macOS won't allow linux to enumerate services if linux as central initiates the connection,
-            // so users must pair from the macOS system menu manually if they want to send to linux with bluetooth. if we unpair here, they'd have to manually pair
-            // for each transfer.
+            // We used to remove_device() here for every non-macOS peer, which deletes our pairing
+            // keys. Android keeps its bond, so the two sides ended up disagreeing: the next
+            // transfer's read of an ENCRYPTED_MITM characteristic restarted pairing, the phone
+            // refused because it already held a bond for us, the link dropped ("Device
+            // disconnected" on the phone) and our ReadValue never returned -- a 25s D-Bus timeout.
+            // That made every second transfer fail, alternating, since the failure also destroyed
+            // the phone's bond and left both sides clean again.
+            //
+            // Remove the device, keys and all, and let each transfer pair afresh. Keeping the bond
+            // was tried twice and fails for a discovery reason rather than a key one: a paired peer
+            // is never announced by BlueZ during discovery (DeviceAdded only fires for an object it
+            // had pruned and sees again, and paired devices are never pruned), and the bonded
+            // identity record does not carry our service UUID, so the by-address lookup skips it as
+            // well. The peer clears its own bond at the same point -- CLEAR_BOND_AFTER_TRANSFER in
+            // Bluetooth.kt -- and the two must stay in step: whichever side keeps its keys will
+            // fail against the side that threw them away. macOS is exempt: it will not let Linux
+            // enumerate its services when Linux initiates, so those pairings are managed by hand.
             if self.is_macos {
                 return;
             }
             let adapter = self.adapter.clone();
-            let address = self.address.clone();
-            // let (tx, rx) = std::sync::mpsc::channel::<()>();
+            let address = self.address;
             spawn(async move {
                 match adapter.remove_device(address).await {
-                    Ok(_) => println!("Removed device {}", address),
+                    Ok(_) => println!("Removed device {} (pairing cleared both sides)", address),
                     Err(e) => println!("Failed to unpair from peripheral: {}", e),
                 };
-                // tx.send(()).expect("Could not send on tx when dropping ConnectedPeripheral");
             });
-            // rx.recv().expect("Could not receive when trying to drop ConnectedPeripheral");
         }
     }
 
@@ -155,23 +171,52 @@ pub async fn negotiate_bluetooth<T: UI>(
     } else {
         // acting as central
         ui.output("Started Bluetooth scan, waiting for sending device...");
-        let device = central::scan(&adapter).await?;
-        ui.output("Found device");
 
-        let mut connected_peripheral = ConnectedPeripheral{adapter, address: device.address(), is_macos: false};
-
-        let characteristics = match find_characteristics(&device).await {
-            Ok(c) => c,
-            Err(e) => {
-                println!("    Device failed: {}", e);
-                Err(e)?
+        // A device that turns out not to be the peer is not a failure of the transfer -- it is
+        // just some other Bluetooth device in the room. Go back to scanning instead of aborting,
+        // otherwise one paired headset nearby ends the transfer before it starts.
+        // Any nearby phone that has ever run this app keeps our service UUID in BlueZ's record of
+        // it, and neither "paired" nor "connected" nor RSSI tells it apart from the peer that is
+        // actually advertising for us right now. So stop trying to identify the right device up
+        // front and make picking the wrong one cheap: give each candidate a bounded attempt, and on
+        // any failure -- including a hang, which is what connecting to the wrong phone looks like --
+        // drop it, remember it, and take the next one. At most a couple of candidates exist.
+        let mut rejected = HashSet::new();
+        let (device, info) = loop {
+            let device = central::scan(&adapter, &rejected).await?;
+            ui.output("Found device");
+            let address = device.address();
+            // Generous on purpose: the first read of an ENCRYPTED_MITM characteristic starts a
+            // pairing that needs a passkey typed on BOTH devices, and 30s expired while the user
+            // was still entering it -- then the disconnect below tore down the half-made bond. A
+            // wrong device does not need this long; it fails with an error in a second or two, and
+            // only a genuine hang spends the whole budget.
+            let attempt = timeout(Duration::from_secs(180), async {
+                let characteristics = find_characteristics(&device).await?;
+                exchange_info(characteristics, mode, &interface.0).await
+            })
+            .await;
+            match attempt {
+                Ok(Ok(info)) => break (device, info),
+                Ok(Err(e)) => {
+                    println!("    Device {} failed: {}. Resuming scan.", address, e);
+                    ui.output("Device was not the peer, still scanning...");
+                    let _ = device.disconnect().await;
+                    rejected.insert(address);
+                }
+                Err(_) => {
+                    println!("    Device {} did not answer in time. Resuming scan.", address);
+                    ui.output("Device did not answer, still scanning...");
+                    let _ = device.disconnect().await;
+                    rejected.insert(address);
+                }
             }
         };
-        let info = match exchange_info(characteristics, mode).await {
-            Ok(i) => i,
-            Err(e) => {
-                Err(e)?
-            }
+
+        let mut connected_peripheral = ConnectedPeripheral {
+            adapter,
+            address: device.address(),
+            is_macos: false,
         };
         connected_peripheral.is_macos = info.0 == "mac".to_string();
         Ok(info)
