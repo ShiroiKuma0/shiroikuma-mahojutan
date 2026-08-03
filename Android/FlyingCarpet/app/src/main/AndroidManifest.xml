@@ -33,9 +33,16 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.FlyingCarpet">
+        <!-- Fork: singleTask so a share from the file manager reuses the running Activity through
+             onNewIntent() instead of starting a second instance. A second instance brings its own
+             ViewModel, its own Bluetooth object and therefore its own openGattServer(), which put a
+             second copy of our GATT service in the database; the peer could then discover and read
+             the copy belonging to the server we no longer answer through, and the handshake stalled
+             in silence. onNewIntent() was already written for this and could never fire without it. -->
         <activity
             android:name="dev.spiegl.flyingcarpet.MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTask">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
