@@ -125,7 +125,7 @@ object UiCatalog {
                     "start", "“Select Files” button",
                     listOf(
                         LabelField("start.filesText", "“Select Files” text"),
-                        LabelField("start.folderText", "“Select Folder” text (receive mode)"),
+                        LabelField("start.folderText", "“Select directory” text (receive mode)"),
                     ),
                     extraColors = listOf(
                         ColorField("start.fill", "Background", Defaults.BLACK),
@@ -164,7 +164,7 @@ object UiCatalog {
                 TextSurface("version", "Version label", listOf(LabelField("version.text", "Label text"))),
                 TextSurface("about", "“About” link", listOf(LabelField("about.text", "Link text"))),
                 TextSurface(
-                    "uiButton", "“Customize UI” button", listOf(LabelField("uiButton.text", "Button text")),
+                    "uiButton", "“白い熊 魔法絨毯 UI” button", listOf(LabelField("uiButton.text", "Button text")),
                     extraColors = listOf(
                         ColorField("uiButton.bg", "Background", Defaults.BLACK),
                         ColorField("uiButton.stroke", "Border colour", Defaults.YELLOW),
@@ -360,6 +360,7 @@ object Appearance {
 
         // Start button: dynamic text (Select Files / Select Folder) + theming + background/border.
         applyStartButton(activity, s)
+        applyLastFolderButton(activity, s)
         activity.findViewById<MaterialButton>(R.id.startButton)?.let { start ->
             start.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("start.fill") ?: Defaults.BLACK)
             start.strokeColor = ColorStateList.valueOf(s.colorOrNull("start.stroke") ?: Defaults.YELLOW)
@@ -391,6 +392,14 @@ object Appearance {
         // Progress bar.
         activity.findViewById<ProgressBar>(R.id.progressBar)?.progressTintList =
             ColorStateList.valueOf(s.colorOrNull("progress.color") ?: Defaults.YELLOW)
+        // the sent/total, rate and ETA line above the bar follows the bar's colour
+        activity.findViewById<ProgressBar>(R.id.totalProgressBar)?.progressTintList =
+            ColorStateList.valueOf(s.colorOrNull("progress.color") ?: Defaults.YELLOW)
+        // the sent/total, rate and ETA lines above the bars follow the bar's colour
+        for (labelId in listOf(R.id.progressDetails, R.id.progressTotalDetails)) {
+            activity.findViewById<TextView>(labelId)
+                ?.setTextColor(s.colorOrNull("progress.color") ?: Defaults.YELLOW)
+        }
 
         // App logo / picture (the icon shown top-right while idle).
         applyLogoTint(activity)
@@ -491,6 +500,19 @@ object Appearance {
         output.background = d
         val pad = dpToPx(activity, 8f)
         output.setPadding(pad, pad, pad, pad)
+    }
+
+    // The remembered-directory button sits under the start button and is styled with it, so the
+    // pair reads as one control rather than two unrelated ones.
+    private fun applyLastFolderButton(activity: AppCompatActivity, s: Settings) {
+        val b = activity.findViewById<MaterialButton>(R.id.lastFolderButton) ?: return
+        b.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
+        b.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("start.fill") ?: Defaults.BLACK)
+        b.strokeColor = ColorStateList.valueOf(s.colorOrNull("start.stroke") ?: Defaults.YELLOW)
+        b.strokeWidth = dpToPx(activity, s.sizeOrNull("start.strokeWidth") ?: Defaults.BORDER_WIDTH)
+        b.cornerRadius = dpToPx(activity, s.sizeOrNull("start.cornerRadius") ?: Defaults.CORNER_RADIUS)
+        applyTypeface(s, b, "start")
+        s.size("start.size").let { if (it > 0f) b.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
     }
 
     private fun applyStartButton(activity: AppCompatActivity, s: Settings) {
