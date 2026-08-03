@@ -624,6 +624,14 @@ class MainActivity : AppCompatActivity() {
             val uri = lastReceiveDir() ?: return@setOnClickListener
             viewModel.receiveDir = uri
             viewModel.mode = Mode.Receiving
+            // Arm the transfer, exactly as the start button does. Without this the whole receive
+            // ran with transferIsRunning false, and the hotspot's onStarted callback -- which
+            // treats that flag as "the user cancelled" -- gave the AP straight back 110 ms after
+            // the framework handed it over, silently. Every one-tap receive stalled there.
+            viewModel.transferIsRunning = true
+            // Locked for the same reason as the start button: a recreation mid-transfer loses the
+            // Activity state the callbacks are about to come back to.
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
             toggleUI(false)
             beginTransferWithSelection()
         }
@@ -828,9 +836,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleUI(enabled: Boolean) {
-        if (this::lastFolderButton.isInitialized) {
-            if (enabled) refreshLastFolderButton() else lastFolderButton.isVisible = false
-        }
         findViewById<Button>(id.sendButton).isEnabled = enabled
         findViewById<Button>(id.receiveButton).isEnabled = enabled
         findViewById<Button>(id.hotspotButton).isEnabled = enabled
@@ -850,6 +855,14 @@ class MainActivity : AppCompatActivity() {
             enabled && (bluetoothAvailable || bluetoothPermissionsMissing) &&
             viewModel.connectionMode == ConnectionMode.Hotspot
         )
+
+        // Last, not first. refreshLastFolderButton() decides visibility partly from the start
+        // button's, so running it ahead of the line above made it read the value left over from the
+        // transfer that had just ended -- and the one-tap receive button stayed gone until the mode
+        // buttons were tapped again.
+        if (this::lastFolderButton.isInitialized) {
+            if (enabled) refreshLastFolderButton() else lastFolderButton.isVisible = false
+        }
     }
 
     // The switch paints its thumb, track and label from state lists keyed on the view's
@@ -1057,9 +1070,14 @@ class MainActivity : AppCompatActivity() {
             viewModel.bluetooth.active = isChecked
         }
 
-        // register for bluetooth bonding events
-        val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-        registerReceiver(viewModel.bluetooth.bluetoothReceiver, filter)
+        // Register for bluetooth bonding events exactly once, and against the application rather
+        // than this Activity: the receiver belongs to the ViewModel and outlives us, so a second
+        // registration from a recreated Activity would deliver every bond broadcast twice.
+        if (!viewModel.bluetooth.receiverRegistered) {
+            val filter = IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            applicationContext.registerReceiver(viewModel.bluetooth.bluetoothReceiver, filter)
+            viewModel.bluetooth.receiverRegistered = true
+        }
 
         if (initializeBluetooth()) {
             viewModel.outputText("Bluetooth initialized")
