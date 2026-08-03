@@ -10,12 +10,17 @@ plugins {
 //   versionCode = <upstream Android versionCode> * 10000 + <buildNumber>
 // buildNumber is our fork increment; it resets to 1 on each upstream rebase and
 // bumps +1 per delivered build. See .claude/skills/upstream-new-version.
+// In the versionName (and therefore the APK filename) it is ALWAYS zero-padded to
+// three digits — "+026", never "+26" — so builds sort correctly in ~/tmp, in the
+// phone's file manager and in the release list, where "+10" would otherwise land
+// before "+3". The versionCode keeps the plain integer; padding is text only.
 def releaseVersionName = "9.0.10"   // = latest upstream `v*` tag / desktop Cargo version
 def upstreamVersionCode = 21        // = upstream Android defaultConfig.versionCode
-def buildNumber = 24                // fork build; reset to 1 each upstream bump
+def buildNumber = 44                // fork build; reset to 1 each upstream bump
 
-def forkVersionName = "${releaseVersionName}+${buildNumber}"
-def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210001
+def paddedBuildNumber = String.format("%03d", buildNumber)
+def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210044
 
 // Release signing: read from a gitignored keystore.properties at the Gradle
 // project root, falling back to SIGNING_* env vars. Without either, the release
@@ -46,7 +51,7 @@ android {
         versionCode = forkVersionCode
         versionName = forkVersionName
 
-        // Raw APK is e.g. shiroikuma-mahojutan_9.0.10+1_arm64-v8a-release.apk;
+        // Raw APK is e.g. shiroikuma-mahojutan_9.0.10+026_arm64-v8a-release.apk;
         // the build-apk skill copies it to ~/tmp under the clean name (no -release).
         setProperty("archivesBaseName", "shiroikuma-mahojutan_${forkVersionName}_arm64-v8a")
 

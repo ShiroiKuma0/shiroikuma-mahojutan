@@ -33,9 +33,16 @@ The fork has a **single** `+N` build counter shared by both artifacts: **the sam
 build as the same `+N` on the APK and the `.deb`.** The counter is stored in two places that must
 always hold the same number:
 
-- Android: `buildNumber` in `Android/FlyingCarpet/app/build.gradle`;
+- Android: `buildNumber` in `Android/FlyingCarpet/app/build.gradle` (a plain integer there —
+  `build.gradle` zero-pads it into the `versionName` itself);
 - desktop: the `+N` in the `version` field of `Flying Carpet/src-tauri/tauri.conf.json`, formatted
-  `"<release>+<buildNumber>"` (e.g. `"9.0.10+20"`).
+  `"<release>+<NNN>"` (e.g. `"9.0.10+026"`) — **written zero-padded to three digits**, since Tauri
+  copies this string verbatim into the `.deb` filename.
+
+**The `+N` is ALWAYS zero-padded to three digits** (hard rule, 白い熊 2026-08-01): `+026`, never
+`+26`. Unpadded counters sort lexicographically wrong (`+10` before `+3`), burying the newest build.
+dpkg compares digit runs numerically, so padding does not disturb upgrade ordering:
+`9.0.10+026 > 9.0.10+25`. Builds up to `+25` predate the rule and keep their names.
 
 Rules:
 
@@ -53,7 +60,8 @@ Rules:
 - Tauri feeds the `version` value into the `.deb` **filename**, its `Version:` control field, and the
   app's own title-bar version label (`getVersion()` in `customize.js`), so there is nothing else to
   edit on the desktop side.
-- dpkg orders `9.0.10+20 > 9.0.10+1 > 9.0.10`, so each build installs cleanly as an upgrade.
+- dpkg orders `9.0.10+026 > 9.0.10+25 > 9.0.10+1 > 9.0.10`, so each build installs cleanly as an
+  upgrade (digit runs compare numerically, so `026` counts as 26).
 
 Iterating on a build 白い熊 has not yet kept may reuse the current number; anything delivered gets its
 own.
@@ -65,8 +73,9 @@ own.
    grep -n '"version"' "Flying Carpet/src-tauri/tauri.conf.json"
    grep -nE 'buildNumber' Android/FlyingCarpet/app/build.gradle
    ```
-   Edit `"version": "<release>+<N>"` → `"<release>+<N+1>"` in `tauri.conf.json` **and**
-   `buildNumber = <N>` → `<N+1>` in `build.gradle` (same new number in both).
+   Edit `"version": "<release>+<NNN>"` → the next number, **zero-padded to three digits**, in
+   `tauri.conf.json` **and** `buildNumber = <N>` → `<N+1>` in `build.gradle` (a bare integer there;
+   the padding is applied by `String.format("%03d", buildNumber)`). Same number in both.
 
 2. **Build** from the **repo root** (the Cargo workspace root). Needs `cargo install tauri-cli` (v2)
    once; the webkit2gtk-4.1 / gtk / soup dev libs are already installed on this host:
@@ -79,19 +88,19 @@ own.
 
 3. **Copy to `~/tmp`** under the name Tauri already produced — **no renaming**:
    ```bash
-   cp target/release/bundle/deb/shiroikuma-mahojutan_<release>+<N>_amd64.deb ~/tmp/
-   ls -lh ~/tmp/shiroikuma-mahojutan_<release>+<N>_amd64.deb
+   cp target/release/bundle/deb/shiroikuma-mahojutan_<release>+<NNN>_amd64.deb ~/tmp/
+   ls -lh ~/tmp/shiroikuma-mahojutan_<release>+<NNN>_amd64.deb
    ```
 
 4. **Verify** (cheap, catches a broken rebrand):
    ```bash
-   dpkg-deb -f <deb> Package Version     # → shiroikuma-mahojutan / <release>+<N>
+   dpkg-deb -f <deb> Package Version     # → shiroikuma-mahojutan / <release>+<NNN>
    dpkg-deb -c <deb> | grep -E 'bin/|applications/'   # → usr/bin/shiroikuma-mahojutan + the .desktop
    ```
    The `.desktop` entry must read `Name=白い熊 魔法絨毯`.
 
 5. **Announce** the filename that landed in `~/tmp` and the install command
-   (`sudo apt install ~/tmp/shiroikuma-mahojutan_<release>+<N>_amd64.deb`). Never install it yourself,
+   (`sudo apt install ~/tmp/shiroikuma-mahojutan_<release>+<NNN>_amd64.deb`). Never install it yourself,
    and never `adb push` / `scp` a `.deb` — it is for this machine only.
 
 6. **Build the APK for the same `+N`** — every build ships both artifacts (hard rule): run the
