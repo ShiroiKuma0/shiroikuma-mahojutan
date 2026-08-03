@@ -16,7 +16,7 @@ Bluetooth handshake that actually completes — between Android and Linux, and b
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
 
-**📥 Latest release: [`9.0.10+067`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`9.0.10+070`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -84,6 +84,20 @@ switched off by unrelated LE connections, a scan that returned the first device 
 (a paired headset would end the transfer), classic-Bluetooth profiles being connected instead of an
 ATT link, and a debug print that turned a missing property into a fatal error. The hotspot now also
 comes up *before* the peer is handed its credentials, so it is on the air by the time the peer looks.
+
+---
+
+## 📍 Nothing to do with where you are
+
+Android hides *every* Bluetooth scan result while the phone's master Location switch is off — no
+error, no failed callback, just a receiving phone that searches for ever while the sender advertises
+a metre away. Granting the app location permission does not turn that switch on; they are different
+things, which is exactly what makes it such a good disguise. This fork declares its Bluetooth scan
+`neverForLocation` — a promise to the framework that a scan result is never used to work out where
+the phone is — and stops asking for location at all on Android 13 and up, where the hotspot takes
+`NEARBY_WIFI_DEVICES` instead. Sending a file has nothing to do with where you are, so the app no
+longer asks. On older Androids, where the toggle really does rule, it says so plainly and offers
+the setting rather than searching in silence.
 
 ---
 
