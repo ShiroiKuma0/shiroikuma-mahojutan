@@ -672,7 +672,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             try {
                 if (!hotspotRunning) {
                     wifiManager.startLocalOnlyHotspot(localOnlyHotspotCallback, handler)
-                    outputText("Started hotspot.")
+                    outputText("Started hotspot. Waiting for the other device to join...")
                 } else {
                     Log.e("Flying Carpet", "startHotspot() called when hotspot already running")
                 }
@@ -686,7 +686,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     fun joinHotspot() {
         val callback = NetworkCallback()
         joinAttempts += 1
-        outputText("Joining $ssid")
+        outputText("Joining $ssid — this drops your other WiFi until the transfer is done")
         // The peer's AP was created seconds ago, so it is not in our scan cache and the framework
         // has to run its own scan cycle before it can match the specifier -- that is the pause
         // before the network picker settles. Asking for a scan first gives it fresh results to work
@@ -770,6 +770,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     private suspend fun startTCP() {
+        // Both branches block with nothing to show for it -- accept() until the peer dials in,
+        // connect() until it answers -- so say which one we are in before going quiet.
+        if (isHosting()) {
+            outputText("Listening on port $PORT for the other device...")
+        } else {
+            outputText("Connecting to the other device at ${peerIP?.hostAddress}...")
+        }
         withContext(Dispatchers.IO) {
             if (connectionMode == ConnectionMode.SharedNetwork) {
                 // receiver is TCP server, sender connects. the server socket was bound
@@ -813,6 +820,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             // 2026-07-25 at 38.8mbps where SMB moved the same file between the same two
             // machines at ~600mbps. Nothing here benefits from Nagle's coalescing.
             client.tcpNoDelay = true
+            outputText("Connected")
             client.sendBufferSize = chunkSize * 2
             client.receiveBufferSize = chunkSize * 2
             inputStream = client.getInputStream()
@@ -821,6 +829,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     private suspend fun confirmVersion() {
+        outputText("Checking both devices speak the same version...")
         withContext(Dispatchers.IO) {
             val peerVersion: Long
             if (connectionMode == ConnectionMode.SharedNetwork) {
