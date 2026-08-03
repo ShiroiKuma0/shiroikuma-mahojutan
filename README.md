@@ -7,14 +7,16 @@
 **Encrypted, peer-to-peer file transfer over an ad hoc WiFi hotspot — no shared network, no cloud, no account.**
 
 A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**: a full
-yellow-on-black theme, an in-app *Customize UI* page that restyles every single surface, one-zip
+yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles every single surface, a live
+transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a token-gated hook for headless backups, external font
-support, a custom icon, and a rebranded Linux desktop build shipped as an amd64 `.deb`.
+support, a custom icon, and a rebranded Linux desktop build shipped as an amd64 `.deb` — plus a
+Bluetooth handshake that actually completes between Android and Linux.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
 
-**📥 Latest release: [`9.0.10+24`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`9.0.10+052`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -46,6 +48,42 @@ something you can edit without touching code:
 The page is laid out for scanning: a thin rule between top-level sections, a text-width underline
 under every heading, and a fixed indentation ladder from section to element to control — the same
 shape on the phone and on the desktop.
+
+---
+
+## 📊 A transfer you can actually read
+
+Stock gives you a bar filling up and nothing else. Both apps now show, above it:
+
+```
+12.4 MB / 340 MB  ·  8.7 MB/s  ·  38s left
+File 3 of 12  ·  512 MB / 2.10 GB  ·  8.7 MB/s  ·  3m 04s left
+```
+
+— and a **second bar for the whole transfer**, so sending a folder no longer means watching the bar
+reset to zero twelve times with no idea how far along you are. The second row appears only when there
+is more than one file.
+
+---
+
+## 📂 Receive where you received last
+
+Receiving used to mean tapping through a directory picker every single time. Beside *Select directory*
+there is now a button reading **Receive in “~/tmp”**, which starts listening in the directory you
+picked last — no dialog. It survives restarts (Android takes a persistable grant for the tree Uri;
+the desktop abbreviates your home directory to `~`).
+
+---
+
+## 📡 Bluetooth that finishes the handshake
+
+Bluetooth pairing between the Android app and the Linux desktop never completed. Fixing it meant
+tracking down a chain of separate faults on both sides: an advertisement one byte over the 31-byte
+limit because the device name was measured in characters rather than UTF-8 bytes, an advertiser
+switched off by unrelated LE connections, a scan that returned the first device BlueZ mentioned
+(a paired headset would end the transfer), classic-Bluetooth profiles being connected instead of an
+ATT link, and a debug print that turned a missing property into a fatal error. The hotspot now also
+comes up *before* the peer is handed its credentials, so it is on the air by the time the peer looks.
 
 ---
 
