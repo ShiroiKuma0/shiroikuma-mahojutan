@@ -89,9 +89,21 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     val output: LiveData<String>
         get() = _output
     override fun outputText(msg: String) {
+        // Mirror the on-screen log to logcat. The sending side of a Bluetooth handshake says
+        // everything interesting through outputText, and with it going only to a LiveData the
+        // sender's half of a stalled handshake could only be read off a photograph of the screen.
+        Log.i("FlyingCarpet", msg)
         GlobalScope.launch(Dispatchers.Main) {
             _output.value = msg
         }
+    }
+
+    // The Bluetooth object holds process-wide registrations (a GATT server, a GATT client, a
+    // broadcast receiver). If this ViewModel is discarded without releasing them they stay live for
+    // the rest of the process and the next one competes with them.
+    override fun onCleared() {
+        super.onCleared()
+        bluetooth.shutdown()
     }
 
     var qrBitmap: Bitmap? = null
@@ -176,6 +188,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     fun cleanUpTransfer() {
         transferIsRunning = false
+        // Clear the finished latch. LiveData is sticky, so a value left at true is redelivered to
+        // every observer that registers afterwards -- and the Activity re-observes on each
+        // recreation, which a fold or a permission dialog is enough to cause. That redelivery
+        // called this method again in the middle of the *next* transfer, and the hotspot callback,
+        // finding transferIsRunning false, closed the AP it had just been handed without a word.
+        _transferFinished.postValue(false)
         joinAttempts = 0
         progressDetailsMut.postValue("")
         progressTotalDetailsMut.postValue("")
@@ -205,6 +223,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             reservation.close()
         }
         hotspotRunning = false
+        // Give the peer's hotspot back, after the sockets above are closed. This is the joining
+        // side's half of the teardown: without it the phone stayed on the peer's AP once the
+        // transfer ended and never returned to its own WiFi on its own.
+        releaseNetwork()
         // stop bluetooth functions
         bluetooth.stop(application)
         // clean up UI
@@ -256,7 +278,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
             // check for cancellation
             if (!transferIsRunning) {
+                // Say so. This is the one branch that gave the hotspot back without a word, and it
+                // is the branch a stale transferFinished latch used to steer us into: the log ended
+                // at "Started hotspot" and nothing ever followed.
+                outputText("Hotspot came up after the transfer was cancelled — releasing it")
                 res?.close()
+                hotspotRunning = false
                 return
             }
 
@@ -353,8 +380,34 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         }
     }
 
+    // The network request we used to join the peer's hotspot, kept so it can be given back. While a
+    // WifiNetworkSpecifier request is registered the framework deliberately holds the device on that
+    // network, so leaving one behind stranded the phone on the peer's AP after the transfer instead
+    // of letting it return to its normal WiFi.
+    private var networkCallback: NetworkCallback? = null
+
+    // Hand the peer's hotspot back. Safe to call when nothing is registered.
+    fun releaseNetwork() {
+        val callback = networkCallback ?: return
+        networkCallback = null
+        val connectivityManager =
+            application.getSystemService(AppCompatActivity.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivityManager.bindProcessToNetwork(null)
+        try {
+            connectivityManager.unregisterNetworkCallback(callback)
+        } catch (e: IllegalArgumentException) {
+            // Never registered, or already released. Nothing to give back.
+            Log.i("WiFi", "Network callback was not registered: $e")
+        }
+    }
+
     fun joinHotspot() {
+        // Each retry used to build another callback and register another request without releasing
+        // the last, so a transfer that retried leaked one request per attempt for the life of the
+        // process -- and the platform starts throwing once an app has about a hundred outstanding.
+        releaseNetwork()
         val callback = NetworkCallback()
+        networkCallback = callback
         joinAttempts += 1
         outputText("Joining $ssid — this drops your other WiFi until the transfer is done")
         // The peer's AP was created seconds ago, so it is not in our scan cache and the framework
