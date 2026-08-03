@@ -7,6 +7,46 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 9.0.10+070 — 2026-08-04
+
+Built on upstream **Flying Carpet 9.0.10**. A send from the Huawei Mate XT to a Samsung phone left
+the receiver sitting on “Scanning for Bluetooth peripherals…” indefinitely. The sender was
+advertising correctly throughout — a scan from the desktop's own Bluetooth found it at −58 dBm,
+service UUID and all — and the receiver's scan filter was registered with the framework. It had
+simply been handed nothing since the moment it started.
+
+### Bluetooth — scanning with the Location switch off
+- **Android withholds every BLE scan result while the device's master Location toggle is off.**
+  There is no error: `startScan()` returns success, `onScanFailed()` is never called, and results
+  simply never arrive — indistinguishable from “the other device is not there”. Granting the app
+  `ACCESS_FINE_LOCATION` does *not* turn that toggle on; the permission and the switch are
+  different things, and the permission prompt appearing at startup makes it look as though the
+  requirement has been met.
+- **The guard for this existed but the receive path skipped it.** `locationEnabledForScanning()`
+  was written for exactly this failure — log line, dialog and an “Open settings” button — and wired
+  into `beginTransferWithSelection()`, which covers the share-intent and one-tap-last-folder
+  routes. The folder picker's callback carried a *copy* of that function's body minus the check,
+  and picking the destination folder is how a receive normally starts, so the one entry point that
+  actually scans was the one entry point without the guard. It now calls
+  `beginTransferWithSelection()` like every other route.
+- **`BLUETOOTH_SCAN` is now declared `neverForLocation`** — the assertion that a scan result is
+  never used to derive the phone's physical location, which takes scan results out from under the
+  Location toggle entirely on Android 12 and up. The documented cost is that some beacon formats
+  are filtered from results; the app looks for a plain 128-bit service UUID, which is not one of
+  them.
+- **Location permission is gone above Android 12L.** It was only ever wanted for WiFi here, and
+  `startLocalOnlyHotspot()` takes `NEARBY_WIFI_DEVICES` instead from API 33 — so
+  `ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION` now carry `maxSdkVersion="32"`, and the app
+  asks for no location permission at all on a modern phone.
+- **`NEARBY_WIFI_DEVICES` is requested at startup.** It was declared in the manifest but never
+  requested, so it sat ungranted and `startHotspot()` would have prompted for it mid-transfer,
+  after the Bluetooth handshake was already under way. It now joins the other permissions at
+  launch.
+- **The Location dialog is scoped to Android 11 and below**, where the toggle genuinely still
+  governs scan results; above that it would have blocked transfers that work. When Location happens
+  to be off there, one line in the log says it is not needed — so if a vendor build ever ignored
+  the disavowal, the symptom arrives with its own explanation instead of as silence.
+
 ## 9.0.10+067 — 2026-08-04
 
 Built on upstream **Flying Carpet 9.0.10**. Android-to-Android transfers now complete: the
