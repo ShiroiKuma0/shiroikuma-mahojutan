@@ -7,7 +7,7 @@ description: Rebase the shiroikuma 魔法絨毯 fork onto a new upstream release
 
 This codifies the "new upstream version" half of the fork workflow: move `main` to the new upstream
 release, replay our `custom` customizations on top, and produce the release's two artifacts: a fresh
-`+1` Android build and the rebranded desktop amd64 `.deb` for Tuxedo OS (this host).
+`+001` Android build and the rebranded desktop amd64 `.deb` for Tuxedo OS (this host).
 
 > **Never `git push` or `git commit` unprompted, and never `adb install`.** Same hard rules as
 > everyday development (see CLAUDE.md). After the rebase + build you stop and let the user test; you
@@ -27,16 +27,20 @@ upstream release is built into as a rebranded amd64 `.deb` for 白い熊's Tuxed
 - **`upstreamVersionCode`** in our `build.gradle` mirrors upstream's Android `defaultConfig.versionCode`.
 - **`buildNumber`** is our fork increment. It **resets to `1`** on each new upstream version and bumps
   +1 per delivered build.
-- Fork `versionName` = `"<releaseVersionName>+<buildNumber>"`; fork `versionCode` =
-  `upstreamVersionCode * 10000 + buildNumber`. So when upstream's Android `versionCode` climbs, the new
-  line's codes all exceed the previous line's, keeping sideloaded upgrades monotonic.
+- Fork `versionName` = `"<releaseVersionName>+<NNN>"`, where `<NNN>` is `buildNumber` **zero-padded to
+  three digits** (hard rule, 白い熊 2026-08-01 — `build.gradle` does it via
+  `String.format("%03d", buildNumber)`), so the first build of a new upstream line is `+001`, not
+  `+1`. Fork `versionCode` = `upstreamVersionCode * 10000 + buildNumber` — a plain integer, never
+  padded. So when upstream's Android `versionCode` climbs, the new line's codes all exceed the
+  previous line's, keeping sideloaded upgrades monotonic.
 
 All three values live near the top of `Android/FlyingCarpet/app/build.gradle`.
 
 **The desktop `.deb` shares the SAME `+N` counter as the APK** — the same code must always build as
 the same `+N` on both artifacts. The counter is stored in two places that must always hold the same
 number: `buildNumber` in `build.gradle` and the `+N` in the `version` field of
-`Flying Carpet/src-tauri/tauri.conf.json` (`"<release>+<buildNumber>"`). Both reset to `1` together
+`Flying Carpet/src-tauri/tauri.conf.json` (`"<release>+<NNN>"`, written padded — e.g. `"9.0.11+001"` —
+since Tauri copies the string verbatim into the `.deb` filename). Both reset to `1` together
 on each upstream rebase and bump together (+1) per delivered build of either artifact. Tauri derives
 the `.deb` filename, the dpkg `Version:` field, and the app's own version label from the
 `tauri.conf.json` value. See the **build-deb** skill.
@@ -95,23 +99,23 @@ the `.deb` filename, the dpkg `Version:` field, and the app's own version label 
    Sanity check the script still evaluates:
    `cd Android/FlyingCarpet && JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/home/shiroikuma/android-sdk sh ./gradlew :app:tasks --console=plain < /dev/null` (or a `--dry-run` assemble).
 
-6. **Build the new `+1`** via the **build-apk** skill, then deliver it via the global **/after-build**
+6. **Build the new `+001`** via the **build-apk** skill, then deliver it via the global **/after-build**
    skill (no transfer prompt). This is the
-   first build of the new upstream line (`<newVersion>+1`).
+   first build of the new upstream line (`<newVersion>+001`).
 
 7. **Build the desktop `.deb` (amd64) for Tuxedo OS** via the **build-deb** skill:
-   - The desktop `version` in `Flying Carpet/src-tauri/tauri.conf.json` must be `"<newRelease>+1"` —
+   - The desktop `version` in `Flying Carpet/src-tauri/tauri.conf.json` must be `"<newRelease>+001"` —
      the **same shared counter** the Android `buildNumber` was reset to in step 4 (the two fields
      always hold the same `+N`; if a delivered build already bumped the counter past 1 in this line,
      use the current shared value instead).
    - Build from the **repo root**: `cargo tauri build --bundles deb`.
-   - The artifact lands at `target/release/bundle/deb/shiroikuma-mahojutan_<newRelease>+1_amd64.deb` —
+   - The artifact lands at `target/release/bundle/deb/shiroikuma-mahojutan_<newRelease>+001_amd64.deb` —
      copy it to `~/tmp/` as-is (name and version are baked in; no renaming).
    - The rebrand is part of `custom` (verify in step 5): dpkg package + `/usr/bin` binary are
      `shiroikuma-mahojutan`, the visible app name is `白い熊 魔法絨毯`, the icon is the yellow-traced
      carpet, and the fork UI (yellow-on-black + Customize UI page) is present.
    - **No adb/scp** — the `.deb` targets **this** machine; 白い熊 installs it locally (e.g.
-     `sudo apt install ~/tmp/shiroikuma-mahojutan_<newRelease>+1_amd64.deb`). Announce it alongside
+     `sudo apt install ~/tmp/shiroikuma-mahojutan_<newRelease>+001_amd64.deb`). Announce it alongside
      the APK.
 
 8. **Stop.** Let the user test. Commit/push only on their explicit **"Push"**. Because rebasing

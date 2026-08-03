@@ -88,6 +88,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     lateinit var outputStream: OutputStream // outgoing TCP stream to peer
     var transferCoroutine: Job? = null
     var transferIsRunning = false
+
+    // How many times to ask for the peer's hotspot before giving up, so a first look that lands
+    // before the AP is beaconing costs a few seconds rather than a manual retry.
+    private val MAX_JOIN_ATTEMPTS = 4
+    private var joinAttempts = 0
     var hotspotRunning = false
     lateinit var wifiManager: WifiManager
     lateinit var reservation: WifiManager.LocalOnlyHotspotReservation
@@ -258,6 +263,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     fun cleanUpTransfer() {
         transferIsRunning = false
         safCache = null
+        joinAttempts = 0
         // cancel shared network discovery if it's running
         discoveryManager?.cancel()
         discoveryManager = null
@@ -672,6 +678,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     fun joinHotspot() {
         val callback = NetworkCallback()
+        joinAttempts += 1
         outputText("Joining $ssid")
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
@@ -966,6 +973,14 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         override fun onUnavailable() {
             super.onUnavailable()
             connectivityManager.bindProcessToNetwork(null)
+            // The peer's hotspot may not have been on the air yet when we first looked -- it is
+            // created seconds earlier, and the system picker gives up on one empty scan. That is
+            // the "no device found, hit retry" everyone runs into, so do the retry ourselves.
+            if (transferIsRunning && joinAttempts < MAX_JOIN_ATTEMPTS) {
+                outputText("Hotspot not found yet, looking again")
+                joinHotspot()
+                return
+            }
             outputText("Failed to connect to hotspot")
             _transferFinished.postValue(true)
         }

@@ -39,8 +39,12 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
 
 1. **Note the output filename.** Read the fork version from `Android/FlyingCarpet/app/build.gradle`:
    - `grep -E 'releaseVersionName|buildNumber' Android/FlyingCarpet/app/build.gradle`
-   - The clean APK name is `shiroikuma-mahojutan_<releaseVersionName>+<buildNumber>_arm64-v8a.apk`
-     (e.g. `shiroikuma-mahojutan_9.0.10+1_arm64-v8a.apk`). `versionCode` = `21 * 10000 + buildNumber`.
+   - The clean APK name is `shiroikuma-mahojutan_<releaseVersionName>+<NNN>_arm64-v8a.apk`
+     (e.g. `shiroikuma-mahojutan_9.0.10+026_arm64-v8a.apk`). `versionCode` = `21 * 10000 + buildNumber`.
+   - **`<NNN>` is `buildNumber` zero-padded to three digits** (hard rule, 白い熊 2026-08-01) — `+026`,
+     never `+26`, so builds sort correctly in `~/tmp` and in the phone's file manager. `build.gradle`
+     does the padding itself via `String.format("%03d", buildNumber)`; the `versionCode` stays a plain
+     integer. Builds up to `+25` predate the rule — leave their unpadded names alone.
    - **If this is a new deliverable build** distinct from the last one the user kept, bump the
      **shared** build counter (+1) first so the install lands as an upgrade — in **both** places,
      which must always hold the same number: `buildNumber` in `build.gradle` **and** the `+N` in the
@@ -68,7 +72,7 @@ ships (e.g. only docs, skills, or `~/tmp` scratch files).
    mkdir -p ~/tmp
    src=$(ls -1 app/build/outputs/apk/release/*.apk | head -1)
    ver=$(grep -oP 'releaseVersionName = "\K[^"]+' app/build.gradle)
-   bn=$(grep -oP 'buildNumber = \K[0-9]+' app/build.gradle)
+   bn=$(printf '%03d' "$(grep -oP 'buildNumber = \K[0-9]+' app/build.gradle)")   # zero-padded
    cp "$src" ~/tmp/"shiroikuma-mahojutan_${ver}+${bn}_arm64-v8a.apk"
    ls -lh ~/tmp/"shiroikuma-mahojutan_${ver}+${bn}_arm64-v8a.apk"
    ```
