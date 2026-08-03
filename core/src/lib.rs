@@ -96,6 +96,10 @@ pub trait UI: Clone + Send + 'static {
     fn output(&self, msg: &str);
     fn show_progress_bar(&self);
     fn update_progress_bar(&self, percent: u8);
+    // second bar, underneath: the whole transfer rather than the file in flight
+    fn update_total_progress_bar(&self, percent: u8);
+    // two lines above the bars: the current file, then the transfer as a whole
+    fn update_progress_details(&self, current: &str, total: &str);
     fn enable_ui(&self);
     fn show_pin(&self, pin: &str);
 }
@@ -181,6 +185,65 @@ impl TransferTask {
     /// True while a transfer task exists and hasn't finished on its own.
     pub fn is_running(&self) -> bool {
         self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+}
+
+// Progress across the whole transfer, so the second bar and second details line can say where we
+// are overall and not just within the file in flight. When sending we know every file's size up
+// front and can work in bytes; when receiving, sizes arrive one file at a time (the wire protocol
+// sends filename + size per file, and adding a grand total would break compatibility with the other
+// platforms), so the overall figure is weighted by file count instead.
+pub struct Totals {
+    pub num_files: u64,
+    pub file_index: u64, // 1-based
+    pub bytes_done: u64, // completed files only
+    pub total_bytes: Option<u64>,
+    pub start: std::time::Instant,
+}
+
+impl Totals {
+    pub fn new(num_files: u64, total_bytes: Option<u64>) -> Self {
+        Totals {
+            num_files,
+            file_index: 0,
+            bytes_done: 0,
+            total_bytes,
+            start: std::time::Instant::now(),
+        }
+    }
+
+    // (percent, text) for the whole transfer, given how far into the current file we are.
+    pub fn snapshot(&self, current_done: u64, current_size: u64) -> (u8, String) {
+        let files = format!("File {} of {}", self.file_index.max(1), self.num_files);
+        match self.total_bytes {
+            Some(total) if total > 0 => {
+                let done = (self.bytes_done + current_done).min(total);
+                let percent = (done as f64 / total as f64 * 100.0).round() as u8;
+                (
+                    percent,
+                    format!(
+                        "{}  ·  {}",
+                        files,
+                        utils::progress_details(done, total, self.start.elapsed().as_secs_f64())
+                    ),
+                )
+            }
+            _ => {
+                let within = if current_size > 0 {
+                    current_done as f64 / current_size as f64
+                } else {
+                    0.0
+                };
+                let completed = self.file_index.saturating_sub(1) as f64;
+                let percent =
+                    ((completed + within) / self.num_files.max(1) as f64 * 100.0).round() as u8;
+                let done = self.bytes_done + current_done;
+                (
+                    percent.min(100),
+                    format!("{}  ·  {} received", files, utils::make_size_readable(done)),
+                )
+            }
+        }
     }
 }
 
@@ -455,9 +518,16 @@ pub async fn start_transfer<T: UI>(
                     return Some(stream);
                 }
             }
+            // total bytes are knowable here, so the overall bar can be byte-accurate when sending
+            let total_bytes: u64 = files
+                .iter()
+                .map(|f| std::fs::metadata(&f.path).map(|m| m.len()).unwrap_or(0))
+                .sum();
+            let mut totals = Totals::new(files.len() as u64, Some(total_bytes));
             // send files. each file already carries the relative name the peer will store
             // it under, resolved at selection time by utils::expand_selection
             for (i, file) in files.iter().enumerate() {
+                totals.file_index = (i + 1) as u64;
                 ui.output("=========================");
                 ui.output(&format!(
                     "Sending file {} of {}. Filename: {}",
@@ -465,7 +535,9 @@ pub async fn start_transfer<T: UI>(
                     files.len(),
                     file.name
                 ));
-                match sending::send_file(&file.path, &file.name, &mut stream, ui).await {
+                match sending::send_file(&file.path, &file.name, &mut stream, &mut totals, ui)
+                    .await
+                {
                     Ok(_) => (),
                     Err(e) => {
                         ui.output(&format!("Error sending file: {}", e));
@@ -490,12 +562,17 @@ pub async fn start_transfer<T: UI>(
                 ));
                 return Some(stream);
             }
+            // no grand total on this side: sizes arrive one file at a time
+            let mut totals = Totals::new(num_files, None);
             // receive files
             for i in 0..num_files {
+                totals.file_index = i + 1;
                 ui.output("=========================");
                 ui.output(&format!("Receiving file {} of {}.", i + 1, num_files,));
                 let last_file = i == num_files - 1;
-                match receiving::receive_file(&folder, &mut stream, ui, last_file).await {
+                match receiving::receive_file(&folder, &mut stream, &mut totals, ui, last_file)
+                    .await
+                {
                     Ok(_) => (),
                     Err(e) => {
                         ui.output(&format!("Error receiving file: {}", e));

@@ -46,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var viewModel: MainViewModel
     private lateinit var outputBox: TextView
     private lateinit var progressBar: ProgressBar
+    private lateinit var progressDetails: TextView
+    private lateinit var lastFolderButton: Button
+    private lateinit var progressTotalDetails: TextView
+    private lateinit var totalProgressBar: ProgressBar
     private lateinit var bluetoothRequestPermissionLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var filePicker: ActivityResultLauncher<Array<String>>
     private lateinit var folderPicker: ActivityResultLauncher<Uri?>
@@ -146,6 +150,7 @@ class MainActivity : AppCompatActivity() {
                     viewModel.sendDir = it
                 } else {
                     viewModel.receiveDir = it
+                    rememberReceiveDir(it)
                 }
                 // if using bluetooth, start the process of exchanging OS and wifi information
                 if (viewModel.usingBluetooth()) {
@@ -325,6 +330,23 @@ class MainActivity : AppCompatActivity() {
         viewModel.progressBar.observe(this) { value ->
             progressBar.progress = value
         }
+        progressDetails = findViewById(id.progressDetails)
+        viewModel.progressDetails.observe(this) { details ->
+            progressDetails.text = details
+            progressDetails.isVisible = details.isNotEmpty()
+        }
+        progressTotalDetails = findViewById(id.progressTotalDetails)
+        totalProgressBar = findViewById(id.totalProgressBar)
+        viewModel.progressTotalDetails.observe(this) { details ->
+            // one file needs no second row -- the two bars would say the same thing
+            val show = details.isNotEmpty() && !details.startsWith("File 1 of 1")
+            progressTotalDetails.text = details
+            progressTotalDetails.isVisible = show
+            totalProgressBar.isVisible = show
+        }
+        viewModel.totalProgressBar.observe(this) { value ->
+            totalProgressBar.progress = value
+        }
         viewModel.transferFinished.observe(this) { finished ->
             // this was firing because when we started observing, we were running viewModel.cleanUpTransfer()
             // no matter what. and then _transferFinished was true. now initializing as false.
@@ -455,6 +477,20 @@ class MainActivity : AppCompatActivity() {
         // sending folder checkbox
         val sendFolderCheckBox = findViewById<CheckBox>(id.sendFolderCheckBox)
 
+        // Reuse the directory picked last time: identical to picking it again, minus the dialog.
+        lastFolderButton = findViewById(id.lastFolderButton)
+        lastFolderButton.setOnClickListener {
+            val uri = lastReceiveDir() ?: return@setOnClickListener
+            viewModel.receiveDir = uri
+            toggleUI(false)
+            if (viewModel.bluetooth.active) {
+                viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
+                viewModel.bluetooth.scan()
+            } else {
+                viewModel.connectToPeer()
+            }
+        }
+
         // send/receive. A checked listener rather than a click listener on each button:
         // onRestoreInstanceState reselects the mode with modeGroup.check(), which fires this
         // but not a click, so after a rotation the label stayed at the layout's "Select Files"
@@ -465,9 +501,11 @@ class MainActivity : AppCompatActivity() {
             if (checkedId == id.sendButton) {
                 startButton.text = settings.textOr("start.filesText", getString(R.string.selectFiles))
                 sendFolderCheckBox.visibility = View.VISIBLE
+                refreshLastFolderButton()
             } else {
                 startButton.text = settings.textOr("start.folderText", getString(R.string.selectFolder))
                 sendFolderCheckBox.visibility = View.GONE
+                refreshLastFolderButton()
             }
         }
 
@@ -490,6 +528,44 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Re-apply the UI customizations every time we return to the screen (incl. from the settings page).
         Appearance.apply(this)
+        // and re-evaluate the remembered-directory button: it was previously only refreshed on a
+        // mode tap, so on a fresh launch it never appeared at all
+        if (this::lastFolderButton.isInitialized) {
+            refreshLastFolderButton()
+        }
+    }
+
+    // The directory picked last time, remembered across restarts so receiving is one tap. The tree
+    // Uri only survives a restart if we take a persistable grant for it, which the picker does not
+    // do on its own.
+    private fun rememberReceiveDir(uri: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        } catch (e: Exception) {
+            Log.i("Receive", "Could not persist directory permission: $e")
+        }
+        settings.setText("receive.lastDir", uri.toString())
+        refreshLastFolderButton()
+    }
+
+    private fun lastReceiveDir(): Uri? {
+        val stored = settings.text("receive.lastDir")
+        return if (stored.isEmpty()) null else Uri.parse(stored)
+    }
+
+    private fun refreshLastFolderButton() {
+        val uri = lastReceiveDir()
+        val receiving = findViewById<MaterialButtonToggleGroup>(id.modeGroup)?.checkedButtonId == id.receiveButton
+        val show = uri != null && receiving && findViewById<Button>(id.startButton).isVisible
+        lastFolderButton.isVisible = show
+        if (uri != null) {
+            val name = DocumentFile.fromTreeUri(applicationContext, uri)?.name
+                ?: uri.lastPathSegment ?: uri.toString()
+            lastFolderButton.text = getString(R.string.receiveIn, name)
+        }
     }
 
     private fun applyConnectionModeUi() {
@@ -610,6 +686,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleUI(enabled: Boolean) {
+        if (this::lastFolderButton.isInitialized) {
+            if (enabled) refreshLastFolderButton() else lastFolderButton.isVisible = false
+        }
         findViewById<Button>(id.sendButton).isEnabled = enabled
         findViewById<Button>(id.receiveButton).isEnabled = enabled
         findViewById<Button>(id.hotspotButton).isEnabled = enabled
