@@ -16,8 +16,8 @@ OS machine — this host). Each upstream release yields both artifacts — see t
 | Installed app ID | `shiroikuma.mahojutan` (was `dev.spiegl.flyingcarpet`) |
 | Code namespace (unchanged) | `dev.spiegl.flyingcarpet` (R class / Kotlin package — no source edits) |
 | App launcher label | `白い熊 魔法絨毯` (`app_name` in `Android/FlyingCarpet/app/src/main/res/values/strings.xml`) |
-| APK filename | `shiroikuma-mahojutan_<release>+<buildNumber>_arm64-v8a.apk` (e.g. `shiroikuma-mahojutan_9.0.10+1_arm64-v8a.apk`) |
-| Desktop `.deb` | `shiroikuma-mahojutan_<release>+<buildNumber>_amd64.deb` (e.g. `shiroikuma-mahojutan_9.0.10+1_amd64.deb`) — `cargo tauri build --bundles deb` from the repo root, copied to `~/tmp` (installed locally with apt, no adb/scp) |
+| APK filename | `shiroikuma-mahojutan_<release>+<NNN>_arm64-v8a.apk` (e.g. `shiroikuma-mahojutan_9.0.10+026_arm64-v8a.apk`) — the `+N` is always zero-padded to three digits |
+| Desktop `.deb` | `shiroikuma-mahojutan_<release>+<NNN>_amd64.deb` (e.g. `shiroikuma-mahojutan_9.0.10+026_amd64.deb`) — `cargo tauri build --bundles deb` from the repo root, copied to `~/tmp` (installed locally with apt, no adb/scp) |
 | Desktop dpkg package / binary | `shiroikuma-mahojutan` (`productName` / `mainBinaryName` in `Flying Carpet/src-tauri/tauri.conf.json`) → `/usr/bin/shiroikuma-mahojutan` |
 | Desktop app name | `白い熊 魔法絨毯` — launcher entry (`src-tauri/shiroikuma-mahojutan.desktop` template), window `title` in `tauri.conf.json`, `<title>`/`<h1>` in `Flying Carpet/src/index.html` |
 | Desktop icon | the yellow-traced carpet (yellow line drawing on black, source commit `191ab66`), full set regenerated via `cargo tauri icon` into `Flying Carpet/src-tauri/icons/` |
@@ -42,20 +42,28 @@ upstream leaves in Android's `build.gradle` (e.g. Android said `9.0.8` at the `v
 `buildNumber` resets to `1` on each upstream rebase and goes **+1 for every delivered build** — never
 reuse a number, never overwrite an older artifact in `~/tmp`.
 
+- **The `+N` is ALWAYS zero-padded to three digits** (hard rule, 白い熊 2026-08-01): write `+026`,
+  never `+26`. Unpadded counters sort lexicographically wrong — `+10` lands before `+3` — burying the
+  newest build in the middle of `~/tmp`, of the phone's file manager and of the release list. The
+  padding is **text**: it applies to the `versionName`, the desktop `version`, and therefore both
+  artifact filenames and any tag derived from them. The `versionCode` keeps the plain integer.
+  Builds up to `+25` predate the rule and keep their unpadded names — never rename what is already
+  built; for a while `+026` sorts *before* the older `+9`, which settles as those age out.
 - **Android** (`Android/FlyingCarpet/app/build.gradle`, three values at the top): `versionName` =
-  `"<releaseVersionName>+<buildNumber>"`; `versionCode` = `<upstream Android versionCode> * 10000 +
-  <buildNumber>` (currently `21 * 10000 + 24 = 210024`).
+  `"<releaseVersionName>+<paddedBuildNumber>"` (`String.format("%03d", buildNumber)`); `versionCode` =
+  `<upstream Android versionCode> * 10000 + <buildNumber>` (currently `21 * 10000 + 26 = 210026`).
 - **Desktop** (`Flying Carpet/src-tauri/tauri.conf.json`, the `version` field — the single source of
-  truth): `"<release>+<buildNumber>"`, e.g. `"9.0.10+20"`. Tauri feeds it straight into the `.deb`
-  filename and its `Version:` control field, and the app's title-bar version label reads it back via
-  `getVersion()`. dpkg orders `9.0.10+20 > 9.0.10+1`, so each build installs as an upgrade.
+  truth): `"<release>+<paddedBuildNumber>"`, e.g. `"9.0.10+026"`. Tauri feeds it straight into the
+  `.deb` filename and its `Version:` control field, and the app's title-bar version label reads it
+  back via `getVersion()`. dpkg compares digit runs numerically, so the padding is ordering-neutral:
+  `9.0.10+026 > 9.0.10+25 > 9.0.10+1`, and each build still installs as an upgrade.
 - The **counter is SHARED between the two artifacts** (hard rule): the same code must always build as
   the same `+N` on both APK and `.deb`, so Android's `buildNumber` and the desktop `version`'s `+N`
   must always hold the same number — a bump edits **both** fields together.
 - **Every build ships BOTH artifacts together** (hard rule, 白い熊 2026-07-23): whatever triggered
   the build, the same `+N` always gets an APK **and** a `.deb` — never one alone. Historical gaps
   predate this rule (no deb for `+2`…`+19`, no APK for `+21`); a mismatched `+N` for the same code
-  is never allowed. Both are at `+24` (2026-07-25).
+  is never allowed. Both are at `+026` (2026-08-03, first padded build).
 
 ### Skills (authoritative for project specifics)
 
@@ -64,7 +72,7 @@ reuse a number, never overwrite an older artifact in `~/tmp`.
 - The two build skills are **always paired**: either one finishes by running the other, so every
   `+N` ships APK + `.deb` together.
 - `.claude/skills/upstream-new-version` — rebase `custom` onto a new upstream release + re-derive versions,
-  then build both artifacts: the Android `+1` APK and the rebranded desktop amd64 `.deb`.
+  then build both artifacts: the Android `+001` APK and the rebranded desktop amd64 `.deb`.
 
 ### Hard rules
 
