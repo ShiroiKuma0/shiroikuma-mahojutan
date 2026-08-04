@@ -186,7 +186,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         outputText("Transfer complete\n")
     }
 
-    fun cleanUpTransfer() {
+    override fun cleanUpTransfer() {
         transferIsRunning = false
         // Clear the finished latch. LiveData is sticky, so a value left at true is redelivered to
         // every observer that registers afterwards -- and the Activity re-observes on each

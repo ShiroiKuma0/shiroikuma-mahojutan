@@ -29,6 +29,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.app.ActivityCompat
@@ -39,6 +41,14 @@ import java.util.UUID
 // how many UTF-8 bytes of the adapter name still fit in a 31-byte advertisement alongside
 // the flags (3 bytes) and our 128-bit service UUID (18 bytes), minus the name AD header (2 bytes)
 const val MAX_ADVERTISED_NAME_BYTES = 8
+
+// How many times to ask the stack again after it refuses to open the GATT connection, and how long
+// to wait first. Status 133 is Android's catch-all GATT error and it lands on a first connect often
+// enough that a single attempt is not a fair test of whether the peer is there -- the stack
+// generally accepts the next one. A pause helps: the refusal tends to come from connecting in the
+// same breath as stopping the scan, before the controller is finished with the radio.
+const val MAX_CONNECT_RETRIES = 3
+const val CONNECT_RETRY_DELAY_MS = 800L
 
 // Whether to drop the pairing with the peer after every transfer. It costs two dialogs per transfer
 // on Android -- the authorize prompt and the passkey -- and keeping the bond instead was tried
@@ -65,6 +75,10 @@ interface BluetoothDelegate {
     fun getWifiInfo(): Pair<String, String>
     fun outputText(msg: String)
     fun bluetoothFailed()
+    // Reset the transfer without taking Bluetooth away. bluetoothFailed() switches the radio off in
+    // the UI, which is right when Bluetooth itself will not work, and wrong when one connection
+    // attempt simply did not land -- there we want the app idle and ready to be asked again.
+    fun cleanUpTransfer()
 }
 
 class Bluetooth(val application: Application, private val delegate: BluetoothDelegate): BluetoothDelegate by delegate {
@@ -582,6 +596,10 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         var waitingForConnection = false
         private var bonded = false
 
+        // How many times we have re-asked the stack to connect for this transfer. Reset once a
+        // connection is established, and again on cleanup, so each transfer gets the full budget.
+        private var connectRetries = 0
+
         // The characteristic whose read is still outstanding. Our characteristics are
         // ENCRYPTED_MITM, so the first read of a fresh link is answered with "insufficient
         // authentication" while the stack goes off to bond; this remembers what to ask for again
@@ -733,12 +751,23 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     bluetoothGatt = gatt
+                    connectRetries = 0
                     outputText("Connected")
                     // this was the reason android couldn't connect to macOS? no, was the setLegacy(false). diagnosed by comparing nRF Connect logs from Flying Carpet pairings to nRF Connect pairings.
                     Thread.sleep(1600)
                     gatt?.discoverServices()
                 } else {
-                    Log.i("Bluetooth", "New connection state: $newState")
+                    Log.i("Bluetooth", "New connection state: $newState, status: $status")
+                    // A disconnect we were never connected for is a *failed connection attempt*,
+                    // not the end of a transfer: bluetoothGatt is set only once we reach CONNECTED,
+                    // and closeGatt() clears it, after which no further callback arrives. Scanning
+                    // has already been stopped by the time we get here, so with nothing done about
+                    // it the app simply stopped: the log ended at "Stopped scanning" and never
+                    // moved again, while the sender sat there advertising.
+                    if (bluetoothGatt == null && status != BluetoothGatt.GATT_SUCCESS) {
+                        gatt?.close()
+                        connectionAttemptFailed(status)
+                    }
                 }
             }
         }
@@ -862,6 +891,40 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             }
         }
 
+        // The stack would not open the connection. Ask it again a few times before believing it:
+        // 133 in particular is thrown by a healthy stack talking to a peer that is right there and
+        // still advertising, and the next attempt usually lands. Give up eventually, and when we
+        // do, say so and unlock the UI -- a transfer that cannot start must not leave the app
+        // looking busy for ever.
+        @SuppressLint("MissingPermission")
+        private fun connectionAttemptFailed(status: Int) {
+            val device = result?.device
+            if (device == null || connectRetries >= MAX_CONNECT_RETRIES) {
+                outputText(
+                    "The other device would not accept a Bluetooth connection (error $status). " +
+                            "Start receiving again to try afresh."
+                )
+                connectRetries = 0
+                waitingForConnection = false
+                cleanUpTransfer()
+                return
+            }
+            connectRetries += 1
+            outputText("It did not accept the connection (error $status) — trying again ($connectRetries of $MAX_CONNECT_RETRIES)")
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                    || ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)
+                {
+                    device.connectGatt(
+                        application.applicationContext,
+                        false,
+                        gattCallback,
+                        BluetoothDevice.TRANSPORT_LE,
+                    )
+                }
+            }, CONNECT_RETRY_DELAY_MS)
+        }
+
         // Close the client rather than just dropping the reference: close() unregisters the app's
         // GATT client interface, and without it ours stayed registered long after the transfer
         // ended. A stale second client is what made readCharacteristic() a silent no-op.
@@ -878,6 +941,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             passwordCharacteristic = null
             pendingRead = null
             bonded = false
+            connectRetries = 0
             lastAnnouncedBondState = -1
         }
 

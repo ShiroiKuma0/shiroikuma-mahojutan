@@ -17,7 +17,7 @@ plugins {
 // before "+3". The versionCode keeps the plain integer; padding is text only.
 def releaseVersionName = "9.0.10"   // = latest upstream `v*` tag / desktop Cargo version
 def upstreamVersionCode = 21        // = upstream Android defaultConfig.versionCode
-def buildNumber = 70                // fork build; reset to 1 each upstream bump
+def buildNumber = 71                // fork build; reset to 1 each upstream bump
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
