@@ -7,6 +7,33 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 9.0.10+071 — 2026-08-04
+
+Built on upstream **Flying Carpet 9.0.10**. With `+070` the receiver found the peer with Location
+off and a transfer completed at 84.88 mbps — and then a later attempt stopped one step further
+along, having found the device and stopped scanning.
+
+### Bluetooth — a refused connection is now retried
+- **GATT status 133 ended the transfer silently.** The receiver's log read `Called connectGatt()`,
+  then `onClientConnectionState() - status=133 connected=false`, then nothing. 133 is Android's
+  catch-all GATT error and it lands on a first connect often enough not to mean much — typically
+  when the connect goes out in the same breath as stopping the scan, before the controller has
+  finished with the radio. The next attempt usually lands.
+- **There was no next attempt.** `onConnectionStateChange()` looked only at whether the new state
+  was `CONNECTED`; the other branch wrote one line to logcat, ignored `status` entirely and
+  returned. Scanning had already been switched off by that point, so nothing was left that could
+  move: the app sat on “Stopped scanning” while the sender went on advertising — it only comes off
+  the air once a peer touches one of its characteristics.
+- **A failed connect is now told apart from an ordinary disconnect.** `bluetoothGatt` is set only
+  on `CONNECTED` and cleared by `closeGatt()`, so a disconnect with it still null and a non-zero
+  status means we never got in. On that the client is closed and the connection asked for again
+  after 800 ms, up to three times, each attempt named in the log.
+- **A transfer that cannot start no longer looks busy for ever.** When the retries are exhausted
+  the error is named and the transfer reset, so the UI unlocks and the button can be pressed again.
+  This deliberately avoids `bluetoothFailed()`, which switches the Bluetooth toggle off — the right
+  answer when Bluetooth itself will not work, the wrong one when a single connection attempt did
+  not land.
+
 ## 9.0.10+070 — 2026-08-04
 
 Built on upstream **Flying Carpet 9.0.10**. A send from the Huawei Mate XT to a Samsung phone left
