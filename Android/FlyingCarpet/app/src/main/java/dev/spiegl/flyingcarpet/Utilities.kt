@@ -2,7 +2,10 @@ package dev.spiegl.flyingcarpet
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.google.zxing.BarcodeFormat
@@ -28,6 +31,43 @@ fun getQrCodeBitmapFromContent(qrCodeContent: String): Bitmap {
             }
         }
     }
+}
+
+// The QR code with the password printed underneath it, so the receiving screen shows both at once:
+// scan it, or read it off and type it. Drawn into the bitmap rather than added to the layout on
+// purpose -- the QR takes over the logo's ImageView, which has the "白い熊 魔法絨毯 UI" button
+// directly beneath it in both orientations, so a label there would push the whole screen around.
+//
+// The caption sits on the same white as the code's quiet zone and never overlaps a module, so the
+// code scans exactly as before.
+fun getQrCodeBitmapWithCaption(qrCodeContent: String, caption: String): Bitmap {
+    val size = 1024 // pixels
+    val captionHeight = 220
+    val bits = QRCodeWriter().encode(qrCodeContent, BarcodeFormat.QR_CODE, size, size)
+    val bitmap = createBitmap(size, size + captionHeight, Bitmap.Config.RGB_565)
+    for (x in 0 until size) {
+        for (y in 0 until size) {
+            bitmap[x, y] = if (bits[x, y]) Color.BLACK else Color.WHITE
+        }
+    }
+    val canvas = Canvas(bitmap)
+    canvas.drawRect(
+        0f, size.toFloat(), size.toFloat(), (size + captionHeight).toFloat(),
+        Paint().also { it.color = Color.WHITE },
+    )
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).also {
+        it.color = Color.BLACK
+        it.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        it.textAlign = Paint.Align.CENTER
+        it.textSize = 150f
+    }
+    // shrink to fit rather than run off the edge, however long the password turns out to be
+    while (paint.measureText(caption) > size - 80 && paint.textSize > 24f) {
+        paint.textSize -= 4f
+    }
+    val baseline = size + captionHeight / 2f - (paint.descent() + paint.ascent()) / 2f
+    canvas.drawText(caption, size / 2f, baseline, paint)
+    return bitmap
 }
 
 fun longToBigEndianBytes(n: Long): ByteArray {
