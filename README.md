@@ -18,9 +18,11 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 
 > **Version 10 is a breaking change.** The wire protocol moved to Noise, so a v10 device cannot
 > transfer with a v9 one — update the app on *both* devices. v10 also adds **Shared Network mode**,
-> for when both devices are already on the same WiFi or wired network and no hotspot is wanted.
+> for when both devices are already on the same WiFi or wired network and no hotspot is wanted —
+> which this fork makes the **default**, since hotspot mode takes both devices off their network for
+> the duration of the transfer.
 
-**📥 Latest release: [`10.0.3+001`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.3+005`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -42,9 +44,9 @@ A dedicated settings page (the *Customize UI* button under the logo) turns the e
 something you can edit without touching code:
 
 - **Per-element text** — rename any label, and set its colour, font, style and size.
-- **Per-button colours** — every toggle button (Send, Receive, and each of the five peer-OS buttons)
-  carries its *own* selected and unselected fill and text colour, border colour, border-width slider
-  and corner-radius slider. No global "accent colour" compromise.
+- **Per-button colours** — every toggle button (Send, Receive, Hotspot, Shared Network, and each of
+  the five peer-OS buttons) carries its *own* selected and unselected fill and text colour, border
+  colour, border-width slider and corner-radius slider. No global "accent colour" compromise.
 - **Live preview** — changes land on the real UI as you make them.
 - **Reset anywhere** — per property, per group, or everything at once.
 - **The settings page styles itself**, so you can theme the theming tool.
@@ -118,6 +120,17 @@ the phone is — and stops asking for location at all on Android 13 and up, wher
 `NEARBY_WIFI_DEVICES` instead. Sending a file has nothing to do with where you are, so the app no
 longer asks. On older Androids, where the toggle really does rule, it says so plainly and offers
 the setting rather than searching in silence.
+
+---
+
+## 🔑 The password, without the ceremony
+
+Shared Network mode has no Bluetooth to hand the password over for it, so it has to travel by eye.
+The receiver shows a QR code **with the password printed underneath it** — scan it or read it, both
+are on screen, and there is no dialog in the way. The sender opens **one dialog that scans and types
+at the same time**: a live camera preview sitting directly above the password field, so there is
+nothing to back out of to reach the keyboard. Decline the camera, or have none, and the same dialog
+is simply the typing dialog.
 
 ---
 
