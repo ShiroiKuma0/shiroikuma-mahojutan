@@ -162,6 +162,8 @@ const SECTIONS = [
     surfaces: [
       toggleSurface('send', '“Send” button'),
       toggleSurface('receive', '“Receive” button'),
+      toggleSurface('hotspot', '“Hotspot” button'),
+      toggleSurface('sharedNetwork', '“Shared Network” button'),
       textSurface('start', '“Select Files” button', [
         labelField('start.filesText', '“Select Files” text'),
         labelField('start.folderText', '“Select directory” text (receive mode)'),
@@ -224,6 +226,7 @@ const SECTIONS = [
     title: 'Step instructions',
     surfaces: [
       textSurface('modeInstruction', 'Step 1 instruction', [labelField('modeInstruction.text', 'Instruction text')]),
+      textSurface('connectionInstruction', 'Connection-type instruction', [labelField('connectionInstruction.text', 'Instruction text')]),
       textSurface('peerInstruction', 'Step 2 instruction', [labelField('peerInstruction.text', 'Instruction text')]),
     ],
   },
@@ -329,10 +332,13 @@ const DEFAULT_TEXTS = {
   'about.text': 'About',
   'uiButton.text': '白い熊 魔法絨毯 UI',
   'bluetooth.text': 'Use Bluetooth',
-  'modeInstruction.text': 'Select Mode',
+  'modeInstruction.text': 'Select File Mode',
+  'connectionInstruction.text': 'Select Connection Mode',
   'peerInstruction.text': 'Select Peer OS',
   'send.text': 'Send',
   'receive.text': 'Receive',
+  'hotspot.text': 'Hotspot',
+  'sharedNetwork.text': 'Shared Network',
   'androidOs.text': 'Android',
   'iosOs.text': 'iOS',
   'linuxOs.text': 'Linux',
@@ -357,9 +363,12 @@ const TEXT_SELECTORS = {
   uiButton: '#uiButton',
   bluetooth: 'label[for=bluetoothSwitch]',
   modeInstruction: '#modeInstruction',
+  connectionInstruction: '#connectionModeLabel',
   peerInstruction: '#peerLabel',
   send: 'label[for=sendButton]',
   receive: 'label[for=receiveButton]',
+  hotspot: 'label[for=hotspotButton]',
+  sharedNetwork: 'label[for=sharedNetworkButton]',
   androidOs: 'label[for=androidButton]',
   iosOs: 'label[for=iosButton]',
   linuxOs: 'label[for=linuxButton]',
@@ -372,7 +381,7 @@ const TEXT_SELECTORS = {
   password: '#passwordBox',
 };
 
-const TOGGLE_KEYS = ['send', 'receive', 'androidOs', 'iosOs', 'linuxOs', 'macOs', 'windowsOs'];
+const TOGGLE_KEYS = ['send', 'receive', 'hotspot', 'sharedNetwork', 'androidOs', 'iosOs', 'linuxOs', 'macOs', 'windowsOs'];
 
 // ── Applier ───────────────────────────────────────────────────────────────────────────────────
 
@@ -401,7 +410,8 @@ function buildThemeCss() {
   css += `body { background-color: ${eColor('window.bg', BLACK)} !important; }\n`;
 
   // Simple text surfaces.
-  for (const key of ['title', 'version', 'about', 'bluetooth', 'modeInstruction', 'peerInstruction', 'sendFolder']) {
+  for (const key of ['title', 'version', 'about', 'bluetooth', 'modeInstruction', 'connectionInstruction',
+    'peerInstruction', 'sendFolder']) {
     css += `${TEXT_SELECTORS[key]} { ${textDecls(key, true)} }\n`;
   }
   css += `#aboutButton { cursor: pointer; }\n`;
@@ -504,8 +514,9 @@ function buildThemeCss() {
 
 // Set label texts on the main page (only surfaces whose element carries its own text).
 function applyTexts() {
-  for (const key of ['title', 'about', 'uiButton', 'bluetooth', 'modeInstruction', 'peerInstruction',
-    'send', 'receive', 'androidOs', 'iosOs', 'linuxOs', 'macOs', 'windowsOs', 'cancel', 'sendFolder']) {
+  for (const key of ['title', 'about', 'uiButton', 'bluetooth', 'modeInstruction', 'connectionInstruction',
+    'peerInstruction', 'send', 'receive', 'hotspot', 'sharedNetwork', 'androidOs', 'iosOs', 'linuxOs',
+    'macOs', 'windowsOs', 'cancel', 'sendFolder']) {
     const el = document.querySelector(TEXT_SELECTORS[key]);
     if (el) el.innerText = Settings.textOr(key + '.text', DEFAULT_TEXTS[key + '.text']);
   }
