@@ -197,7 +197,8 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             return
         }
         advertising = false
-        bluetoothManager.adapter.bluetoothLeAdvertiser.stopAdvertising(advertiseCallback)
+        // null if Bluetooth was switched off between the connection and this call
+        bluetoothManager.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
         outputText("Peer found us, stopped advertising")
     }
 

@@ -14,13 +14,16 @@ plugins {
 // three digits — "+026", never "+26" — so builds sort correctly in ~/tmp, in the
 // phone's file manager and in the release list, where "+10" would otherwise land
 // before "+3". The versionCode keeps the plain integer; padding is text only.
-def releaseVersionName = "9.0.10"   // = latest upstream `v*` tag / desktop Cargo version
-def upstreamVersionCode = 21        // = upstream Android defaultConfig.versionCode
-def buildNumber = 71                // fork build; reset to 1 each upstream bump
+// NB at v10.0.3 the two upstream sources disagree: the release tag says 10.0.3 (Android was
+// bumped last) while the desktop crates still say 10.0.1. The tag is the release, so both our
+// artifacts carry 10.0.3 and keep sharing one version string.
+def releaseVersionName = "10.0.3"   // = latest upstream `v*` tag
+def upstreamVersionCode = 24        // = upstream Android defaultConfig.versionCode
+def buildNumber = 1                 // fork build; reset to 1 each upstream bump
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
-def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 210060
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240001
 
 // Release signing: read from a gitignored keystore.properties at the Gradle
 // project root, falling back to SIGNING_* env vars. Without either, the release
@@ -32,6 +35,13 @@ if (hasKeystoreProperties) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 def hasSigningEnv = System.getenv("SIGNING_STORE_FILE") != null
+
+// Raw APK is e.g. shiroikuma-mahojutan_10.0.3+001_arm64-v8a-release.apk; the build-apk skill
+// copies it to ~/tmp under the clean name (no -release). This is the `base` extension rather
+// than defaultConfig.archivesBaseName, which AGP 9 removed.
+base {
+    archivesName = "shiroikuma-mahojutan_${forkVersionName}_arm64-v8a"
+}
 
 android {
     compileSdk = 37
@@ -50,10 +60,6 @@ android {
         targetSdk = 37
         versionCode = forkVersionCode
         versionName = forkVersionName
-
-        // Raw APK is e.g. shiroikuma-mahojutan_9.0.10+026_arm64-v8a-release.apk;
-        // the build-apk skill copies it to ~/tmp under the clean name (no -release).
-        setProperty("archivesBaseName", "shiroikuma-mahojutan_${forkVersionName}_arm64-v8a")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
