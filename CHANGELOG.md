@@ -7,6 +7,95 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+001 — 2026-08-06
+
+Rebased onto upstream **Flying Carpet 10.0.3** (113 commits since 9.0.10). Upstream's v10 is a
+breaking release, and it reworked several of the areas this fork had been patching, so this entry
+records what the fork now adds, what it handed back, and what changed underneath.
+
+### Upstream v10, in brief — read this before transferring
+- **The wire protocol is now Noise** (`Noise_NNpsk0_25519_ChaChaPoly_SHA256`), replacing the
+  per-chunk AES-256-GCM. The PSK is PBKDF2-HMAC-SHA256 over the password at 600 000 iterations, and
+  the plaintext version/mode preamble is bound into the Noise prologue. **A v10 device refuses a v9
+  peer**, with a version-mismatch message rather than a failure — update every device you transfer
+  between.
+- **Shared Network mode**: when both devices are already on the same network (WiFi *or* wired), no
+  hotspot is created. The receiver mints a one-time password, shows it with a QR code, and the two
+  find each other over authenticated UDP discovery. Bluetooth is deliberately not used in this mode.
+- Passwords are single-use and CSPRNG-generated, never chosen and never remembered; the receiver is
+  always the TCP server and Noise responder in both modes.
+- Android now targets SDK 37 and requests `ACCESS_LOCAL_NETWORK` (Android 17 blocks local-network
+  traffic by default at that target); the toolchain moved to Gradle 9.6.1 and AGP 9.3.1.
+
+### Bluetooth — the fork's Linux layer handed back to upstream
+- **Bonds are no longer cleared after a transfer** (`CLEAR_BOND_AFTER_TRANSFER = false`). Against v9
+  this fork removed the pairing on *both* sides, because a bonded peer was unfindable from Linux —
+  BlueZ stops announcing a paired device, and its identity record does not carry our service UUID.
+  Upstream v10 settled that the other way: it never removes a bond on cleanup, since a one-sided
+  removal leaves the peer holding keys the other end has forgotten, and it fixed the discovery half
+  properly by verifying the service over a connection instead of trusting the cached UUID list.
+  Keeping the fork's behaviour on one side only would have recreated exactly the asymmetry v10
+  removed, so it is off, and the two sides agree again.
+- **The fork's Linux BLE work is dropped in favour of upstream's**: the candidate scan-and-reject
+  loop, the bounded per-candidate attempt, the LE-only discovery, and the bond clearing. Upstream's
+  replacement forces the LE bearer for bonded peers, invalidates stale GATT caches, disconnects on
+  every exit path, and is documented in `docs/bluetooth-field-guide.md`.
+- Also dropped as redundant: starting the hotspot during the handshake (`hotspot_is_up`), the fork's
+  stale-hotspot sweep (upstream has `cleanup_stale_connections`, filtered by connection type), and
+  the Linux BLE logging, which upstream did itself.
+
+### Bluetooth — what the fork still carries
+- **The advertised device name is measured in UTF-8 bytes, not `String.length`.** `白い熊` is 3
+  UTF-16 units and 9 bytes; the extra byte overflows the 31-byte advertisement and the controller
+  rejects the whole packet, which EMUI surfaces as advertise error 18 (HCI 0x12, invalid parameters)
+  and which looks from the other device like nothing is there at all.
+- **The GATT server stays on the air** until something reads or writes one of *our* characteristics,
+  instead of stopping on any incoming LE connection — on EMUI a watch or earbuds connecting was
+  enough to take the sender off the air seconds after it started advertising.
+- **A refused connection is retried**: GATT status 133 on a first `connectGatt()` is common and
+  usually transient, so it is retried (3 attempts, 800 ms apart) rather than ending the transfer in
+  silence.
+- **A read that fails with insufficient authentication or encryption is not a failure** — it is the
+  expected answer to the first read of an `ENCRYPTED_MITM` characteristic, so it waits for the bond
+  and asks again once the stack reports `BOND_BONDED`. The pending read is cleared once it lands, so
+  a later bond cannot re-issue a read that has already been answered.
+- Joining the peer's hotspot is retried up to four times, since the system picker gives up after a
+  single empty scan.
+
+### Location — still nothing to do with where you are
+- `BLUETOOTH_SCAN` keeps its `neverForLocation` disavowal, `ACCESS_FINE_LOCATION` and
+  `ACCESS_COARSE_LOCATION` stay capped at `maxSdkVersion="32"`, and the Location gate still explains
+  itself on older Androids instead of scanning into silence. Upstream's new `ACCESS_LOCAL_NETWORK`
+  declaration is kept alongside them, ungated, as SDK 37 requires.
+
+### Fork features carried forward unchanged
+- The yellow-on-black theme and the *白い熊 魔法絨毯 UI* page on both apps; Export / Import as one
+  timestamped `.zip` with per-category selection and merging import; the token-gated automation
+  export; external font support; the traced-carpet icon set; the share-sheet target; one-tap receive
+  into the last directory; `autoconnect no` on both nmcli profiles so a hotspot profile can never
+  outlive the app.
+- **The two-bar transfer readout** is re-plumbed onto v10's signatures: `send_file`/`receive_file`
+  are now generic over the stream and carry the peer-relative name, so `Totals` threads through
+  those instead of the old key-and-prefix arguments.
+
+### Packaging
+- Versions re-derived: `releaseVersionName` 10.0.3, `upstreamVersionCode` 24, `buildNumber` reset to
+  1 — `versionCode` 240001, both artifacts `10.0.3+001`. At this release the upstream sources
+  disagree (the tag reads 10.0.3, the desktop crates still read 10.0.1); the tag is the release, and
+  using it keeps one version string across the APK and the `.deb`.
+- `archivesBaseName` moved to the `base { archivesName }` extension — AGP 9 removed it from
+  `defaultConfig`, and the build failed outright on the old form.
+- Upstream's `rpm` bundle target inherits the fork's desktop template, so it is rebranded too.
+
+### Fixes found while rebasing
+- `MainActivity` had two `onResume` overrides after the replay — the fork's appearance pass and
+  upstream's Bluetooth-permission recovery — which is a compile error; they are now one.
+- `stopAdvertisingForPeer()` null-checks the adapter, which can vanish if Bluetooth is switched off
+  mid-flight.
+- Both test `UI` implementations gained the fork's two extra trait methods and the transfer test
+  threads a `Totals`, so upstream's cross-platform Noise and discovery known-answer vectors still
+  run: 29 core tests pass.
+
 ## 9.0.10+071 — 2026-08-04
 
 Built on upstream **Flying Carpet 9.0.10**. With `+070` the receiver found the peer with Location
