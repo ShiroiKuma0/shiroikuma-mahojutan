@@ -4,19 +4,23 @@
 
 # 白い熊 魔法絨毯
 
-**Encrypted, peer-to-peer file transfer over an ad hoc WiFi hotspot — no shared network, no cloud, no account.**
+**Encrypted, peer-to-peer file transfer — over an ad hoc WiFi hotspot, or over a network you are already on. No cloud, no account.**
 
 A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**: a full
 yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles every single surface, a live
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a token-gated hook for headless backups, external font
-support, a custom icon, and a rebranded Linux desktop build shipped as an amd64 `.deb` — plus a
-Bluetooth handshake that actually completes — between Android and Linux, and between two Androids.
+support, a custom icon, a share-sheet target, and a rebranded Linux desktop build shipped as an
+amd64 `.deb` — plus the Bluetooth fixes an EMUI phone with a Japanese device name needs.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
 
-**📥 Latest release: [`9.0.10+071`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+> **Version 10 is a breaking change.** The wire protocol moved to Noise, so a v10 device cannot
+> transfer with a v9 one — update the app on *both* devices. v10 also adds **Shared Network mode**,
+> for when both devices are already on the same WiFi or wired network and no hotspot is wanted.
+
+**📥 Latest release: [`10.0.3+001`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -75,15 +79,31 @@ the desktop abbreviates your home directory to `~`).
 
 ---
 
-## 📡 Bluetooth that finishes the handshake
+## 📤 Send straight from the share sheet
 
-Bluetooth pairing between the Android app and the Linux desktop never completed. Fixing it meant
-tracking down a chain of separate faults on both sides: an advertisement one byte over the 31-byte
-limit because the device name was measured in characters rather than UTF-8 bytes, an advertiser
-switched off by unrelated LE connections, a scan that returned the first device BlueZ mentioned
-(a paired headset would end the transfer), classic-Bluetooth profiles being connected instead of an
-ATT link, and a debug print that turned a missing property into a fatal error. The hotspot now also
-comes up *before* the peer is handed its credentials, so it is on the air by the time the peer looks.
+The Android app answers `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for any type, so files picked
+anywhere — a file manager, a gallery, another app — can be sent by choosing 白い熊 魔法絨毯 from the
+share sheet. The selection arrives preloaded and the search for the receiving device starts on its
+own, so a share is one tap rather than a launch, a mode, and a picker.
+
+---
+
+## 📡 Bluetooth, on a phone with a Japanese name
+
+A BLE advertisement is 31 bytes, and after the flags and a 128-bit service UUID the device name gets
+eight of them. Android measures that name with `String.length`, which counts UTF-16 units — so
+`白い熊` looks like 3 and is really 9, the packet goes one byte over, and the controller rejects it.
+EMUI reports that as advertise error 18 and the phone simply never appears. This fork counts bytes.
+
+Two more, in the same area: the GATT server used to stop advertising on *any* incoming LE connection
+— on EMUI a watch or a pair of earbuds is enough — so it went off the air seconds after starting;
+it now waits until something reads one of its own characteristics. And a first `connectGatt()` that
+comes back with status 133, Android's catch-all, is retried rather than ending the transfer in
+silence. Joining the peer's hotspot is retried too, since the system picker gives up after one
+empty scan.
+
+Since v10 the rest of the Bluetooth stack — bonding, the Linux side, GATT lifecycle — is upstream's
+own, and considerably better than what this fork carried against v9; it is used as-is.
 
 ---
 
@@ -166,10 +186,11 @@ install lands as a clean upgrade.
 ## Built on Flying Carpet
 
 A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) by Theron Spiegl (app id
-`shiroikuma.mahojutan`, so it coexists with the official build). All the hard parts — the AES-256-GCM
-wire protocol, the ad hoc hotspot setup, and the Bluetooth LE credential exchange that make
-phone-to-laptop transfers work without any shared network — are upstream's work, and this fork tracks
-its releases. The code remains under the **GPL-3.0**.
+`shiroikuma.mahojutan`, so it coexists with the official build). All the hard parts — the Noise
+encrypted transport, the authenticated discovery behind Shared Network mode, the ad hoc hotspot
+setup, and the Bluetooth LE credential exchange that makes phone-to-laptop transfers work with no
+network at all — are upstream's work, and this fork tracks its releases. The code remains under the
+**GPL-3.0**.
 
 ## Building
 
