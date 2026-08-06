@@ -7,6 +7,63 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+005 — 2026-08-06
+
+The first pass over v10's new surfaces: the controls upstream added are now in the fork's colours,
+shared network is the default, and getting a password from one device to the other takes a glance
+rather than a dialog.
+
+### The connection-type row is themed
+- **"Select connection type", "Hotspot" and "Shared Network" were still stock.** They arrived with
+  v10 and the fork's Appearance layer had never been told about them, so on a yellow-on-black screen
+  the label came out white and the selected button Material purple. All three are registered now, so
+  they also show up in the 白い熊 魔法絨毯 UI page like everything else: the buttons under
+  **Main page** with their own selected/unselected fill and text colours, border colour and
+  border-width / corner-radius sliders, the label under **Step instructions**. Nothing new had to be
+  styled — the fork's existing toggle default is yellow-on-black with a yellow border, inverting to
+  black-on-yellow when selected, which is exactly the intended look.
+- The desktop's connection row had the same three unthemed elements and gets the same treatment.
+- Fixed on the desktop while there: `modeInstruction.text` still defaulted to v9's "Select Mode" and
+  was overwriting v10's "Select File Mode" at runtime — ambiguous now that there are two mode rows.
+
+### Shared Network is the default mode
+- Hotspot mode turns the laptop's WiFi card into an access point and takes the phone off the network
+  to join it, so both devices lose their connection for the duration. Shared network leaves both
+  where they are. **The Bluetooth switch therefore starts disabled**: BLE exists only to negotiate
+  hotspot credentials, and every platform greys it out in this mode. Switching to Hotspot re-enables
+  it.
+- On the desktop the default is set in markup and fires no change event, so the Bluetooth switch is
+  brought in line once on a fresh load; without that it stayed enabled in a mode that never uses it.
+
+### A shared network transfer died the moment it found its peer
+- **`Transfer error: lateinit property peer has not been initialized`**, immediately after
+  `Discovered peer at …`. `startTCP()` began by asking `isHosting()` which end it was, only to log
+  "Listening on port …" or "Connecting to …" — fork code from the talkative-log work, written when
+  hotspot was the only mode. `isHosting()` reads `peer`, which is set from the peer-OS buttons, and
+  shared network mode hides those, so the read threw and ended the transfer. The announcement is
+  scoped to hotspot mode now; shared network already names both ends for itself.
+- `isHosting()` returns false for an unset peer instead of throwing, so a single unguarded call can
+  never take a transfer down this way again.
+
+### Passing the password over
+- **The receiver prints the password under its own QR code** and no longer opens a modal to say it.
+  Both ways of passing it over are on screen at once, with nothing to dismiss first. The caption is
+  drawn into the bitmap rather than added to the layout, because the QR takes over the logo's
+  ImageView and the *白い熊 魔法絨毯 UI* button sits directly beneath it; it lies on the quiet zone's
+  white and never overlaps a module, so the code scans exactly as before.
+- **The sender gets one dialog that scans and types at once.** The camera preview is embedded above
+  the password field, in the fork's own black-and-yellow chrome, instead of zxing's full-screen
+  capture activity — which had to be backed out of before the keyboard could be reached. A scan
+  fills the field and starts the transfer; typing and OK does the same.
+- Embedding the preview means requesting `CAMERA` ourselves, which the full-screen activity used to
+  do. Declined, or on a device without a camera, the dialog is simply the typing dialog and the hint
+  says so — the transfer is not cancelled. The camera is released in `onPause` and on every path out
+  of the dialog.
+- **The shared-network QR was being tinted yellow.** That ImageView normally holds the fork's logo,
+  which is tinted, and the colour filter outlives the drawable — the hotspot path cleared it, the
+  shared network path never did. It was rendering yellow-on-black and probably would not scan at
+  all, which is a good reason scanning had not been the obvious route before now.
+
 ## 10.0.3+001 — 2026-08-06
 
 Rebased onto upstream **Flying Carpet 10.0.3** (113 commits since 9.0.10). Upstream's v10 is a
