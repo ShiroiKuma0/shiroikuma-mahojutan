@@ -72,7 +72,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     // PBKDF2-stretched Noise PSK, derived once per transfer off the main thread (600k
     // iterations); also the source of the discovery HMAC key (deriveDiscoveryKey).
     private lateinit var psk: ByteArray
-    var connectionMode: ConnectionMode = ConnectionMode.Hotspot
+    // Fork default: Shared Network rather than upstream's Hotspot. Note this starts the app with the
+    // Bluetooth switch greyed out -- BLE negotiates hotspot credentials, so it has nothing to do in
+    // shared network mode and every platform disables it there.
+    var connectionMode: ConnectionMode = ConnectionMode.SharedNetwork
     var files: MutableList<DocumentFile> = mutableListOf()
     var fileStreams: MutableList<InputStream> = mutableListOf()
     var filePaths: MutableList<String> = mutableListOf() // paths relative to root directory peer is sending to
@@ -184,6 +187,14 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     val finishTransfer = { _transferFinished.postValue(true) }
 
     private fun isHosting(): Boolean {
+        // `peer` is a lateinit set from the peer-OS buttons, which only hotspot mode shows -- so in
+        // shared network mode it is never assigned and reading it throws. Answer false rather than
+        // crash: "am I hosting a hotspot" is meaningfully "no" when there is no hotspot at all, and
+        // every caller that matters in shared network mode is already behind a mode check. Without
+        // this a single unguarded call anywhere in the transfer path kills the transfer outright.
+        if (!this::peer.isInitialized) {
+            return false
+        }
         return peer == Peer.iOS
                 || peer == Peer.macOS
                 || (peer == Peer.Android && mode == Mode.Receiving)
@@ -821,10 +832,18 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private suspend fun startTCP() {
         // Both branches block with nothing to show for it -- accept() until the peer dials in,
         // connect() until it answers -- so say which one we are in before going quiet.
-        if (isHosting()) {
-            outputText("Listening on port $PORT for the other device...")
-        } else {
-            outputText("Connecting to the other device at ${peerIP?.hostAddress}...")
+        //
+        // Hotspot mode only. isHosting() reads `peer`, which comes from the peer-OS buttons, and
+        // those are hidden in shared network mode -- so asking here threw "lateinit property peer
+        // has not been initialized" and ended the transfer the moment discovery had succeeded.
+        // Shared network says the same thing for itself further down: "Waiting for TCP connection
+        // from sender..." on the receiver, "Connecting to receiver at ..." on the sender.
+        if (connectionMode == ConnectionMode.Hotspot) {
+            if (isHosting()) {
+                outputText("Listening on port $PORT for the other device...")
+            } else {
+                outputText("Connecting to the other device at ${peerIP?.hostAddress}...")
+            }
         }
         withContext(Dispatchers.IO) {
             if (connectionMode == ConnectionMode.SharedNetwork) {

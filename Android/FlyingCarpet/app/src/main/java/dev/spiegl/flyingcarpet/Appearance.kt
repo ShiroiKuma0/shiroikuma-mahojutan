@@ -121,6 +121,8 @@ object UiCatalog {
             surfaces = listOf(
                 toggleSurface("send", "“Send” button"),
                 toggleSurface("receive", "“Receive” button"),
+                toggleSurface("hotspot", "“Hotspot” button"),
+                toggleSurface("sharedNetwork", "“Shared Network” button"),
                 TextSurface(
                     "start", "“Select Files” button",
                     listOf(
@@ -183,6 +185,7 @@ object UiCatalog {
             "Step instructions",
             surfaces = listOf(
                 TextSurface("modeInstruction", "Step 1 instruction", listOf(LabelField("modeInstruction.text", "Instruction text"))),
+                TextSurface("connectionInstruction", "Connection-type instruction", listOf(LabelField("connectionInstruction.text", "Instruction text"))),
                 TextSurface("peerInstruction", "Step 2 instruction", listOf(LabelField("peerInstruction.text", "Instruction text"))),
             ),
         ),
@@ -332,6 +335,11 @@ object Appearance {
         applyText(activity, s, R.id.modeInstruction, "modeInstruction", setText = true)
         applyText(activity, s, R.id.sendButton, "send", setText = true)
         applyText(activity, s, R.id.receiveButton, "receive", setText = true)
+        // v10's connection-type row. connectionInstruction is portrait-only, and applyText no-ops on
+        // an id that isn't in the inflated layout.
+        applyText(activity, s, R.id.connectionInstruction, "connectionInstruction", setText = true)
+        applyText(activity, s, R.id.hotspotButton, "hotspot", setText = true)
+        applyText(activity, s, R.id.sharedNetworkButton, "sharedNetwork", setText = true)
         applyText(activity, s, R.id.peerInstruction, "peerInstruction", setText = true)
         applyText(activity, s, R.id.androidButton, "androidOs", setText = true)
         applyText(activity, s, R.id.iosButton, "iosOs", setText = true)
@@ -456,6 +464,8 @@ object Appearance {
     private val toggleButtons = listOf(
         R.id.sendButton to "send",
         R.id.receiveButton to "receive",
+        R.id.hotspotButton to "hotspot",
+        R.id.sharedNetworkButton to "sharedNetwork",
         R.id.androidButton to "androidOs",
         R.id.iosButton to "iosOs",
         R.id.linuxButton to "linuxOs",

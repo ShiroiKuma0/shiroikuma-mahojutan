@@ -24,7 +24,9 @@ let selectedMode;
 let selectedPeer;
 let selectedFiles;
 let selectedFolder;
-let connectionMode = 'hotspot';
+// Fork default: Shared Network rather than upstream's Hotspot. The Bluetooth switch starts
+// disabled as a result -- BLE only negotiates hotspot credentials, so it is unused in this mode.
+let connectionMode = 'shared_network';
 
 // 'idle' -> 'starting' (user is picking files/password) -> 'running' -> 'cancelling' -> 'idle'.
 // Everything that can kick off or stop a transfer (the buttons, Enter, drag and drop) checks
@@ -205,6 +207,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   checkStatus();
   await resolveHomeDir();
   refreshLastFolderButton();
+  // the default connection mode is set in markup and fires no change event, so the Bluetooth
+  // switch has to be brought in line with it once on a fresh load
+  applyBluetoothAvailability();
 
   // rehydrate UI if user refreshed
   let uiState = JSON.parse(sessionStorage.getItem('pageState'));
@@ -226,7 +231,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     });
     // restore connection mode
-    connectionMode = uiState.connectionMode || 'hotspot';
+    connectionMode = uiState.connectionMode || 'shared_network';
     if (connectionMode === 'shared_network') {
       document.getElementById('sharedNetworkButton').checked = true;
     } else {
@@ -385,7 +390,7 @@ let showSelect = (message, options) => {
   });
 }
 
-function makeQRCode(str) {
+function makeQRCode(str, caption) {
   let elem = document.getElementById('qrcode');
   elem.innerHTML = '';
   // fork: yellow quiet zone (4+ modules) so the code doesn't bleed into the black page
@@ -394,13 +399,23 @@ function makeQRCode(str) {
   elem.style.background = '#ffff00';
   elem.style.padding = '16px';
   elem.style.width = '150px';
-  elem.style.height = '150px';
+  // with a caption the block grows downward instead of squeezing the code
+  elem.style.height = caption ? 'auto' : '150px';
   new QRCode(elem, {
     text: str,
     width: 118,
     height: 118,
     colorLight: '#ffff00',
   });
+  if (caption) {
+    // The password printed under its own QR code, so a sender can scan it or read it off without
+    // a dialog to dismiss first. Black on the same yellow as the quiet zone, clear of the modules.
+    const cap = document.createElement('div');
+    cap.textContent = caption;
+    cap.style.cssText = 'margin-top:6px; text-align:center; font-family:monospace; font-weight:bold;'
+      + ' color:#000000; font-size:15px; letter-spacing:1px; line-height:1.2;';
+    elem.appendChild(cap);
+  }
 }
 
 // Only one transfer can be in flight at a time, and picking files/entering the password
@@ -559,11 +574,11 @@ async function beginTransfer(filesSelected) {
     if (connectionMode === 'shared_network') {
       // peer OS is unknown in shared network mode: show the password as text for desktop/Apple
       // senders and a QR code for Android senders.
-      makeQRCode(password);
+      // the password rides under its own QR code, so there is nothing to dismiss before the
+      // sender can scan or read it
+      makeQRCode(password, password);
       output(`Password: ${password}`);
-      output('Start the transfer on the sending device and enter this password when prompted (or scan the QR code on Android).');
-      // not awaited: the transfer below must start without waiting for the dialog to be dismissed
-      dialog.message(`Start the transfer on the sending device and enter this password when prompted (or scan the QR code on Android):\n\n${password}`, { title: 'Flying Carpet' });
+      output('Start the transfer on the sending device and scan the QR code, or enter the password shown beneath it.');
     } else if (selectedPeer === 'ios' || selectedPeer === 'android') {
       output('\nStart the transfer on the other device and scan the QR code when prompted.');
       makeQRCode(password);
