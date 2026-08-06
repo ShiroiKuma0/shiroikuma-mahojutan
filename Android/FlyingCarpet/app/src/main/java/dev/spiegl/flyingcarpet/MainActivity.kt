@@ -15,6 +15,9 @@ import android.app.AlertDialog
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -37,6 +40,12 @@ import androidx.core.view.isVisible
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModelProvider
 import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.ResultPoint
+import com.journeyapps.barcodescanner.BarcodeCallback
+import com.journeyapps.barcodescanner.BarcodeResult
+import com.journeyapps.barcodescanner.DecoratedBarcodeView
+import com.journeyapps.barcodescanner.DefaultDecoderFactory
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.spiegl.flyingcarpet.R.id
@@ -70,6 +79,12 @@ class MainActivity : AppCompatActivity() {
     // remembers the bluetooth switch state while in shared network mode, which forces
     // it off; restored when the user returns to hotspot mode (mirrors the desktop UI)
     private var bluetoothCheckedBeforeShared: Boolean? = null
+    // The embedded QR preview inside the shared-network password dialog, while that dialog is up.
+    // Held so the camera can be released when the activity goes to the background and picked up
+    // again on return, and so the permission callback can start it after the fact.
+    private var scannerView: DecoratedBarcodeView? = null
+    private var scannerHint: TextView? = null
+    private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
     private val settings: Settings by lazy { Settings(this) }
 
     private fun getFilePicker(): ActivityResultLauncher<Array<String>> {
@@ -460,6 +475,16 @@ class MainActivity : AppCompatActivity() {
         // request instead, via permissionsToRequest().
         localNetworkPermissionLauncher = getLocalNetworkPermissionLauncher()
 
+        cameraPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                startScannerPreview()
+            } else {
+                scannerHint?.text =
+                    "Camera permission was declined, so type the password shown on the other device."
+            }
+        }
         viewModel.barcodeLauncher = getBarcodeLauncher()
         viewModel.displayQrCode = ::displayQrCode
         viewModel.cleanUpUi = ::cleanUpUi
@@ -706,6 +731,15 @@ class MainActivity : AppCompatActivity() {
         if (!bluetoothAvailable && bluetoothPermissionsMissing && checkForBluetoothPermissions()) {
             initializeBluetooth()
         }
+        // pick the preview back up if the password dialog was open when we left
+        scannerView?.let { if (it.visibility == View.VISIBLE) it.resume() }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // never hold the camera open behind another app: the dialog survives, the preview restarts
+        // in onResume()
+        scannerView?.pause()
     }
 
     // The directory picked last time, remembered across restarts so receiving is one tap. The tree
@@ -771,62 +805,135 @@ class MainActivity : AppCompatActivity() {
     }
 
     // shared network mode, sending: ask for the password displayed on the receiving device
+    // Shared network mode, sending: one dialog that scans AND types. The camera preview is embedded
+    // here rather than launched as zxing's full-screen CaptureActivity, so the password field stays
+    // on screen the whole time -- there is nothing to back out of to reach the keyboard, which is
+    // what a separate full-window scanner forced.
+    //
+    // The preview is only started once CAMERA has been granted; refused, or on a device without a
+    // camera, the dialog quietly becomes the typing dialog it already is.
     private fun promptForPassword() {
-        val input = EditText(this)
-        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Password")
-            .setMessage(getString(R.string.passwordPrompt))
-            .setView(input)
-            .setPositiveButton(getString(R.string.ok)) { _, _ ->
-                val entered = input.text.toString().trim()
-                if (entered.length < 10) {
-                    viewModel.outputText("Password must be at least 10 characters. Please start the transfer again.")
-                    viewModel.cleanUpTransfer()
-                } else {
-                    viewModel.gotSharedNetworkPassword(entered)
-                }
+        val accent = ForkDialog.accent(this)
+        val box = ForkDialog.box(this)
+        box.addView(ForkDialog.heading(this, "Password"))
+        box.addView(ForkDialog.spacer(this, 12))
+
+        val preview = DecoratedBarcodeView(this).apply {
+            setStatusText("")
+            barcodeView.decoderFactory = DefaultDecoderFactory(listOf(BarcodeFormat.QR_CODE))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ForkDialog.dp(this@MainActivity, 200),
+            )
+            visibility = View.GONE   // shown by startScannerPreview() once permission is in hand
+        }
+        box.addView(preview)
+        box.addView(ForkDialog.spacer(this, 10))
+
+        val hintLabel = ForkDialog.label(
+            this,
+            "Point the camera at the QR code on the other device, or type the password below.",
+        )
+        box.addView(hintLabel)
+        box.addView(ForkDialog.spacer(this, 6))
+
+        val input = EditText(this).apply {
+            hint = "Password"
+            setSingleLine()
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setTextColor(accent)
+            setHintTextColor((accent and 0x00FFFFFF) or 0x80000000.toInt())
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        box.addView(input)
+
+        val dialog = ForkDialog.wrap(this, box, cancelable = false)
+        scannerView = preview
+        scannerHint = hintLabel
+
+        // Everything that closes this dialog goes through here, so the camera is released exactly
+        // once however the dialog ends -- scanned, typed, or cancelled.
+        val close = {
+            preview.pause()
+            scannerView = null
+            scannerHint = null
+            dialog.dismiss()
+        }
+        val accept = { entered: String ->
+            if (entered.length < 10) {
+                viewModel.outputText("Password must be at least 10 characters. Please start the transfer again.")
+                close()
+                viewModel.cleanUpTransfer()
+            } else {
+                close()
+                viewModel.gotSharedNetworkPassword(entered)
             }
-            .setNegativeButton(getString(R.string.cancelSmall)) { _, _ ->
+        }
+
+        preview.decodeSingle(object : BarcodeCallback {
+            override fun barcodeResult(result: BarcodeResult) {
+                val text = result.text ?: return
+                // shared network QR codes carry just the password, but accept "ssid;password" too
+                // in case the other device is showing a hotspot-mode code
+                val parts = text.split(';')
+                accept((if (parts.size > 1) parts[1] else parts[0]).trim())
+            }
+
+            override fun possibleResultPoints(resultPoints: MutableList<ResultPoint>?) {}
+        })
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            clipChildren = false
+            setPadding(0, ForkDialog.dp(this@MainActivity, 16), 0, 0)
+        }
+        row.addView(
+            ForkDialog.pill(this, "Cancel") {
+                close()
                 viewModel.outputText("Transfer cancelled.")
                 viewModel.cleanUpTransfer()
-            }
-            .setNeutralButton(getString(R.string.scanQrCode)) { _, _ ->
-                val options = ScanOptions()
-                options.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                options.setPrompt("Scan the QR code displayed on the receiving device.")
-                options.setOrientationLocked(false)
-                viewModel.barcodeLauncher.launch(options)
-            }
-            .setCancelable(false)
-            .show()
-        // In dark mode the default purple button text is nearly unreadable on the dark
-        // dialog surface; force high-contrast white for OK / Cancel / Scan QR Code.
-        val nightMode = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-                Configuration.UI_MODE_NIGHT_YES
-        if (nightMode) {
-            for (button in intArrayOf(
-                AlertDialog.BUTTON_POSITIVE,
-                AlertDialog.BUTTON_NEGATIVE,
-                AlertDialog.BUTTON_NEUTRAL,
-            )) {
-                dialog.getButton(button)?.setTextColor(Color.WHITE)
-            }
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = ForkDialog.dp(this@MainActivity, 10) }
+            },
+        )
+        row.addView(ForkDialog.pill(this, "OK") { accept(input.text.toString().trim()) })
+        box.addView(row)
+
+        dialog.show()
+        startScannerPreview()
+    }
+
+    // Starts the embedded preview if we may use the camera, and asks for it if we have not been
+    // told yet. A refusal is not fatal: the dialog stays up and the password can be typed.
+    private fun startScannerPreview() {
+        val preview = scannerView ?: return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            preview.visibility = View.VISIBLE
+            preview.resume()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
-    // shared network mode, receiving: show the generated password as a QR code so Android
-    // senders can scan it, plus a modal making clear it must be entered on the sending device.
-    // (it's also printed to the output box for peers that type it in.)
+    // shared network mode, receiving: show the generated password as a QR code with the password
+    // itself printed underneath it, so both ways of passing it over are on screen at once and
+    // nothing has to be dismissed first. (it's also in the output box, as a record.)
     private fun displaySharedNetworkPassword(password: String) {
         runOnUiThread {
             val qrCode = findViewById<ImageView>(id.qrCodeView)
-            viewModel.qrBitmap = getQrCodeBitmapFromContent(password)
+            viewModel.qrBitmap = getQrCodeBitmapWithCaption(password, password)
+            // never tint a QR code -- it must stay black on white to scan. The logo that normally
+            // occupies this ImageView is tinted yellow by the fork, and that filter outlives the
+            // drawable, so without clearing it here the code came out yellow on black.
+            qrCode.colorFilter = null
             qrCode.setImageBitmap(viewModel.qrBitmap)
             qrCode.bringToFront()
-            val alertFragment =
-                Alert("Start the transfer on the sending device and enter this password when prompted, or scan the QR code:\n\nPassword: $password")
-            alertFragment.show(supportFragmentManager, "alert")
         }
     }
 
