@@ -421,6 +421,8 @@ mod test {
             fn output(&self, _msg: &str) {}
             fn show_progress_bar(&self) {}
             fn update_progress_bar(&self, _percent: u8) {}
+            fn update_total_progress_bar(&self, _percent: u8) {}
+            fn update_progress_details(&self, _current: &str, _total: &str) {}
             fn enable_ui(&self) {}
             fn show_pin(&self, _pin: &str) {}
         }

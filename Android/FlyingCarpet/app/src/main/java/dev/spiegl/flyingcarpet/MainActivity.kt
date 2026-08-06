@@ -701,6 +701,11 @@ class MainActivity : AppCompatActivity() {
         if (this::lastFolderButton.isInitialized) {
             refreshLastFolderButton()
         }
+        // permissions may have been granted in system Settings while the app was in the
+        // background: recover the Bluetooth switch without requiring a restart (#101)
+        if (!bluetoothAvailable && bluetoothPermissionsMissing && checkForBluetoothPermissions()) {
+            initializeBluetooth()
+        }
     }
 
     // The directory picked last time, remembered across restarts so receiving is one tap. The tree
@@ -1127,15 +1132,6 @@ class MainActivity : AppCompatActivity() {
             }
             bluetoothSwitch.isChecked = false
             setBluetoothSwitchEnabled(false)
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // permissions may have been granted in system Settings while the app was in the
-        // background: recover the Bluetooth switch without requiring a restart (#101)
-        if (!bluetoothAvailable && bluetoothPermissionsMissing && checkForBluetoothPermissions()) {
-            initializeBluetooth()
         }
     }
 

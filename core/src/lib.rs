@@ -887,6 +887,8 @@ mod transfer_tests {
         fn output(&self, _msg: &str) {}
         fn show_progress_bar(&self) {}
         fn update_progress_bar(&self, _percent: u8) {}
+        fn update_total_progress_bar(&self, _percent: u8) {}
+        fn update_progress_details(&self, _current: &str, _total: &str) {}
         fn enable_ui(&self) {}
         fn show_pin(&self, _pin: &str) {}
     }
@@ -925,7 +927,9 @@ mod transfer_tests {
             enc.write_u64(1).await.unwrap(); // file count, as the orchestrator does
                                              // sent under a folder-relative name, as a "send folder" selection produces,
                                              // so the receiver's directory recreation is covered end to end
-            sending::send_file(&src2, "album/photo.bin", &mut enc, &TestUi)
+            let mut totals = Totals::new(1, None);
+            totals.file_index = 1;
+            sending::send_file(&src2, "album/photo.bin", &mut enc, &mut totals, &TestUi)
                 .await
                 .unwrap();
             enc.flush().await.unwrap();
@@ -936,7 +940,9 @@ mod transfer_tests {
                 .unwrap();
             let count = enc.read_u64().await.unwrap();
             assert_eq!(count, 1);
-            receiving::receive_file(&recv_dir2, &mut enc, &TestUi, true)
+            let mut totals = Totals::new(1, None);
+            totals.file_index = 1;
+            receiving::receive_file(&recv_dir2, &mut enc, &mut totals, &TestUi, true)
                 .await
                 .unwrap();
         });
