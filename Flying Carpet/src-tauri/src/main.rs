@@ -507,7 +507,9 @@ fn fork_restart(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn user_bluetooth_pair(choice: bool, state: State<Transfer>) {
-    println!("in user_bluetooth_pair");
+    // The answer itself, not just that one arrived: "pairing failed" looks identical whether the
+    // peer refused or the dialog here was dismissed, and this is the only place that knows which.
+    println!("in user_bluetooth_pair: user said {}", choice);
     let ble_ui_tx = state
         .ble_ui_tx
         .lock()

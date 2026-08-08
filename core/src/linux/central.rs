@@ -40,7 +40,7 @@ use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
-use tokio::time::{interval, sleep, timeout};
+use tokio::time::{interval, sleep, timeout, Instant};
 
 use super::SERVICE_UUID;
 
@@ -52,9 +52,8 @@ use crate::{
     bluetooth::{
         NO_SSID, OS, OS_CHARACTERISTIC_UUID, PASSWORD_CHARACTERISTIC_UUID, SSID_CHARACTERISTIC_UUID,
     },
-    network::is_hosting,
-    utils::{generate_password, get_key_and_ssid},
-    Mode, Peer, UI,
+    utils::{generate_password, get_key_and_ssid, with_progress},
+    we_supply_credentials, ConnectionMode, Mode, Peer, UI,
 };
 
 pub async fn find_characteristics<T: UI>(
@@ -111,7 +110,15 @@ pub async fn find_characteristics<T: UI>(
                 key_size: 16,
             })?;
             let target = SocketAddr::new(addr, AddressType::LePublic, BOND_PSM);
-            match timeout(Duration::from_secs(60), socket.connect(target)).await {
+            // Up to a minute of SMP pairing, including however long the peer takes to answer
+            // its own dialog -- ticked so the log doesn't fall silent on the longest wait here.
+            match with_progress(
+                ui,
+                "Pairing over Bluetooth LE",
+                timeout(Duration::from_secs(60), socket.connect(target)),
+            )
+            .await
+            {
                 Ok(Ok(_)) => println!("    LE bonding socket connected"),
                 Ok(Err(e)) => println!("    LE bonding socket closed: {}", e),
                 Err(_) => println!("    LE bonding socket timed out"),
@@ -119,7 +126,7 @@ pub async fn find_characteristics<T: UI>(
             if !device.is_paired().await? {
                 return Err(bluer::Error {
                     kind: ErrorKind::AuthenticationFailed,
-                    message: "LE pairing did not complete. Confirm the pairing dialog on the sending device and try again.".to_string(),
+                    message: "LE pairing did not complete. The other device has to accept the pairing request -- on Android it can arrive as a notification rather than a dialog, and it is missed easily if the app is in the background. Accept it there, then start the transfer again.".to_string(),
                 });
             }
             println!("    LE bond established");
@@ -141,15 +148,44 @@ pub async fn find_characteristics<T: UI>(
 
         if !device.is_connected().await? {
             println!("    Connecting...");
-            let mut retries = 2;
+            ui.output("Opening the Bluetooth connection to the peer...");
+            // Capped attempts rather than one open-ended call. BlueZ's own connect timeout is
+            // around three quarters of a minute, and a radio busy with another program's scan
+            // burns all of it before failing with le-connection-abort-by-local -- measured at 44
+            // seconds on 白い熊's machine, in one silent block. Three short attempts cover a
+            // momentary collision and give up in a third of the time.
+            let mut retries = 3;
             loop {
-                match device.connect().await {
-                    Ok(()) => break,
-                    Err(err) if retries > 0 => {
+                retries -= 1;
+                match with_progress(
+                    ui,
+                    "Opening the Bluetooth connection",
+                    timeout(Duration::from_secs(15), device.connect()),
+                )
+                .await
+                {
+                    Ok(Ok(())) => break,
+                    Ok(Err(err)) if retries > 0 => {
                         println!("    Connect error: {}", &err);
-                        retries -= 1;
+                        ui.output(&format!("Bluetooth connection failed ({}); retrying...", err));
                     }
-                    Err(err) => return Err(err),
+                    Ok(Err(err)) => return Err(err),
+                    Err(_) if retries > 0 => {
+                        println!("    Connect timed out");
+                        ui.output("The other device did not answer in time; retrying...");
+                        // Our timeout does not reach into BlueZ, which is still trying. Without
+                        // this the immediate retry comes straight back with "Operation already in
+                        // progress" and burns the attempt for nothing.
+                        if let Err(e) = device.disconnect().await {
+                            println!("    Could not cancel the pending connect: {}", e);
+                        }
+                    }
+                    Err(_) => {
+                        return Err(bluer::Error {
+                            kind: ErrorKind::Failed,
+                            message: "Could not open a Bluetooth connection to the other device. If something else on this computer is scanning for Bluetooth devices, close it and try again.".to_string(),
+                        })
+                    }
                 }
             }
             println!("    Connected");
@@ -171,7 +207,8 @@ pub async fn find_characteristics<T: UI>(
         // on a first empty or partial read.
         let mut retries = 3;
         loop {
-            for service in device.services().await? {
+            ui.output("Reading the peer's Bluetooth services...");
+            for service in with_progress(ui, "Reading the peer's Bluetooth services", device.services()).await? {
                 let uuid = service.uuid().await?;
                 println!("    Service UUID: {}", &uuid);
                 println!("    Service data: {:?}", service.all_properties().await?);
@@ -288,7 +325,11 @@ async fn ensure_le_link(device: &Device) {
         device.address(),
         addr_type
     );
-    match timeout(Duration::from_secs(15), socket.connect(target)).await {
+    // Five seconds, not fifteen: this is a best-effort nudge to make BlueZ pick the LE bearer,
+    // and the code carries on either way. When the radio is busy -- another program's Bluetooth
+    // scan will do it -- the socket cannot connect at all, and the old timeout simply added a
+    // quarter minute of silence before the real connect was even tried (白い熊, 2026-08-08).
+    match timeout(Duration::from_secs(5), socket.connect(target)).await {
         Ok(Ok(_)) => println!("    LE link socket connected"),
         Ok(Err(e)) => println!(
             "    LE link socket refused: {} (expected; the link is the point)",
@@ -328,7 +369,34 @@ async fn probe_for_service(device: &Device, fc_uuid: &Uuid) -> bluer::Result<boo
     Ok(found)
 }
 
-pub async fn scan(adapter: &Adapter) -> bluer::Result<Device> {
+/// A device BlueZ already knows that lists our service and is being heard right now.
+///
+/// The scan below cannot rely on discovery events alone. `DeviceAdded` fires for a device BlueZ
+/// has never seen; for one it already knows -- a bonded phone, say -- the only thing that can wake
+/// the event loop is a property *change*, and a bonded peer's UUID list never changes, so what we
+/// end up waiting for is an RSSI update, which BlueZ emits on its own schedule. Measured on
+/// 白い熊's setup 2026-08-08: ninety seconds and more before a phone that had been advertising the
+/// whole time was picked up -- while sitting in our own five-second diagnostic dump, with our
+/// service UUID and a live RSSI, in every round.
+///
+/// The RSSI is the liveness test: BlueZ only carries one for a device it is hearing in this
+/// discovery session, so a stale cache entry left by an earlier transfer cannot be mistaken for a
+/// peer that is on the air now.
+async fn visible_peer(adapter: &Adapter, fc_uuid: &Uuid) -> bluer::Result<Option<Device>> {
+    for addr in adapter.device_addresses().await? {
+        let device = adapter.device(addr)?;
+        if device.rssi().await.ok().flatten().is_none() {
+            continue;
+        }
+        let uuids = device.uuids().await.ok().flatten().unwrap_or_default();
+        if uuids.contains(fc_uuid) {
+            return Ok(Some(device));
+        }
+    }
+    Ok(None)
+}
+
+pub async fn scan<T: UI>(adapter: &Adapter, ui: &T) -> bluer::Result<Device> {
     let fc_uuid = Uuid::parse_str(SERVICE_UUID).expect("Could not parse service UUID");
     let mut uuids = HashSet::new();
     uuids.insert(fc_uuid);
@@ -397,9 +465,21 @@ pub async fn scan(adapter: &Adapter) -> bluer::Result<Device> {
         pin_mut!(discover);
         // DeviceAdded now repeats per property change, so only log/probe each address once.
         let mut reported: HashSet<Address> = HashSet::new();
-        let mut probed: HashSet<Address> = HashSet::new();
+        // When each paired device was last probed. A single write-off used to be permanent, so a
+        // probe that landed a moment before the peer went on the air took that peer out of the
+        // running for the rest of the scan.
+        let mut probed: HashMap<Address, Instant> = HashMap::new();
         let mut diag = interval(Duration::from_secs(5));
         diag.tick().await; // the first tick is immediate; we want the first dump at +5s
+        // Sweeping what BlueZ already knows is what actually finds a bonded peer (see
+        // visible_peer). Starting at +1s rather than immediately, so any RSSI we act on was
+        // measured in this discovery session -- at a 250ms advertising interval that is several
+        // advertisements' worth of margin.
+        let mut sweep = interval(Duration::from_secs(1));
+        sweep.tick().await;
+        let mut scanned_for = 0u64;
+        // Probes run as their own tasks and report a hit here (see below).
+        let (probe_tx, mut probe_rx) = tokio::sync::mpsc::channel::<Address>(4);
         loop {
             tokio::select! {
                 event = discover.next() => {
@@ -410,8 +490,26 @@ pub async fn scan(adapter: &Adapter) -> bluer::Result<Device> {
                             // Known devices are included regardless of the discovery filter,
                             // so check the service ourselves.
                             let dev_uuids = device.uuids().await.ok().flatten().unwrap_or_default();
+                            // The same liveness test the sweep applies, and for the same reason:
+                            // BlueZ keeps an entry for a peer it has bonded with, complete with
+                            // every service it saw last time -- ours included -- and an event on
+                            // that entry looks exactly like a live find. Taking it cost 22
+                            // seconds a round on 白い熊's machine (2026-08-08, 78:6B:6C:2F:ED:75,
+                            // carrying the phone's whole classic-Bluetooth profile list), while
+                            // the phone was advertising under a fresh private address two feet
+                            // away. Only a device we are hearing right now has an RSSI.
                             if dev_uuids.contains(&fc_uuid) {
+                                if device.rssi().await.ok().flatten().is_none() {
+                                    if reported.insert(addr) {
+                                        println!(
+                                            "Device {} lists our service but is not being heard; ignoring the cache entry",
+                                            addr
+                                        );
+                                    }
+                                    continue;
+                                }
                                 println!("Found peer {}", addr);
+                                ui.output(&format!("Found the other device over Bluetooth ({})", addr));
                                 return Ok(device);
                             }
                             // For a *bonded* device, BlueZ's UUIDs property is its cached view
@@ -428,25 +526,64 @@ pub async fn scan(adapter: &Adapter) -> bluer::Result<Device> {
                             // So ask over an actual connection instead. device.services()
                             // waits for BlueZ to resolve the GATT database, which is the
                             // source of truth the cached property is only an approximation of.
-                            if device.is_paired().await.unwrap_or(false) && probed.insert(addr) {
+                            // A bonded peer's cached UUID list is BlueZ's view from the last
+                            // connection and is never refreshed from advertisements, so a peer
+                            // that IS advertising our service can be missing from it. Asking over
+                            // a connection is the way to find out -- but it is done off to the
+                            // side, and only for a device we can actually hear.
+                            //
+                            // Both of those are the fix for a 63-second scan (白い熊, 2026-08-08).
+                            // This probe used to be awaited inside this loop, aimed at every
+                            // paired device BlueZ knew of, in range or not. It picked a headset
+                            // that was switched off, spent 15s timing out on the LE link socket
+                            // and another 47s in BlueZ's connect, and for that entire minute the
+                            // loop could process neither discovery events nor the sweep below --
+                            // while the phone advertised two feet away. It was found 20ms after
+                            // the probe finally gave up.
+                            let in_range = device.rssi().await.ok().flatten().is_some();
+                            let due_for_probe = probed
+                                .get(&addr)
+                                .is_none_or(|last| last.elapsed() >= Duration::from_secs(30));
+                            if in_range && device.is_paired().await.unwrap_or(false) && due_for_probe {
+                                probed.insert(addr, Instant::now());
                                 println!(
                                     "Paired device {} doesn't list our service; connecting to re-resolve its GATT database",
                                     addr
                                 );
-                                match probe_for_service(&device, &fc_uuid).await {
-                                    Ok(true) => {
-                                        println!("Found peer {} after re-resolving services", addr);
-                                        return Ok(device);
+                                ui.output(&format!(
+                                    "Checking a device we have paired with before ({})...",
+                                    addr
+                                ));
+                                let probe_adapter = adapter.clone();
+                                let probe_tx = probe_tx.clone();
+                                tokio::spawn(async move {
+                                    let Ok(device) = probe_adapter.device(addr) else { return };
+                                    // Capped as well as concurrent: a connect that hangs must not
+                                    // leave a probe running for the rest of the transfer.
+                                    match timeout(
+                                        Duration::from_secs(20),
+                                        probe_for_service(&device, &fc_uuid),
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(true)) => {
+                                            println!("Found peer {} after re-resolving services", addr);
+                                            let _ = probe_tx.send(addr).await;
+                                        }
+                                        Ok(Ok(false)) => {
+                                            println!("    {} has no Flying Carpet service; disconnecting", addr);
+                                            let _ = device.disconnect().await;
+                                        }
+                                        Ok(Err(e)) => {
+                                            println!("    Could not probe {}: {}", addr, e);
+                                            let _ = device.disconnect().await;
+                                        }
+                                        Err(_) => {
+                                            println!("    Probe of {} timed out", addr);
+                                            let _ = device.disconnect().await;
+                                        }
                                     }
-                                    Ok(false) => {
-                                        println!("    {} has no Flying Carpet service; disconnecting", addr);
-                                        let _ = device.disconnect().await;
-                                    }
-                                    Err(e) => {
-                                        println!("    Could not probe {}: {}", addr, e);
-                                        let _ = device.disconnect().await;
-                                    }
-                                }
+                                });
                             }
                             if reported.insert(addr) {
                                 println!(
@@ -466,11 +603,37 @@ pub async fn scan(adapter: &Adapter) -> bluer::Result<Device> {
                         other_event => println!("Processed other event: {:?}", other_event),
                     }
                 }
+                // A background probe found our service on a device BlueZ's cache had written off.
+                Some(addr) = probe_rx.recv() => {
+                    ui.output(&format!("Found the other device over Bluetooth ({})", addr));
+                    return Ok(adapter.device(addr)?);
+                }
+                // The device list BlueZ already holds, checked every second: the fast path,
+                // and for a bonded peer the only one that answers in reasonable time.
+                _ = sweep.tick() => {
+                    if let Some(device) = visible_peer(adapter, &fc_uuid).await? {
+                        let addr = device.address();
+                        println!("Found peer {} in BlueZ's device list", addr);
+                        ui.output(&format!("Found the other device over Bluetooth ({})", addr));
+                        return Ok(device);
+                    }
+                }
                 // Periodic dump of what BlueZ believes, so a scan that finds nothing says why
                 // rather than going silent. In particular this shows whether a bonded peer's
                 // UUID list ever gains our service while it is advertising.
                 _ = diag.tick() => {
                     println!("--- still scanning; known devices ---");
+                    // The app used to sit silent through every one of these rounds, which is
+                    // what made a working scan look like a hang (白い熊 2026-08-07). Say how
+                    // long it has been and how much is in range; the detail stays on stdout.
+                    let seen = adapter.device_addresses().await?.len();
+                    scanned_for += 5;
+                    ui.output(&format!(
+                        "Still looking for the other device over Bluetooth... ({}s, {} device{} in range)",
+                        scanned_for,
+                        seen,
+                        if seen == 1 { "" } else { "s" },
+                    ));
                     for addr in adapter.device_addresses().await? {
                         let device = adapter.device(addr)?;
                         println!(
@@ -502,6 +665,7 @@ pub async fn exchange_info<T: UI>(
     characteristics: HashMap<&str, Characteristic>,
     mode: &Mode,
     ui: &T,
+    connection_mode: ConnectionMode,
 ) -> bluer::Result<(String, String, String)> {
     // have to use this with write_ext() for the write requests: iOS wouldn't receive unconfirmed writes, which WriteOp::Request provides.
     // not sure if iOS requires it or if i did somehow. bluer seems to default to WriteOp::Command which has no confirmation.
@@ -531,7 +695,7 @@ pub async fn exchange_info<T: UI>(
         kind: ErrorKind::ServicesUnresolved,
         message: e.to_string(),
     })?;
-    if is_hosting(&peer, mode) {
+    if we_supply_credentials(connection_mode, &peer, mode) {
         // write ssid and password
         let password = generate_password();
         let (_, ssid) = get_key_and_ssid(&password);

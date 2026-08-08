@@ -178,16 +178,7 @@ const SECTIONS = [
         ],
       }),
       textSurface('bluetooth', '“Use Bluetooth” label', [labelField('bluetooth.text', 'Label text')]),
-      textSurface('password', 'Password box', [], {
-        extraColors: [
-          colorField('password.bg', 'Background', BLACK),
-          colorField('password.stroke', 'Border colour', YELLOW),
-        ],
-        extraDims: [
-          dimField('password.strokeWidth', 'Border width', 16, BORDER_WIDTH),
-          dimField('password.cornerRadius', 'Corner radius', 60, CORNER_RADIUS),
-        ],
-      }),
+      textSurface('bluetoothHint', 'Line under the Bluetooth switch', []),
     ],
     colorGroups: [
       {
@@ -289,6 +280,46 @@ const SECTIONS = [
     ],
   },
   {
+    title: 'Password dialog',
+    note: 'The box that asks for the password shown on the other device — and, when more than one network interface is connected, which one to use.',
+    surfaces: [
+      textSurface('promptMessage', 'Question text', []),
+      textSurface('password', 'Password box', [], {
+        extraColors: [
+          colorField('password.bg', 'Background', BLACK),
+          colorField('password.stroke', 'Border colour', YELLOW),
+        ],
+        extraDims: [
+          dimField('password.strokeWidth', 'Border width', 16, BORDER_WIDTH),
+          dimField('password.cornerRadius', 'Corner radius', 60, CORNER_RADIUS),
+        ],
+      }),
+      textSurface('promptButton', 'Buttons (Cancel / OK)', [], {
+        extraColors: [
+          colorField('promptButton.bg', 'Background', BLACK),
+          colorField('promptButton.stroke', 'Border colour', YELLOW),
+        ],
+        extraDims: [
+          dimField('promptButton.strokeWidth', 'Border width', 16, 2),
+          dimField('promptButton.cornerRadius', 'Corner radius', 60, 999),
+        ],
+      }),
+    ],
+    colorGroups: [
+      {
+        title: 'Dialog',
+        colors: [
+          colorField('promptBg', 'Background', BLACK),
+          colorField('promptStroke', 'Border colour', YELLOW),
+        ],
+        dims: [
+          dimField('promptStrokeWidth', 'Border width', 16, 2),
+          dimField('promptCornerRadius', 'Corner radius', 60, 16),
+        ],
+      },
+    ],
+  },
+  {
     title: 'About page',
     note: 'The “About” dialog opened from the link under the title.',
     surfaces: [
@@ -362,6 +393,7 @@ const TEXT_SELECTORS = {
   about: '#aboutButton',
   uiButton: '#uiButton',
   bluetooth: 'label[for=bluetoothSwitch]',
+  bluetoothHint: '#bluetoothHint',
   modeInstruction: '#modeInstruction',
   connectionInstruction: '#connectionModeLabel',
   peerInstruction: '#peerLabel',
@@ -378,7 +410,11 @@ const TEXT_SELECTORS = {
   cancel: '#cancelButton',
   sendFolder: 'label[for=sendFolderCheckbox]',
   output: '#outputBox',
-  password: '#passwordBox',
+  // the password box lives in the prompt dialog (index.html), which doubles as the
+  // network-interface chooser -- so the dropdown wears the same dress as the text field
+  password: '#promptInput, #promptSelect',
+  promptMessage: '#promptMessage',
+  promptButton: '#promptCancel, #promptOk',
 };
 
 const TOGGLE_KEYS = ['send', 'receive', 'hotspot', 'sharedNetwork', 'androidOs', 'iosOs', 'linuxOs', 'macOs', 'windowsOs'];
@@ -410,8 +446,8 @@ function buildThemeCss() {
   css += `body { background-color: ${eColor('window.bg', BLACK)} !important; }\n`;
 
   // Simple text surfaces.
-  for (const key of ['title', 'version', 'about', 'bluetooth', 'modeInstruction', 'connectionInstruction',
-    'peerInstruction', 'sendFolder']) {
+  for (const key of ['title', 'version', 'about', 'bluetooth', 'bluetoothHint', 'modeInstruction',
+    'connectionInstruction', 'peerInstruction', 'sendFolder']) {
     css += `${TEXT_SELECTORS[key]} { ${textDecls(key, true)} }\n`;
   }
   css += `#aboutButton { cursor: pointer; }\n`;
@@ -441,11 +477,24 @@ function buildThemeCss() {
     ` border: ${eDim('cancel.strokeWidth', BORDER_WIDTH)}px solid ${eColor('cancel.stroke', YELLOW)} !important;` +
     ` border-radius: ${eDim('cancel.cornerRadius', CORNER_RADIUS)}px !important; ${textDecls('cancel', true)} }\n`;
 
-  // Password box.
-  css += `#passwordBox { background-color: ${eColor('password.bg', BLACK)} !important;` +
+  // Password dialog: the card, the question, the box that takes the password (or picks the
+  // network interface), and the Cancel/OK pills. Bootstrap paints .form-control white on focus
+  // and .form-select's arrow dark, so both are overridden here rather than left to inherit.
+  const promptSel = TEXT_SELECTORS.password;
+  css += `#promptCard { background-color: ${eColor('promptBg', BLACK)} !important;` +
+    ` border: ${eDim('promptStrokeWidth', 2)}px solid ${eColor('promptStroke', YELLOW)} !important;` +
+    ` border-radius: ${eDim('promptCornerRadius', 16)}px !important; }\n`;
+  css += `#promptMessage { ${textDecls('promptMessage', true)} }\n`;
+  css += `${promptSel} { background-color: ${eColor('password.bg', BLACK)} !important;` +
     ` border: ${eDim('password.strokeWidth', BORDER_WIDTH)}px solid ${eColor('password.stroke', YELLOW)} !important;` +
-    ` border-radius: ${eDim('password.cornerRadius', CORNER_RADIUS)}px !important; ${textDecls('password', true)} }\n`;
-  css += `#passwordBox::placeholder { color: ${eColor('password.color', YELLOW)}; opacity: 0.7; }\n`;
+    ` border-radius: ${eDim('password.cornerRadius', CORNER_RADIUS)}px !important;` +
+    ` box-shadow: none !important; ${textDecls('password', true)} }\n`;
+  css += `#promptInput::placeholder { color: ${eColor('password.color', YELLOW)}; opacity: 0.7; }\n`;
+  css += `#promptSelect { background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='${encColor(eColor('password.color', YELLOW))}' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e") !important; }\n`;
+  css += `#promptSelect option { background-color: ${eColor('password.bg', BLACK)}; color: ${eColor('password.color', YELLOW)}; }\n`;
+  css += `${TEXT_SELECTORS.promptButton} { background-color: ${eColor('promptButton.bg', BLACK)} !important;` +
+    ` border: ${eDim('promptButton.strokeWidth', 2)}px solid ${eColor('promptButton.stroke', YELLOW)} !important;` +
+    ` border-radius: ${eDim('promptButton.cornerRadius', 999)}px !important; ${textDecls('promptButton', true)} }\n`;
 
   // Output box.
   css += `#outputBox { background-color: ${eColor('output.bg', BLACK)} !important;` +

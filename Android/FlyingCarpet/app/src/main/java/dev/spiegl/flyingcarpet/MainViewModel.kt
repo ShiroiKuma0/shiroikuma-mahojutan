@@ -72,9 +72,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     // PBKDF2-stretched Noise PSK, derived once per transfer off the main thread (600k
     // iterations); also the source of the discovery HMAC key (deriveDiscoveryKey).
     private lateinit var psk: ByteArray
-    // Fork default: Shared Network rather than upstream's Hotspot. Note this starts the app with the
-    // Bluetooth switch greyed out -- BLE negotiates hotspot credentials, so it has nothing to do in
-    // shared network mode and every platform disables it there.
+    // Fork default: Shared Network rather than upstream's Hotspot. The Bluetooth switch stays
+    // usable there (fork, 白い熊 2026-08-07): BLE carries the transfer password when no hotspot
+    // credentials need negotiating.
     var connectionMode: ConnectionMode = ConnectionMode.SharedNetwork
     var files: MutableList<DocumentFile> = mutableListOf()
     var fileStreams: MutableList<InputStream> = mutableListOf()
@@ -200,11 +200,23 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 || (peer == Peer.Android && mode == Mode.Receiving)
     }
 
-    // Bluetooth is only used in hotspot mode: in shared network mode the password is
-    // exchanged manually (receiver displays it, sender enters or scans it).
+    // Bluetooth works in both connection modes (fork, 白い熊 2026-08-07). In hotspot mode it
+    // negotiates the hotspot's SSID and password; in shared network mode there is no hotspot, so
+    // it carries the transfer password alone -- the switch is the toggle between "use Bluetooth"
+    // and "scan the QR code or type the password".
     fun usingBluetooth(): Boolean {
-        return bluetooth.active && connectionMode == ConnectionMode.Hotspot
+        return bluetooth.active
     }
+
+    override fun usingSharedNetwork(): Boolean {
+        return connectionMode == ConnectionMode.SharedNetwork
+    }
+
+    // The GATT client callbacks live in BluetoothReceiver, which holds this delegate and not the
+    // Bluetooth object that owns the ticker; these two forward for it.
+    override fun bleWait(what: String) = bluetooth.startWaitTicker(what)
+
+    override fun bleWaitDone() = bluetooth.stopWaitTicker()
 
     suspend fun startTransfer() {
         outputText("\nStarting Transfer")
@@ -315,6 +327,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         progressDetailsMut.postValue("")
         progressTotalDetailsMut.postValue("")
         totalProgressBarMut.postValue(0)
+        // The per-file bar too. Its two neighbours were cleared here and it was not, so a
+        // cancelled transfer left the bar frozen at whatever fraction it had reached, under a
+        // log that had stopped and above an idle Start button (白い熊, 2026-08-08).
+        progressBarMut.postValue(0)
         totals = null
         // cancel shared network discovery if it's running
         discoveryManager?.cancel()
@@ -378,13 +394,44 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             Log.i("Flying Carpet", "connectToPeer() replayed after hotspot start; ignoring")
             return
         }
+        // The same replay reaches the shared-network path, which has no hotspot flag to catch it.
+        // Left unguarded it would clear the credentials below and generate a second password,
+        // leaving the peer holding the first one, so the transfer already under way wins.
+        if (connectionMode == ConnectionMode.SharedNetwork && transferCoroutine?.isActive == true) {
+            Log.i("Flying Carpet", "connectToPeer() replayed after the shared-network transfer started; ignoring")
+            return
+        }
         warnIfVpnActive()
         ssid = ""
         password = ""
         if (connectionMode == ConnectionMode.SharedNetwork) {
-            // no hotspot and no bluetooth: the receiver generates and displays a password,
-            // the sender enters or scans it, and discovery finds the peer on the network
-            // both devices are already connected to.
+            // No hotspot: discovery finds the peer on the network both devices are already on,
+            // and the only thing to agree on is the password. The receiver generates it either
+            // way; the Bluetooth switch decides how the sender gets it -- over the BLE link, or
+            // off the QR code the receiver displays.
+            if (bluetooth.active) {
+                if (mode == Mode.Receiving) {
+                    // We are the central. Generate the password and write it to the sending
+                    // device; the SSID goes with it, derived from the password as everywhere
+                    // else, and neither side does anything with it in this mode.
+                    password = generatePassword()
+                    val (derivedSsid, _) = getSsidAndKey(password)
+                    ssid = derivedSsid
+                    outputText("Password: $password")
+                    outputText("Sending it to the other device over Bluetooth...")
+                    // our half of the exchange is done, as in the hotspot host branch below:
+                    // a post-bond reconnection must not replay read-OS -> write-OS from here
+                    bluetooth.bluetoothReceiver.exchangeComplete = true
+                    // the password follows automatically once this write lands (onCharacteristicWrite)
+                    bluetooth.bluetoothReceiver.write(SSID_CHARACTERISTIC_UUID, ssid.toByteArray())
+                    launchSharedNetworkTransfer()
+                } else {
+                    // We are the peripheral, and the receiving device has the password: wait for
+                    // it to be written to us. gotPassword() picks the transfer up from there.
+                    outputText("Waiting for the other device to send us the password over Bluetooth...")
+                }
+                return
+            }
             if (mode == Mode.Receiving) {
                 password = generatePassword()
                 outputText("Password: $password")
@@ -816,6 +863,17 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // replay this flag suppresses is the retry we need.
         if (password != "") {
             bluetooth.bluetoothReceiver.exchangeComplete = true
+        }
+        // In shared network mode there is no hotspot to join: the password was the whole point of
+        // the exchange, and the transfer goes straight to discovery on the network we are already
+        // on. Guard against the replay for the same reason connectToPeer() does.
+        if (connectionMode == ConnectionMode.SharedNetwork) {
+            if (transferCoroutine?.isActive == true) {
+                Log.i("Flying Carpet", "gotPassword() replayed after the shared-network transfer started; ignoring")
+                return
+            }
+            launchSharedNetworkTransfer()
+            return
         }
         joinHotspot()
     }

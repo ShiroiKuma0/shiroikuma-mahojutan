@@ -92,6 +92,27 @@ pub enum ConnectionMode {
     SharedNetwork,
 }
 
+/// Which side supplies the credentials during the Bluetooth exchange — the one rule both BLE
+/// roles (peripheral and central) and every platform have to agree on, so it lives here rather
+/// than being spelled out at each of its call sites.
+///
+/// Hotspot mode: whoever hosts the hotspot, because they are the ones who own an SSID and a
+/// password to hand over. Shared network mode: there is no hotspot and no SSID that matters, so
+/// the rule is the one the manual path already uses — the **receiver** generates the password
+/// (it is the side that would otherwise display it) and the sender takes it, over BLE instead of
+/// off a QR code. The SSID still travels, derived from the password like everywhere else, and is
+/// simply unused at the other end.
+pub(crate) fn we_supply_credentials(
+    connection_mode: ConnectionMode,
+    peer: &Peer,
+    mode: &Mode,
+) -> bool {
+    match connection_mode {
+        ConnectionMode::SharedNetwork => matches!(mode, Mode::Receive(_)),
+        ConnectionMode::Hotspot => network::is_hosting(peer, mode),
+    }
+}
+
 pub trait UI: Clone + Send + 'static {
     fn output(&self, msg: &str);
     fn show_progress_bar(&self);
@@ -311,12 +332,12 @@ pub async fn start_transfer<T: UI>(
     // for windows and linux, the central/client api can read and write synchronously, and we always know the ssid before starting hotspot, so we can just do that here before connecting to peer?
     // for servers/peripherals, does it matter? callbacks in both cases?
 
-    // Bluetooth is hotspot-only: in shared network mode the password is exchanged manually
-    // (receiver displays it, sender types it) and discovery finds the peer over IP.
-    let using_bluetooth = using_bluetooth && connection_mode == ConnectionMode::Hotspot;
-
+    // Bluetooth is available in both connection modes (fork, 白い熊 2026-08-07). In hotspot
+    // mode it hands over the hotspot's SSID and password; in shared network mode there is no
+    // hotspot, so it carries the transfer password alone and the SSID it returns is ignored —
+    // the alternative to the receiver displaying a QR code the sender scans or types.
     if using_bluetooth {
-        match negotiate_bluetooth(&mode, ble_ui_rx, ui).await {
+        match negotiate_bluetooth(&mode, ble_ui_rx, ui, connection_mode).await {
             Ok((p, _ssid, pw)) => {
                 peer = Some(p);
                 if password.is_none() {
