@@ -15,9 +15,8 @@ use tokio::{sync::mpsc, sync::Mutex as TokioMutex, time::sleep};
 
 use crate::{
     error::{fc_error, FCError},
-    network::is_hosting,
-    utils::{generate_password, get_key_and_ssid, BluetoothMessage},
-    Mode, Peer, UI,
+    utils::{generate_password, get_key_and_ssid, with_progress, BluetoothMessage},
+    we_supply_credentials, ConnectionMode, Mode, Peer, UI,
 };
 
 impl From<bluer::Error> for FCError {
@@ -120,6 +119,7 @@ pub async fn negotiate_bluetooth<T: UI>(
     mode: &Mode,
     ble_ui_rx: mpsc::Receiver<bool>,
     ui: &T,
+    connection_mode: ConnectionMode,
 ) -> Result<(String, String, String), FCError> {
     // TODO: dedup with check_support(), but can't return adapter from it because windows doesn't, unless we stub which is annoying to pass it back into this.
     let session = Session::new().await?;
@@ -135,6 +135,23 @@ pub async fn negotiate_bluetooth<T: UI>(
     // pairing agent's rejection path both send into it.
     let (bt_tx, bt_rx) = mpsc::channel(1);
     let _agent_handle = register_pairing_agent(&session, ui, ble_ui_rx, bt_tx.clone()).await?;
+
+    // Nothing of ours is scanning yet, so a discovery already in progress belongs to something
+    // else on this machine -- a Bluetooth applet or settings page, typically. It matters: a
+    // classic-Bluetooth inquiry runs 10.24 seconds at a time, back to back, and the radio cannot
+    // establish an LE connection while it does. Measured on 白い熊's machine 2026-08-08: the peer
+    // was found in 16ms and the connection to it then took 61 seconds and failed
+    // (le-connection-abort-by-local), with btmon showing an uninterrupted inquiry loop through
+    // the whole window. We cannot stop another program's scan, so say so instead of letting it
+    // look like our own slowness.
+    if adapter.is_discovering().await.unwrap_or(false) {
+        ui.output(
+            "Note: another program on this computer is scanning for Bluetooth devices right now \
+             (a Bluetooth applet or settings window, usually). Its scan owns the radio, which can \
+             stretch the connection below from a second to a minute or fail it outright. Closing \
+             it makes Bluetooth transfers much faster.",
+        );
+    }
 
     // Bonds are never removed on cleanup. Linux used to drop its half of the bond after a
     // successful transfer with any non-macOS peer, on the premise that "Windows and Android
@@ -160,16 +177,17 @@ pub async fn negotiate_bluetooth<T: UI>(
         let (app_handle, adv_handle, peer_address) =
             peripheral::advertise(&adapter, tx, &ssid, &password).await?;
         ui.output("Started Bluetooth advertisement, waiting for receiving device...");
+        ui.output("Nothing happens here until the other device starts its transfer and finds us.");
         // The exchange runs in a block so every exit -- success or error (a rejected
         // pairing, an unexpected message) -- shares the teardown below. The error paths
         // used to return without dropping the GATT service or the link, leaving the next
         // transfer to inherit a live ACL in the opposite role (law 9 in
         // docs/bluetooth-field-guide.md, the §3a bug).
         let exchange: Result<(String, String, String), FCError> = async {
-            let peer_os = match process_bluetooth_message(
-                BluetoothMessage::PeerOS("".to_string()),
-                &mut rx,
+            let peer_os = match with_progress(
                 ui,
+                "Advertising over Bluetooth, waiting for the other device to connect",
+                process_bluetooth_message(BluetoothMessage::PeerOS("".to_string()), &mut rx, ui),
             )
             .await?
             {
@@ -186,20 +204,29 @@ pub async fn negotiate_bluetooth<T: UI>(
             drop(adv_handle);
 
             let peer = Peer::try_from(peer_os.as_str())?;
-            if is_hosting(&peer, mode) {
+            if we_supply_credentials(connection_mode, &peer, mode) {
                 // wait for peer to read our ssid and password
-                process_bluetooth_message(BluetoothMessage::PeerReadSsid, &mut rx, ui).await?;
+                with_progress(
+                    ui,
+                    "Waiting for the other device to read our network name",
+                    process_bluetooth_message(BluetoothMessage::PeerReadSsid, &mut rx, ui),
+                )
+                .await?;
                 println!("Peer read SSID");
-                process_bluetooth_message(BluetoothMessage::PeerReadPassword, &mut rx, ui)
-                    .await?;
+                with_progress(
+                    ui,
+                    "Waiting for the other device to read our password",
+                    process_bluetooth_message(BluetoothMessage::PeerReadPassword, &mut rx, ui),
+                )
+                .await?;
                 println!("Peer read password");
                 Ok((peer_os, ssid, password))
             } else {
                 // wait for peer to write its ssid and password
-                let ssid = match process_bluetooth_message(
-                    BluetoothMessage::SSID("".to_string()),
-                    &mut rx,
+                let ssid = match with_progress(
                     ui,
+                    "Waiting for the other device to send its details over Bluetooth",
+                    process_bluetooth_message(BluetoothMessage::SSID("".to_string()), &mut rx, ui),
                 )
                 .await?
                 {
@@ -212,10 +239,14 @@ pub async fn negotiate_bluetooth<T: UI>(
                     })?,
                 };
                 println!("Peer's SSID: {}", ssid);
-                let password = match process_bluetooth_message(
-                    BluetoothMessage::Password("".to_string()),
-                    &mut rx,
+                let password = match with_progress(
                     ui,
+                    "Waiting for the password over Bluetooth",
+                    process_bluetooth_message(
+                        BluetoothMessage::Password("".to_string()),
+                        &mut rx,
+                        ui,
+                    ),
                 )
                 .await?
                 {
@@ -276,6 +307,7 @@ pub async fn negotiate_bluetooth<T: UI>(
     } else {
         // acting as central
         ui.output("Started Bluetooth scan, waiting for sending device...");
+        ui.output("The other device has to be advertising -- start the transfer there too.");
         // Two rungs, and the bond-destroying one is now the second rather than the first.
         //
         // This retry was written for a poisoned bond — classic-only or dual-transport, left
@@ -291,7 +323,7 @@ pub async fn negotiate_bluetooth<T: UI>(
         // cannot clear their half programmatically at all, so the user is told what to do.
         let mut attempt = 0;
         let (device, characteristics) = loop {
-            let device = central::scan(&adapter).await?;
+            let device = central::scan(&adapter, ui).await?;
             ui.output("Found device");
             match find_characteristics(&device, ui).await {
                 Ok(c) => break (device, c),
@@ -312,19 +344,25 @@ pub async fn negotiate_bluetooth<T: UI>(
                     }
                     match attempt {
                         1 => {
-                            ui.output("Bluetooth connection failed; retrying...");
+                            // Say what went wrong, not just that something did: this is where a
+                            // pairing that was never accepted on the other device surfaces, and
+                            // the retry below is silent about it for another whole scan.
+                            ui.output(&format!("Bluetooth connection failed: {}", e));
+                            ui.output("Looking for the other device again...");
                         }
                         2 => {
+                            // This used to remove the pairing here. It is exactly the one-sided
+                            // unpairing law 4 of docs/bluetooth-field-guide.md forbids, and on
+                            // 2026-08-08 it did the predictable damage: two failed rounds against
+                            // a stale cache entry (fixed in central::scan) reached this rung, it
+                            // deleted a bond that was working, and the next round's fresh pairing
+                            // request arrived at a phone that still held its half -- which
+                            // dropped its bond and reported "pairing failed". Keeping the bond
+                            // costs nothing; a genuinely poisoned one is the user's to clear, on
+                            // both devices, which is the only way it can be done safely.
                             ui.output(
-                                "Bluetooth connection still failing; removing the pairing and pairing again.",
+                                "Bluetooth connection still failing. If it keeps failing, remove this computer from the other device's Bluetooth settings AND the other device from this computer's, then try again.",
                             );
-                            ui.output(
-                                "Note: this removes the pairing on this device only. If the transfer still fails, remove this device from the other device's Bluetooth settings as well, then try again.",
-                            );
-                            if let Err(remove_error) = adapter.remove_device(device.address()).await
-                            {
-                                println!("    Could not remove device: {}", remove_error);
-                            }
                         }
                         _ => Err(e)?,
                     }
@@ -332,7 +370,8 @@ pub async fn negotiate_bluetooth<T: UI>(
             }
         };
 
-        let info = exchange_info(characteristics, mode, ui).await;
+        ui.output("Exchanging details over Bluetooth...");
+        let info = exchange_info(characteristics, mode, ui, connection_mode).await;
         // Hang up, for the same reason the peripheral branch above does: on success every
         // write was a confirmed WriteOp::Request and every read has returned, so the
         // exchange is complete, and a link left up is one the next transfer inherits in the

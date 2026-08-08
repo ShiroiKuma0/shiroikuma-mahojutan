@@ -51,6 +51,9 @@ import com.journeyapps.barcodescanner.ScanOptions
 import dev.spiegl.flyingcarpet.R.id
 import dev.spiegl.flyingcarpet.R.layout
 
+// Where the Bluetooth switch state is kept between runs.
+private const val USE_BLUETOOTH_KEY = "use.bluetooth"
+
 class MainActivity : AppCompatActivity() {
     private lateinit var viewModel: MainViewModel
     private lateinit var outputBox: TextView
@@ -76,9 +79,12 @@ class MainActivity : AppCompatActivity() {
     // missing — recoverable by granting them, unlike missing hardware support. keeps the
     // switch usable so tapping it can re-request permissions (#101)
     private var bluetoothPermissionsMissing = false
-    // remembers the bluetooth switch state while in shared network mode, which forces
-    // it off; restored when the user returns to hotspot mode (mirrors the desktop UI)
-    private var bluetoothCheckedBeforeShared: Boolean? = null
+    // The switch state each connection mode was last used with lives in the ViewModel
+    // (bluetoothCheckedInHotspot / bluetoothCheckedInShared), so a rotation doesn't reset the
+    // choice back to the mode's starting default. True while the app is setting the switch
+    // itself: the listener fires for programmatic changes too, and those must not be recorded
+    // as the user having chosen anything.
+    private var settingBluetoothSwitch = false
     // The embedded QR preview inside the shared-network password dialog, while that dialog is up.
     // Held so the camera can be released when the activity goes to the background and picked up
     // again on return, and so the permission callback can start it after the fact.
@@ -86,6 +92,11 @@ class MainActivity : AppCompatActivity() {
     private var scannerHint: TextView? = null
     private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
     private val settings: Settings by lazy { Settings(this) }
+
+    // The Bluetooth switch state, remembered across restarts (alongside receive.lastDir in the
+    // fork's own settings store). Unset means "never touched": on when the radio is available,
+    // which is upstream's default.
+    private fun useBluetoothRemembered(): Boolean = settings.text(USE_BLUETOOTH_KEY) != "0"
 
     private fun getFilePicker(): ActivityResultLauncher<Array<String>> {
         return registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -655,6 +666,10 @@ class MainActivity : AppCompatActivity() {
         // cancel button
         val cancelButton = findViewById<Button>(id.cancelButton)
         cancelButton.setOnClickListener {
+            // Said here rather than in cleanUpTransfer(), which every finished transfer runs
+            // through, successful ones included. Without it the log simply stopped mid-sentence
+            // and nothing distinguished a cancelled transfer from one that had died.
+            viewModel.outputText("Transfer cancelled.")
             viewModel.cleanUpTransfer()
         }
 
@@ -695,6 +710,8 @@ class MainActivity : AppCompatActivity() {
                 sendFolderCheckBox.visibility = View.GONE
                 refreshLastFolderButton()
             }
+            // which side shows the QR code and which scans it depends on this choice
+            updateBluetoothHint()
         }
 
         // about button
@@ -775,32 +792,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // Bluetooth is usable in both connection modes (fork, 白い熊 2026-08-07): in hotspot mode it
+    // negotiates the hotspot credentials, in shared network mode it carries the transfer password
+    // alone. The switch itself belongs to the user -- changing the connection mode never turns it
+    // on or off, and the choice outlives a restart (useBluetoothRemembered). Only Bluetooth being
+    // unavailable overrides it, and that disables the switch rather than pretending it is off.
     private fun applyConnectionModeUi() {
-        if (viewModel.connectionMode == ConnectionMode.SharedNetwork) {
-            // bluetooth isn't used in shared network mode: turn the switch off, not just
-            // disabled, remembering its state so hotspot mode can restore it. unchecking
-            // fires the switch listener, which also sets bluetooth.active = false.
-            if (bluetoothCheckedBeforeShared == null) {
-                bluetoothCheckedBeforeShared = bluetoothSwitch.isChecked
-            }
-            bluetoothSwitch.isChecked = false
-            setBluetoothSwitchEnabled(false)
-            bluetoothIcon.isVisible = false
-            // peer OS is found via discovery, so no peer group either. set after the
-            // switch listener has run, since it makes the peer group visible.
-            peerGroup.isVisible = false
-            peerInstruction.isVisible = false
-        } else {
-            // usable if initialized, or if only permissions are missing (tapping the
-            // switch then re-requests them, #101)
-            setBluetoothSwitchEnabled(bluetoothAvailable || bluetoothPermissionsMissing)
-            bluetoothCheckedBeforeShared?.let {
-                bluetoothSwitch.isChecked = bluetoothAvailable && it
-                bluetoothCheckedBeforeShared = null
-            }
-            bluetoothIcon.isVisible = bluetoothSwitch.isChecked
-            peerGroup.isVisible = !viewModel.bluetooth.active
-            peerInstruction.isVisible = !viewModel.bluetooth.active
+        val sharedNetwork = viewModel.connectionMode == ConnectionMode.SharedNetwork
+        // usable if initialized, or if only permissions are missing (tapping the
+        // switch then re-requests them, #101)
+        setBluetoothSwitchEnabled(bluetoothAvailable || bluetoothPermissionsMissing)
+        if (!bluetoothAvailable) {
+            setBluetoothSwitchChecked(false)
+        }
+        // the switch listener only runs when the value actually changes, so assert this here too
+        // rather than leaving "Bluetooth is on" and "the switch is on" free to disagree
+        viewModel.bluetooth.active = bluetoothSwitch.isChecked
+        bluetoothIcon.isVisible = bluetoothSwitch.isChecked
+        // peer OS comes from discovery in shared network mode and over BLE when Bluetooth is on,
+        // so the group is only asked for in hotspot mode without Bluetooth. Set after the switch
+        // listener has run, since that makes the peer group visible.
+        val needPeer = !sharedNetwork && !viewModel.bluetooth.active
+        peerGroup.isVisible = needPeer
+        peerInstruction.isVisible = needPeer
+        updateBluetoothHint()
+    }
+
+    // The line under the switch. With Bluetooth off it says who will display the QR code and
+    // password and who will scan or type it -- before the transfer starts, rather than when the QR
+    // code is already on screen (白い熊 2026-08-07). Hotspot mode stays deliberately vague about
+    // which device is which: there it follows from the peer's OS, not from send/receive.
+    // Portrait only: the landscape layout has no room under the switch, and findViewById returns
+    // null there, which this tolerates.
+    private fun updateBluetoothHint() {
+        val hint = findViewById<TextView>(id.bluetoothHint) ?: return
+        val sending = findViewById<MaterialButtonToggleGroup>(id.modeGroup)?.checkedButtonId
+        hint.text = when {
+            bluetoothSwitch.isChecked -> getString(R.string.bluetoothHintOn)
+            viewModel.connectionMode != ConnectionMode.SharedNetwork ->
+                getString(R.string.bluetoothHintHotspot)
+            sending == id.sendButton -> getString(R.string.bluetoothHintSending)
+            sending == id.receiveButton -> getString(R.string.bluetoothHintReceiving)
+            else -> getString(R.string.bluetoothHintOff)
         }
     }
 
@@ -982,8 +1015,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<TextView>(id.aboutButton).isClickable = enabled
         setBluetoothSwitchEnabled(
-            enabled && (bluetoothAvailable || bluetoothPermissionsMissing) &&
-            viewModel.connectionMode == ConnectionMode.Hotspot
+            enabled && (bluetoothAvailable || bluetoothPermissionsMissing)
         )
 
         // Last, not first. refreshLastFolderButton() decides visibility partly from the start
@@ -1003,6 +1035,14 @@ class MainActivity : AppCompatActivity() {
     // state change, i.e. when the user touched it. Re-resolve the state and snap the drawables
     // (and any half-finished thumb animation) to it so a change to the switch is always visible
     // immediately. Every isEnabled write goes through here so no call site can reintroduce it.
+    // Every programmatic check/uncheck goes through here, so the listener can tell the app's own
+    // writes from the user's tap and only remember the latter.
+    private fun setBluetoothSwitchChecked(checked: Boolean) {
+        settingBluetoothSwitch = true
+        bluetoothSwitch.isChecked = checked
+        settingBluetoothSwitch = false
+    }
+
     private fun setBluetoothSwitchEnabled(enabled: Boolean) {
         bluetoothSwitch.isEnabled = enabled
         bluetoothSwitch.refreshDrawableState()
@@ -1185,7 +1225,7 @@ class MainActivity : AppCompatActivity() {
                 // leave the switch enabled: tapping it re-requests permissions (#101)
                 viewModel.outputText("Bluetooth permissions denied. Tap the Bluetooth switch to grant them (or grant them in system Settings), or continue without Bluetooth.")
                 Log.e("Bluetooth", "To use Flying Carpet, either grant Bluetooth permissions to the app, or turn off the Use Bluetooth switch.")
-                bluetoothSwitch.isChecked = false
+                setBluetoothSwitchChecked(false)
             }
         }
 
@@ -1202,14 +1242,21 @@ class MainActivity : AppCompatActivity() {
                 // user is turning Bluetooth on after a permission denial: retry
                 // initialization, which re-requests permissions if still missing (#101).
                 // uncheck first; initializeBluetooth() checks it on success.
-                bluetoothSwitch.isChecked = false
+                setBluetoothSwitchChecked(false)
                 initializeBluetooth()
                 return@setOnCheckedChangeListener
             }
             bluetoothIcon.isVisible = isChecked
-            peerGroup.isVisible = !isChecked
-            peerInstruction.isVisible = !isChecked
+            // shared network mode never asks for the peer OS, Bluetooth or not: discovery finds it
+            val needPeer = !isChecked && viewModel.connectionMode == ConnectionMode.Hotspot
+            peerGroup.isVisible = needPeer
+            peerInstruction.isVisible = needPeer
             viewModel.bluetooth.active = isChecked
+            updateBluetoothHint()
+            // remember it across restarts -- but only when this is the user's doing, not the app
+            // reasserting the UI (an unavailable radio, a failed callback)
+            if (settingBluetoothSwitch) return@setOnCheckedChangeListener
+            settings.setText(USE_BLUETOOTH_KEY, if (isChecked) "1" else "0")
         }
 
         // Register for bluetooth bonding events exactly once, and against the application rather
@@ -1237,7 +1284,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 viewModel.outputText("Device can't use Bluetooth")
             }
-            bluetoothSwitch.isChecked = false
+            setBluetoothSwitchChecked(false)
             setBluetoothSwitchEnabled(false)
         }
     }
@@ -1248,7 +1295,7 @@ class MainActivity : AppCompatActivity() {
             bluetoothPermissionsMissing = true
             bluetoothAvailable = false
             viewModel.bluetooth.active = false
-            bluetoothSwitch.isChecked = false
+            setBluetoothSwitchChecked(false)
             applyConnectionModeUi()
             bluetoothRequestPermissionLauncher.launch(permissionsToRequest())
             return false
@@ -1268,12 +1315,11 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e("Bluetooth", "Could not initialize Bluetooth: $e")
         }
-        viewModel.bluetooth.active = initialized
         bluetoothAvailable = initialized
-        bluetoothSwitch.isChecked = initialized
-        // reassert the connection mode UI: in shared network mode this forces the switch
-        // back off (remembering that bluetooth is available so hotspot mode can restore
-        // it) and keeps the peer group hidden
+        // Not plain `isChecked = initialized`: an available radio comes up in whatever state it was
+        // last left in (on for a first run), and this write must not be recorded as the user's own.
+        setBluetoothSwitchChecked(initialized && useBluetoothRemembered())
+        viewModel.bluetooth.active = bluetoothSwitch.isChecked
         applyConnectionModeUi()
         return initialized
     }
@@ -1284,7 +1330,7 @@ class MainActivity : AppCompatActivity() {
     // would hit ViewRootImpl's thread check.
     private fun enableBluetoothUi(enabled: Boolean) {
         runOnUiThread {
-            bluetoothSwitch.isChecked = enabled
+            setBluetoothSwitchChecked(enabled)
             setBluetoothSwitchEnabled(enabled)
             bluetoothIcon.isVisible = enabled
         }
