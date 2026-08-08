@@ -3,9 +3,8 @@ mod peripheral;
 
 use crate::{
     error::{fc_error, FCError},
-    network::{self, is_hosting},
     utils::{generate_password, get_key_and_ssid, BluetoothMessage},
-    Mode, Peer, UI,
+    we_supply_credentials, ConnectionMode, Mode, Peer, UI,
 };
 use central::BluetoothCentral;
 use peripheral::BluetoothPeripheral;
@@ -67,6 +66,7 @@ pub async fn negotiate_bluetooth<T: UI>(
     mode: &Mode,
     ble_ui_rx: mpsc::Receiver<bool>,
     ui: &T,
+    connection_mode: ConnectionMode,
 ) -> Result<(String, String, String), FCError> {
     let (tx, mut rx) = mpsc::channel(1);
     let mut peripheral = BluetoothPeripheral::new(tx.clone())?;
@@ -97,7 +97,7 @@ pub async fn negotiate_bluetooth<T: UI>(
         }
 
         let peer = Peer::try_from(peer_os.as_str())?;
-        let result = if is_hosting(&peer, mode) {
+        let result = if we_supply_credentials(connection_mode, &peer, mode) {
             let password = generate_password();
             let (_, ssid) = get_key_and_ssid(&password);
             {
@@ -301,7 +301,7 @@ pub async fn negotiate_bluetooth<T: UI>(
 
         // read or write ssid and password
         let peer_os = Peer::try_from(peer.as_str())?;
-        let (ssid, password) = if network::is_hosting(&peer_os, mode) {
+        let (ssid, password) = if we_supply_credentials(connection_mode, &peer_os, mode) {
             println!("hosting, writing wifi info to peer");
             let password = generate_password();
             let (_, ssid) = get_key_and_ssid(&password);

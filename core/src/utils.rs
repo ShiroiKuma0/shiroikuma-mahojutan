@@ -1,12 +1,39 @@
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::{
-    fs, io,
+    fs,
+    future::Future,
+    io,
     path::{Path, PathBuf},
     process,
+    time::Duration,
 };
 
-use crate::FCError;
+use crate::{FCError, UI};
+
+/// Runs `fut`, saying every few seconds what is still being waited for and how long it has been.
+///
+/// Bluetooth negotiation is a chain of steps that take real time and produce nothing to look at:
+/// a scan waiting for the peer's next advertisement, an SMP bond, a GATT database resolving.
+/// Half a minute of that used to pass with an empty log, which reads as a hang rather than as
+/// progress (白い熊 2026-08-07, phone -> PC over shared network). Every one of those waits is
+/// wrapped in this, so the log ticks the whole way through, as the hotspot path already did.
+pub async fn with_progress<T, U: UI>(ui: &U, what: &str, fut: impl Future<Output = T>) -> T {
+    tokio::pin!(fut);
+    // tokio's clock, not std's: identical in production, and it follows the paused clock the
+    // test below uses, so the elapsed seconds can be asserted on without waiting for them.
+    let started = tokio::time::Instant::now();
+    let mut tick = tokio::time::interval(Duration::from_secs(3));
+    tick.tick().await; // the first tick is immediate; the first message should not be
+    loop {
+        tokio::select! {
+            output = &mut fut => return output,
+            _ = tick.tick() => {
+                ui.output(&format!("{}... ({}s)", what, started.elapsed().as_secs()));
+            }
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum BluetoothMessage {
@@ -389,6 +416,37 @@ pub fn is_compatible(peer_version: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::utils::make_size_readable;
+
+    // A wait that ticks: the whole point of with_progress is that a long BLE step keeps saying
+    // so. Virtual time, so the ten seconds cost nothing.
+    #[tokio::test(start_paused = true)]
+    async fn with_progress_ticks_while_waiting() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct RecordingUI(Arc<Mutex<Vec<String>>>);
+        impl crate::UI for RecordingUI {
+            fn output(&self, msg: &str) {
+                self.0.lock().expect("lock").push(msg.to_string());
+            }
+            fn show_progress_bar(&self) {}
+            fn update_progress_bar(&self, _percent: u8) {}
+            fn update_total_progress_bar(&self, _percent: u8) {}
+            fn update_progress_details(&self, _current: &str, _total: &str) {}
+            fn enable_ui(&self) {}
+            fn show_pin(&self, _pin: &str) {}
+        }
+
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let answer = crate::utils::with_progress(&RecordingUI(lines.clone()), "Waiting", async {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            42
+        })
+        .await;
+        assert_eq!(answer, 42);
+        let lines = lines.lock().expect("lock");
+        assert_eq!(*lines, ["Waiting... (3s)", "Waiting... (6s)", "Waiting... (9s)"]);
+    }
 
     // The whole point of run_command_async: a transfer that's waiting on an external command
     // can still be cancelled. Aborting the task has to land while the child is running, not

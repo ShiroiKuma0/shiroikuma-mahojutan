@@ -401,7 +401,7 @@
         android:visibility="invisible"
         app:layout_constraintBottom_toTopOf="@+id/modeInstruction"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/bluetoothSwitch" />
+        app:layout_constraintTop_toBottomOf="@+id/bluetoothHint" />
 
     <TextView
         android:id="@+id/textView"
@@ -425,6 +425,20 @@
         app:layout_constraintTop_toBottomOf="@+id/textView"
         app:thumbTint="@color/bluetooth_switch_thumb"
         app:trackTint="@color/bluetooth_switch_track" />
+
+    <!-- What the switch above means for this transfer: who displays the QR code and password and
+         who scans or types it. Text set in MainActivity.updateBluetoothHint(). -->
+    <TextView
+        android:id="@+id/bluetoothHint"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:alpha="0.85"
+        android:textSize="12sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/bluetoothSwitch" />
 
     <ImageView
         android:id="@+id/bluetoothIcon"
