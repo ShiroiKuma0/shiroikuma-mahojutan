@@ -65,7 +65,7 @@ const val AboutMessage = """
 
     Flying Carpet transfers files between two Android, iOS, Linux, macOS, and Windows devices over ad hoc WiFi. In Hotspot mode, no access point or shared network is required, just two WiFi cards in close range. Hotspot mode does not work from one Apple device (macOS or iOS) to another, because Apple no longer allows hotspots to be started programmatically: use Shared Network mode for those transfers.
 
-    In Shared Network mode, both devices must be connected to the same network. No hotspot is created: the devices find each other on the network automatically. Bluetooth is not used in this mode. The receiving device generates and displays a password, which must be entered or scanned on the sending device.
+    In Shared Network mode, both devices must be connected to the same network. No hotspot is created: the devices find each other on the network automatically. The receiving device generates the password either way, and the "Use Bluetooth" switch decides how the sending device gets it: with the switch off the receiver displays the password and its QR code, to be scanned or typed on the sending device; with the switch on it is handed over Bluetooth and there is nothing to scan or type.
 
     INSTRUCTIONS
 

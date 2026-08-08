@@ -36,6 +36,17 @@ body {
   border-radius: 10px;
 }
 
+/* The prompt dialog's field and dropdown (index.html): Bootstrap's .form-control / .form-select
+   are white with a dark caret, so the fork's static base dresses them the same way it dresses the
+   card in style.css. customize.js repaints all of it from the “Password dialog” settings. */
+#promptInput,
+#promptSelect {
+  background-color: #000000;
+  color: #ffff00;
+  border: 1px solid #ffff00;
+  border-radius: 10px;
+}
+
 .fork-about-title {
   font-size: 24px;
   font-weight: bold;

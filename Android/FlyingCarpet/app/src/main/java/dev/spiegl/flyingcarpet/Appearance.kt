@@ -139,6 +139,7 @@ object UiCatalog {
                     ),
                 ),
                 TextSurface("bluetooth", "“Use Bluetooth” label", listOf(LabelField("bluetooth.text", "Label text"))),
+                TextSurface("bluetoothHint", "Line under the Bluetooth switch", listOf()),
             ),
             colorGroups = listOf(
                 ColorGroup(
@@ -332,6 +333,8 @@ object Appearance {
         }
         applyText(activity, s, R.id.aboutButton, "about", setText = true)
         applyText(activity, s, R.id.bluetoothSwitch, "bluetooth", setText = true)
+        // portrait only, and its text is set by MainActivity, never from the catalog
+        applyText(activity, s, R.id.bluetoothHint, "bluetoothHint", setText = false)
         applyText(activity, s, R.id.modeInstruction, "modeInstruction", setText = true)
         applyText(activity, s, R.id.sendButton, "send", setText = true)
         applyText(activity, s, R.id.receiveButton, "receive", setText = true)

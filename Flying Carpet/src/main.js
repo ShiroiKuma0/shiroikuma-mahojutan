@@ -24,8 +24,7 @@ let selectedMode;
 let selectedPeer;
 let selectedFiles;
 let selectedFolder;
-// Fork default: Shared Network rather than upstream's Hotspot. The Bluetooth switch starts
-// disabled as a result -- BLE only negotiates hotspot credentials, so it is unused in this mode.
+// Fork default: Shared Network rather than upstream's Hotspot.
 let connectionMode = 'shared_network';
 
 // 'idle' -> 'starting' (user is picking files/password) -> 'running' -> 'cancelling' -> 'idle'.
@@ -87,8 +86,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   } else {
     output('Bluetooth is supported.');
     bluetoothSwitch.disabled = false;
-    bluetoothSwitch.checked = true;
-    usingBluetooth = true;
+    // whatever it was last set to, or on for a first run
+    bluetoothSwitch.checked = rememberedBluetooth();
+    usingBluetooth = bluetoothSwitch.checked;
     canUseBluetooth = true;
   }
 
@@ -531,8 +531,9 @@ async function beginTransfer(filesSelected) {
     }
   }
   
-  // shared network sender: files are chosen, now get the password from the receiving device
-  if (connectionMode === 'shared_network' && selectedMode === 'send') {
+  // shared network sender: files are chosen, now get the password from the receiving device.
+  // with Bluetooth on there is nothing to ask for -- the receiver writes the password over BLE.
+  if (connectionMode === 'shared_network' && selectedMode === 'send' && !usingBluetooth) {
     let promptMessage = 'Enter the password displayed on the receiving device:';
     while (true) {
       password = await showPrompt(promptMessage);
@@ -660,7 +661,36 @@ let selectFolder = async () => {
 
 let bluetoothChange = () => {
   usingBluetooth = bluetoothSwitch.checked;
+  // remembered across restarts, so the app never has to be told twice
+  localStorage.setItem(BLUETOOTH_KEY, usingBluetooth ? '1' : '0');
   checkStatus();
+}
+
+// The switch state, remembered across restarts. Absent means "never touched": Bluetooth on when
+// the machine supports it, which is upstream's default.
+const BLUETOOTH_KEY = 'shiroikuma_use_bluetooth';
+let rememberedBluetooth = () => localStorage.getItem(BLUETOOTH_KEY) !== '0';
+
+// The line under the switch. With Bluetooth off it says who will display the QR code and password
+// and who will scan or type it -- before the transfer starts, rather than when the QR code is
+// already on screen (白い熊 2026-08-07). Hotspot mode stays deliberately vague about which device
+// is which: there it follows from the peer's OS, not from send/receive.
+let updateBluetoothHint = () => {
+  let hint = document.getElementById('bluetoothHint');
+  if (!hint) {
+    return;
+  }
+  if (usingBluetooth) {
+    hint.innerText = 'Bluetooth will carry the password: nothing to scan or type.';
+  } else if (connectionMode !== 'shared_network') {
+    hint.innerText = 'No Bluetooth: one device shows a QR code and password when the transfer starts, and the other scans or types it.';
+  } else if (selectedMode === 'send') {
+    hint.innerText = 'No Bluetooth: when the transfer starts, scan the QR code shown on the receiving device or type the password under it.';
+  } else if (selectedMode === 'receive') {
+    hint.innerText = 'No Bluetooth: when the transfer starts, a QR code and password appear here for the sending device to scan or type.';
+  } else {
+    hint.innerText = 'No Bluetooth: the receiving device shows a QR code and password when the transfer starts, and the sending device scans or types it.';
+  }
 }
 
 let modeChange = async (button) => {
@@ -687,28 +717,29 @@ let connectionModeChange = (mode) => {
   checkStatus();
 }
 
-// Bluetooth is hotspot-only: in shared network mode the password is exchanged manually
-// (receiver displays it, sender types it), so the switch is forced off and disabled.
-let bluetoothCheckedBeforeShared = null; // remembers the switch state while in shared network mode
+// Bluetooth is usable in both connection modes (fork, 白い熊 2026-08-07). In hotspot mode it
+// negotiates the hotspot's SSID and password; in shared network mode there is no hotspot, so it
+// carries the transfer password alone -- the switch is the toggle between "use Bluetooth" and
+// "scan the QR code or type the password". Which side generates that password does not change:
+// the receiver does, and hands it over the BLE link instead of showing it on screen.
+//
+// The switch is the user's alone: nothing in the app turns it on or off behind their back, least
+// of all a change of connection mode, and the choice outlives a restart. (白い熊 2026-08-07: a
+// per-mode default that switched Bluetooth off on selecting Shared Network read, correctly, as
+// "the app won't let Bluetooth on with shared WiFi".) Unavailable Bluetooth is the one exception,
+// and it disables the switch rather than pretending it is off.
 let applyBluetoothAvailability = () => {
-  if (connectionMode === 'shared_network') {
-    if (bluetoothCheckedBeforeShared === null) {
-      bluetoothCheckedBeforeShared = bluetoothSwitch.checked;
-    }
+  bluetoothSwitch.disabled = !canUseBluetooth;
+  if (!canUseBluetooth) {
     bluetoothSwitch.checked = false;
-    bluetoothSwitch.disabled = true;
-    usingBluetooth = false;
-  } else {
-    bluetoothSwitch.disabled = !canUseBluetooth;
-    if (bluetoothCheckedBeforeShared !== null) {
-      bluetoothSwitch.checked = canUseBluetooth && bluetoothCheckedBeforeShared;
-      bluetoothCheckedBeforeShared = null;
-    }
-    usingBluetooth = bluetoothSwitch.checked;
   }
+  usingBluetooth = bluetoothSwitch.checked;
+  updateBluetoothHint();
 }
 
 let checkStatus = () => {
+  // every path that can change the mode, the connection mode or the switch comes through here
+  updateBluetoothHint();
   if (connectionMode === 'shared_network' || usingBluetooth) {
     // Shared network: peer OS not needed (discovery handles it)
     // Bluetooth: peer OS not needed (exchanged over BLE)
@@ -724,9 +755,10 @@ let checkStatus = () => {
 
 let needPassword = async () => {
   // Shared network: receiver generates password, sender enters it (consistent with hotspot
-  // same-platform convention). Bluetooth is never used in shared network mode.
+  // same-platform convention) -- unless Bluetooth is on, which carries it across for us, so
+  // neither side has anything to type or display.
   if (connectionMode === 'shared_network') {
-    return selectedMode === 'send';
+    return !usingBluetooth && selectedMode === 'send';
   }
   if (usingBluetooth) {
     return false;
@@ -814,7 +846,7 @@ All rights reserved.
 
 Flying Carpet transfers files between two Android, iOS, Linux, macOS, and Windows devices over ad hoc WiFi. In Hotspot mode, no access point or shared network is required, just two WiFi cards in close range. Hotspot mode does not work from one Apple device (macOS or iOS) to another, because Apple no longer allows hotspots to be started programmatically: use Shared Network mode for those transfers.
 
-In Shared Network mode, both devices must be connected to the same network. No hotspot is created: the devices find each other on the network automatically. Bluetooth is not used in this mode. The receiving device generates and displays a password, which must be entered on the sending device (or scanned on Android).
+In Shared Network mode, both devices must be connected to the same network. No hotspot is created: the devices find each other on the network automatically. The receiving device generates the password either way, and the "Use Bluetooth" switch decides how the sending device gets it: with the switch off the receiver displays the password and its QR code, to be typed or scanned on the sender; with the switch on it is handed over Bluetooth and there is nothing to type or scan.
 
 INSTRUCTIONS
 

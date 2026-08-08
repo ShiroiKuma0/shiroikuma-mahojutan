@@ -27,6 +27,12 @@
     <string name="versionNumber">Version 10</string>
     <string name="sendFolderText">Send Folder</string>
     <string name="bluetooth">Use Bluetooth</string>
+    <!-- The line under the Bluetooth switch: how the password gets from one device to the other. -->
+    <string name="bluetoothHintOn">Bluetooth will carry the password: nothing to scan or type.</string>
+    <string name="bluetoothHintOff">No Bluetooth: the receiving device shows a QR code and password when the transfer starts, and the sending device scans or types it.</string>
+    <string name="bluetoothHintSending">No Bluetooth: when the transfer starts, scan the QR code shown on the receiving device, or type the password under it.</string>
+    <string name="bluetoothHintReceiving">No Bluetooth: when the transfer starts, a QR code and password appear here for the sending device to scan or type.</string>
+    <string name="bluetoothHintHotspot">No Bluetooth: one device shows a QR code and password when the transfer starts, and the other scans or types it.</string>
     <string name="uiSettingsTitle">白い熊 魔法絨毯 UI</string>
     <string name="uiSettingsLink">白い熊 魔法絨毯 UI</string>
 </resources>

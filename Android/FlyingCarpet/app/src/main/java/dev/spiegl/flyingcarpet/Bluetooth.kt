@@ -36,6 +36,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.LiveData
@@ -75,6 +76,13 @@ val PASSWORD_CHARACTERISTIC_UUID: UUID = UUID.fromString("E1FA8F66-CF88-4572-952
 const val NO_SSID = "NONE"
 
 interface BluetoothDelegate {
+    // Start (or replace) the ticking "still waiting" line, and stop it once the peer moves.
+    fun bleWait(what: String)
+    fun bleWaitDone()
+    // Shared network mode carries the password over BLE and nothing else -- there is no hotspot
+    // to stand up or join at the end of the exchange. The GATT callbacks narrate what happens
+    // next, so they have to know which of the two it is.
+    fun usingSharedNetwork(): Boolean
     fun gotPeer(peerOS: String)
     fun gotSsid(ssid: String)
     fun gotPassword(password: String)
@@ -111,6 +119,35 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         OS_CHARACTERISTIC_UUID, SSID_CHARACTERISTIC_UUID, PASSWORD_CHARACTERISTIC_UUID
     )
     private var advertising = false
+    // Whether this transfer's role is the advertising one. The GATT server exists in both roles,
+    // so the disconnect handling below has to know which of them we are in.
+    private var weAreAdvertiser = false
+
+    // A line every few seconds while BLE is busy with something invisible -- advertising into an
+    // empty room, scanning, waiting for the peer's next move. Each of those can run half a minute
+    // with nothing to show for it, and a log that goes quiet for that long reads as a hang
+    // (白い熊 2026-08-07). The desktop half ticks the same way (utils::with_progress).
+    private val waitHandler = Handler(Looper.getMainLooper())
+    private var waitRunnable: Runnable? = null
+
+    fun startWaitTicker(what: String) {
+        stopWaitTicker()
+        val started = SystemClock.elapsedRealtime()
+        val ticker = object : Runnable {
+            override fun run() {
+                val seconds = (SystemClock.elapsedRealtime() - started) / 1000
+                outputText("$what... (${seconds}s)")
+                waitHandler.postDelayed(this, 3000)
+            }
+        }
+        waitRunnable = ticker
+        waitHandler.postDelayed(ticker, 3000)
+    }
+
+    fun stopWaitTicker() {
+        waitRunnable?.let { waitHandler.removeCallbacks(it) }
+        waitRunnable = null
+    }
 
     // The receiver object lives in the ViewModel and outlives the Activity, so registering it again
     // from a second bluetoothOnCreate() -- an Activity recreated for a share intent, say -- makes
@@ -199,6 +236,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         advertising = false
         // null if Bluetooth was switched off between the connection and this call
         bluetoothManager.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
+        stopWaitTicker()
         outputText("Peer found us, stopped advertising")
     }
 
@@ -221,6 +259,8 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         // noise, not as a failure that flips the Bluetooth switch off (see bluetoothFailed
         // in MainViewModel). Set before the closes below so their own callbacks are covered.
         bluetoothReceiver.tearingDown = true
+        weAreAdvertiser = false
+        stopWaitTicker()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
             && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
         {
@@ -321,6 +361,17 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // found anything. we come off the air in stopAdvertisingForPeer() instead, once
                 // something actually reads or writes one of OUR characteristics, which only the
                 // real Flying Carpet peer does.
+            } else if (weAreAdvertiser && !advertising
+                && !bluetoothReceiver.exchangeComplete && !bluetoothReceiver.tearingDown) {
+                // The peer went away before it had our credentials, so this is not the ordinary
+                // hand-off to WiFi -- a pairing that did not complete, typically. We came off the
+                // air at its first read or write (stopAdvertisingForPeer), and nothing put us back
+                // on: its next scan then finds NOTHING, however long it looks, and both sides sit
+                // there forever. Measured on 白い熊's phone 2026-08-08: bond failed at 12:37:38,
+                // and four minutes later the phone still had a live GATT server, an open transfer
+                // and an empty advertisement list while the PC rescanned.
+                outputText("The other device disconnected before we finished — advertising again")
+                advertise()
             } else {
                 // Not a failure: the BLE link has done its job by this point and is released so
                 // the transfer can move to WiFi. Worded so it does not read as an error.
@@ -368,6 +419,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 }
                 PASSWORD_CHARACTERISTIC_UUID -> {
                     val (_, password) = getWifiInfo()
+                    stopWaitTicker()
                     outputText("Gave it our password — it should join the hotspot now")
                     bluetoothGattServer.sendResponse(
                         device, requestId, BluetoothGatt.GATT_SUCCESS, 0, password.toByteArray()
@@ -428,10 +480,17 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                         // This is the long quiet stretch on the sending side: the receiver goes off
                         // to tear down its WiFi and bring a hotspot up, which takes the better part
                         // of twenty seconds, and only then writes us the details. Say so, rather
-                        // than leaving the log looking stalled.
+                        // than leaving the log looking stalled. In shared network mode there is no
+                        // hotspot to wait on -- only the password, which arrives right away.
                         outputText("The other device is $os")
-                        outputText("It is setting up its hotspot now — that takes a few seconds, since it has to drop its own WiFi first")
-                        outputText("Waiting for it to send us the network name and password...")
+                        if (usingSharedNetwork()) {
+                            outputText("Waiting for it to send us the password...")
+                            startWaitTicker("Waiting for the password over Bluetooth")
+                        } else {
+                            outputText("It is setting up its hotspot now — that takes a few seconds, since it has to drop its own WiFi first")
+                            outputText("Waiting for it to send us the network name and password...")
+                            startWaitTicker("Waiting for the other device's hotspot details")
+                        }
                         gotPeer(os)
                     }
                 }
@@ -441,13 +500,21 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                     // at which point we can calculate the ssid and key.
                     if (value != null) {
                         val theirSsid = value.toString(Charsets.UTF_8)
-                        outputText("Its hotspot will be $theirSsid — waiting for the password")
+                        outputText(
+                            if (usingSharedNetwork()) "Waiting for the password"
+                            else "Its hotspot will be $theirSsid — waiting for the password"
+                        )
+                        startWaitTicker("Waiting for the password over Bluetooth")
                         gotSsid(theirSsid)
                     }
                 }
                 PASSWORD_CHARACTERISTIC_UUID -> {
                     if (value != null) {
-                        outputText("Got the password — joining its hotspot next")
+                        stopWaitTicker()
+                        outputText(
+                            if (usingSharedNetwork()) "Got the password over Bluetooth"
+                            else "Got the password — joining its hotspot next"
+                        )
                         gotPassword(value.toString(Charsets.UTF_8))
                     }
                 }
@@ -482,6 +549,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         // new transfer (peripheral role): re-arm bluetoothFailed(), which stop() disarms —
         // the peripheral never calls scan(), so it must clear the flag here
         bluetoothReceiver.tearingDown = false
+        weAreAdvertiser = true
         // BluetoothLeAdvertiser. null when Bluetooth is off: report and fail the transfer
         // rather than crash — this used to be an unguarded platform-type dereference.
         val bluetoothLeAdvertiser = bluetoothManager.adapter?.bluetoothLeAdvertiser
@@ -526,6 +594,8 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             _status.postValue(true)
             advertising = true
             outputText("Advertiser started")
+            outputText("Nothing happens here until the other device starts its transfer and finds us.")
+            startWaitTicker("Advertising over Bluetooth, waiting for the other device to connect")
         }
 
         override fun onStartFailure(errorCode: Int) {
@@ -607,9 +677,12 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         bluetoothReceiver.exchangeComplete = false
         bluetoothReceiver.bonded = false
         bluetoothReceiver.tearingDown = false
+        weAreAdvertiser = false
         bluetoothLeScanner.startScan(listOf(scanFilter), scanSettings, leScanCallback)
         _status.postValue(true)
         outputText("Scanning for Bluetooth peripherals...")
+        outputText("The other device has to be advertising -- start the transfer there too.")
+        startWaitTicker("Looking for the other device over Bluetooth")
     }
 
     private val leScanCallback = object : ScanCallback() {
@@ -631,6 +704,9 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                     bluetoothReceiver.waitingForConnection = false
                     bluetoothLeScanner.stopScan(this)
                     outputText("Stopped scanning")
+                    // the next silent stretch: pairing (if this is a first meeting), connecting,
+                    // and resolving the peer's GATT database, all of it several seconds at best
+                    startWaitTicker("Connecting to the other device over Bluetooth")
                     //                address = result.device.address
                     bluetoothReceiver.result = result
                     peerDevice = result.device
@@ -822,6 +898,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 Log.i("Bluetooth", "Read characteristic: $stringRepresentation")
                 when (characteristic.uuid) {
                     OS_CHARACTERISTIC_UUID -> {
+                        bleWaitDone()
                         gotPeer(value.toString(Charsets.UTF_8))
                     }
                     SSID_CHARACTERISTIC_UUID -> {
@@ -839,12 +916,16 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                             return
                         }
                         gotSsid(ssid)
+                        bleWait("Waiting for the other device's password")
                         // doing this here instead of in gotSsid because if peripheral had SSID
                         // written to it, we wouldn't need to call read
                         // we read the SSID, now read the password.
                         read(PASSWORD_CHARACTERISTIC_UUID)
                     }
-                    PASSWORD_CHARACTERISTIC_UUID -> gotPassword(value.toString(Charsets.UTF_8))
+                    PASSWORD_CHARACTERISTIC_UUID -> {
+                        bleWaitDone()
+                        gotPassword(value.toString(Charsets.UTF_8))
+                    }
                 }
             }
 
@@ -872,6 +953,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                         write(PASSWORD_CHARACTERISTIC_UUID, password.toByteArray())
                     }
                     PASSWORD_CHARACTERISTIC_UUID -> {
+                        bleWaitDone()
                         outputText("Wrote password to peer")
                         // we told the peripheral the password, now just have to wait for them to join the hotspot
                     }

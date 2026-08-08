@@ -41,6 +41,9 @@
           <label class="form-check-label" for="sendFolderCheckbox">Send Folder</label>
         </div>
       </div>
+      <!-- fork: what the switch above means for this transfer — who shows the QR code and password,
+           and who scans or types it — said before the transfer starts rather than during it -->
+      <small id="bluetoothHint" style="margin: -4px 10px 6px 20px; opacity: 0.85;"></small>
 
       <!-- mode box -->
       <label id="modeInstruction" style="margin-left: 10px">Select File Mode</label>
@@ -113,9 +116,11 @@
         <input type="text" id="promptInput" class="form-control" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="margin-bottom: 15px;">
         <!-- dropdown variant, used by showSelect() (e.g. the network interface chooser) -->
         <select id="promptSelect" class="form-select" style="margin-bottom: 15px; display: none;"></select>
-        <div style="display: flex; gap: 10px; justify-content: flex-end;">
-          <button type="button" id="promptCancel" class="btn btn-secondary">Cancel</button>
-          <button type="button" id="promptOk" class="btn btn-success">OK</button>
+        <!-- fork: the ArcaneChat pill bar the Export/Import dialogs use, not Bootstrap's
+             grey/green button pair, which ignored the theme entirely -->
+        <div class="fork-info-actions">
+          <button type="button" id="promptCancel" class="fork-pill">Cancel</button>
+          <button type="button" id="promptOk" class="fork-pill">OK</button>
         </div>
       </div>
     </div>
