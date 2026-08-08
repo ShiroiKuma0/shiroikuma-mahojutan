@@ -7,6 +7,102 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+013 — 2026-08-08
+
+Bluetooth becomes usable in Shared Network mode — and, along the way, usable at all: the handshake
+that took a minute and a half now takes a second, and it stopped destroying pairings to get there.
+
+### Bluetooth carries the password in Shared Network mode
+- **The switch is live in both connection modes**, on both apps, and is the toggle it always looked
+  like: *use Bluetooth*, or *scan the QR code / type the password*. Upstream greys it out outside
+  hotspot mode, because BLE is only used there to negotiate hotspot credentials.
+- Who owns the password does not change. The **receiver generates it** either way — the same side
+  that would otherwise display it — and hands it over the BLE link instead of putting it on screen.
+  The SSID still travels, derived from the password as everywhere else, and is simply unused.
+- One rule decides which side supplies the credentials, `we_supply_credentials()` in `core`, read by
+  both BLE roles and all three platform implementations: whoever hosts the hotspot in hotspot mode,
+  the receiver in shared network mode.
+- The switch belongs to you now: changing connection mode never flips it, and the choice survives a
+  restart (localStorage on the desktop, the fork's settings store on Android). Only an unavailable
+  radio overrides it, and that disables the switch rather than pretending it is off.
+- **A line under the switch says what will happen**: with Bluetooth off, that the receiving device
+  will show a QR code and password when the transfer starts and the sending device will scan or type
+  it — worded for whichever side you are. Themeable like everything else, from the new *Line under
+  the Bluetooth switch* element. Portrait only on Android; the landscape layout has no room under
+  the switch.
+
+### Discovery: from a minute and a half to milliseconds
+- **The scan waited on BlueZ events.** `DeviceAdded` fires for a device BlueZ has never seen; for one
+  it already knows — a bonded phone — the only thing that can wake the loop is a property change, and
+  a bonded peer's UUID list never changes, so what it was really waiting for was an RSSI update on
+  BlueZ's own schedule. It now sweeps the adapter's device list every second as well.
+- **Both paths require a live signal.** An RSSI means BlueZ is hearing that device now, so a bonded
+  peer's stale cache entry — which carries our service UUID from the last transfer — can no longer be
+  mistaken for a peer that is on the air. Chasing one cost 22 seconds a round, twice per attempt.
+- **The paired-device probe left the scan loop.** It used to be awaited inline, aimed at every paired
+  device BlueZ knew of, in range or not: a switched-off headset spent 15 seconds timing out on the LE
+  link socket and another 47 in BlueZ's connect, and for that whole minute neither discovery events
+  nor the sweep could be processed. It now runs as its own task, only for devices being heard, capped
+  at 20 seconds, and reports back over a channel.
+- A paired device written off by one failed probe is retried after 30 seconds instead of never.
+
+### Pairing stops breaking itself
+- **The retry ladder no longer removes the pairing.** Its second rung used to unpair "and pair
+  again" — the one-sided unpairing the fork's own field guide forbids. Measured: it deleted a bond
+  that had worked half an hour earlier, and the next round's fresh pairing request reached a phone
+  that still held its half, which dropped its bond and reported the pairing as failed. It now says
+  what to do if failures persist — remove the pairing on *both* devices — and leaves the bond alone.
+- A connect that hits our timeout is cancelled before the retry, so the retry stops coming straight
+  back with `Operation already in progress` and wasting its turn.
+- `ensure_le_link`'s socket timeout is 5 seconds rather than 15. It is a best-effort nudge toward the
+  LE bearer and the code carries on regardless; when the radio is busy it can only ever time out.
+- The connect itself is three 15-second attempts instead of one open-ended call that BlueZ abandons
+  after 44 seconds in a single silent block.
+- The log records which answer the passkey dialog was given, so a peer's refusal can be told apart
+  from a dialog dismissed on this side.
+
+### Nothing waits in silence
+- `utils::with_progress` ticks every three seconds with the elapsed time through every wait that used
+  to be quiet: the LE pairing socket, the connect, the GATT service read, the probe, and each wait
+  for the peer's writes. Covered by a unit test on virtual time.
+- The scan's own five-second round now reaches the app — "Still looking for the other device over
+  Bluetooth... (15s, 7 devices in range)" — and it announces the peer's address when it finds it.
+- Android has the same ticker while advertising, scanning, connecting, and waiting for the password,
+  stopping the moment the peer touches one of our characteristics.
+- Both sides say, once, why nothing may be happening yet: that the other device has to have started
+  its transfer too.
+- **A discovery held by another program on the computer is called out by name at the start.** It owns
+  the radio — a classic-Bluetooth inquiry runs 10.24 seconds at a time, back to back, and an LE
+  connection cannot be established under it — and it is not something this app can stop.
+
+### Android: back on the air after a failed contact
+- The sending phone comes off the air at the peer's first read or write, which with MITM-encrypted
+  characteristics is exactly the access that triggers pairing and can fail. Nothing put it back: it
+  sat with a live GATT server, an open transfer and an empty advertisement list while the other
+  device rescanned for something that no longer existed. It now re-advertises when the peer
+  disconnects before the exchange is done, and says so.
+- The GATT callbacks' narration follows the connection mode: no more "it is setting up its hotspot"
+  while waiting for a password that arrives over Bluetooth.
+
+### The password dialog wears the fork's dress
+- Upstream's dialog card was hardcoded white, so the fork's yellow text sat on white, with Bootstrap
+  grey/green buttons. It is now the same black card, 2 px yellow border and 16 px radius as the
+  Export/Import dialogs, with ArcaneChat pills — including the focus state, the caret and the network
+  interface dropdown's arrow, all of which Bootstrap repaints on its own.
+- It is customizable: a new **Password dialog** section on the UI page covers the question text, the
+  password box, the buttons and the card's own background and border. The old *Password box* element
+  moved into it, keeping its stored keys, so an existing backup still applies.
+
+### Cancelling says so
+- Android resets the per-file progress bar on cancel — its two neighbours were being cleared and it
+  was not, so it stayed frozen at whatever fraction it had reached — and writes "Transfer cancelled."
+  to the log, from the Cancel button rather than from the teardown every finished transfer passes
+  through.
+
+### Packaging
+- `tokio`'s `test-util` feature as a dev-dependency of `core`, so tests can assert on ten seconds of
+  waiting without waiting ten seconds.
+
 ## 10.0.3+005 — 2026-08-06
 
 The first pass over v10's new surfaces: the controls upstream added are now in the fork's colours,
