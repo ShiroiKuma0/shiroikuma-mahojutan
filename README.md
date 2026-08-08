@@ -11,7 +11,8 @@ yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles 
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a token-gated hook for headless backups, external font
 support, a custom icon, a share-sheet target, and a rebranded Linux desktop build shipped as an
-amd64 `.deb` — plus the Bluetooth fixes an EMUI phone with a Japanese device name needs.
+amd64 `.deb` — plus Bluetooth password hand-off in Shared Network mode, and the Bluetooth fixes an
+EMUI phone with a Japanese device name needs.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
@@ -22,7 +23,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.3+005`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.3+013`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -125,12 +126,36 @@ the setting rather than searching in silence.
 
 ## 🔑 The password, without the ceremony
 
-Shared Network mode has no Bluetooth to hand the password over for it, so it has to travel by eye.
-The receiver shows a QR code **with the password printed underneath it** — scan it or read it, both
+With Bluetooth off, the password travels by eye — and the fork makes that a glance rather than a
+dialog. The receiver shows a QR code **with the password printed underneath it** — scan it or read it, both
 are on screen, and there is no dialog in the way. The sender opens **one dialog that scans and types
 at the same time**: a live camera preview sitting directly above the password field, so there is
 nothing to back out of to reach the keyboard. Decline the camera, or have none, and the same dialog
 is simply the typing dialog.
+
+---
+
+## 🔗 Bluetooth in Shared Network mode, too
+
+Upstream uses Bluetooth only to negotiate hotspot credentials, so in Shared Network mode the switch
+is greyed out and the password has to be scanned or typed. Here it stays live in both modes and
+becomes the toggle it looks like: **use Bluetooth**, or **scan the QR code / type the password**.
+Nothing else changes — the receiving device generates the password either way; it simply hands it
+over the BLE link instead of putting it on screen. A line under the switch says which of the two is
+about to happen, and who will be doing the scanning.
+
+Getting there meant making the handshake honest about its own time. Discovery no longer waits on
+BlueZ to volunteer an event — it reads the adapter's device list every second and requires a live
+signal, so a peer that is on the air is found in milliseconds instead of a minute, and a bonded
+peer's stale cache entry is never mistaken for one. The probe that connects to a paired device to
+re-read its services runs off to the side rather than inside the scan, and only for devices in
+range: one switched-off headset used to eat a full minute of every scan. Every remaining wait ticks
+in the log with the seconds counted off, on both apps, and a scan held by another program on the
+computer — which owns the radio, and can stretch a one-second connection into a failed minute — is
+named at the start rather than left to look like our own slowness.
+
+And nothing removes a pairing behind your back any more: that "let's just pair again" reflex
+deletes one half of a working bond, and the other device then refuses the next one.
 
 ---
 
