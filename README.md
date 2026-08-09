@@ -11,8 +11,8 @@ yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles 
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a token-gated hook for headless backups, external font
 support, a custom icon, a share-sheet target, and a rebranded Linux desktop build shipped as an
-amd64 `.deb` — plus Bluetooth password hand-off in Shared Network mode, and the Bluetooth fixes an
-EMUI phone with a Japanese device name needs.
+amd64 `.deb` — plus Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog
+when the other device already has a file, and the Bluetooth work an EMUI phone needs to pair at all.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
@@ -23,7 +23,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.3+013`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.3+038`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -156,6 +156,38 @@ named at the start rather than left to look like our own slowness.
 
 And nothing removes a pairing behind your back any more: that "let's just pair again" reflex
 deletes one half of a working bond, and the other device then refuses the next one.
+
+---
+
+## 🙋 “That file is already there” — asked, not decided
+
+Stock decides a name collision on the *receiving* device and says nothing: an identical file is
+skipped, a differing one is quietly saved as `(1) name`. Both are decisions made on the device
+whose user is not the one watching the transfer. This fork stops and asks on the **sending** side —
+**skip**, **overwrite**, or **rename** with a pre-filled `name (copy).ext` — and overwriting really
+replaces the file that is there rather than leaving a `(1)` copy beside it.
+
+It needs fields stock does not know, so it is version-guarded: the fork announces itself on the
+wire and only switches the exchange on when both ends are running it. A stock or Apple peer
+transfers exactly as before and never sees the extra fields.
+
+---
+
+## 📶 Bluetooth that actually pairs
+
+Everything between a Linux desktop and an EMUI phone that stood between “advertising” and a
+transfer, found with an HCI trace and both devices' own logs: an advertisement over the 31-byte
+budget, an extended advertising set that Android's default legacy-only scan cannot see, a scan
+whose 512 ms window in every 5120 ms was an exact harmonic of BlueZ's 1280 ms advertising interval
+(so a packet that fell in the gap fell in the gap **for ever**), a GATT read issued twice so the
+second was refused because the first was in flight, and a pairing that could not complete because
+the phone's stack will not present an incoming numeric comparison. The roles are negotiated now
+instead of following send/receive: the phone takes the connecting side, because it is the one that
+can insist on the LE transport — the desktop cannot, and a dual-transport bond otherwise sends it
+down a classic-Bluetooth link that carries no GATT.
+
+Every wait ticks with the seconds counted off, and the phone writes its transcript to
+`Android/data/shiroikuma.mahojutan/files/logs/transcript.log`, because EMUI drops an app's logcat.
 
 ---
 
