@@ -504,6 +504,7 @@ class MainActivity : AppCompatActivity() {
         viewModel.cleanUpUi = ::cleanUpUi
         viewModel.enableBluetoothUi = ::enableBluetoothUi
         viewModel.promptForPassword = ::promptForPassword
+        viewModel.askFileConflict = ::askFileConflict
         viewModel.displaySharedNetworkPassword = ::displaySharedNetworkPassword
 
         peerGroup = findViewById(id.peerGroup)
@@ -844,6 +845,91 @@ class MainActivity : AppCompatActivity() {
             sending == id.sendButton -> getString(R.string.bluetoothHintSending)
             sending == id.receiveButton -> getString(R.string.bluetoothHintReceiving)
             else -> getString(R.string.bluetoothHintOff)
+        }
+    }
+
+
+    // The other device already has a file we are about to send. Asked here, on the sending device,
+    // because this is where the user who chose the files is -- upstream decides it silently on the
+    // receiving one. Fork-only: the exchange behind it is version-guarded (see confirmVersion).
+    private fun askFileConflict(
+        name: String,
+        identical: Boolean,
+        answer: (FileConflictChoice) -> Unit,
+    ) {
+        val box = ForkDialog.box(this)
+        box.addView(ForkDialog.heading(this, "The other device already has this file"))
+        box.addView(ForkDialog.spacer(this, 10))
+        box.addView(
+            TextView(this).apply {
+                text = "\u201c$name\u201d is already there" +
+                        if (identical) ", and it is identical to the one being sent."
+                        else ", with different contents."
+                setTextColor(ForkDialog.accent(this@MainActivity))
+                textSize = 15f
+            }
+        )
+
+        // The rename field, only used if Rename is chosen; pre-filled the way the desktop does.
+        val input = EditText(this).apply {
+            setText(suggestRename(name))
+            setTextColor(ForkDialog.accent(this@MainActivity))
+            setHintTextColor(ForkDialog.accent(this@MainActivity))
+            inputType = InputType.TYPE_CLASS_TEXT
+            visibility = View.GONE
+        }
+        box.addView(ForkDialog.spacer(this, 10))
+        box.addView(input)
+
+        val dialog = ForkDialog.wrap(this, box, cancelable = false)
+        var answered = false
+        val finish = { choice: FileConflictChoice ->
+            if (!answered) {
+                answered = true
+                dialog.dismiss()
+                answer(choice)
+            }
+        }
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            clipChildren = false
+            setPadding(0, ForkDialog.dp(this@MainActivity, 16), 0, 0)
+        }
+        val gap = { view: Button ->
+            view.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = ForkDialog.dp(this@MainActivity, 10) }
+            }
+        }
+        row.addView(gap(ForkDialog.pill(this, "Skip") { finish(FileConflictChoice.Skip) }))
+        // First tap reveals the name field, second tap sends it -- one dialog, no second window.
+        val renameButton = ForkDialog.pill(this, "Rename") {}
+        renameButton.setOnClickListener {
+            if (input.visibility == View.GONE) {
+                input.visibility = View.VISIBLE
+                input.requestFocus()
+            } else {
+                finish(FileConflictChoice.Rename(input.text.toString().trim()))
+            }
+        }
+        row.addView(gap(renameButton))
+        row.addView(ForkDialog.pill(this, "Overwrite") { finish(FileConflictChoice.Overwrite) })
+        box.addView(row)
+
+        dialog.show()
+    }
+
+    // "example.jpg (copy).jpg" reads worse than "example (copy).jpg": keep the extension last.
+    private fun suggestRename(name: String): String {
+        val dot = name.lastIndexOf('.')
+        val slash = name.lastIndexOf('/')
+        return if (dot > slash + 1) {
+            name.substring(0, dot) + " (copy)" + name.substring(dot)
+        } else {
+            "$name (copy)"
         }
     }
 

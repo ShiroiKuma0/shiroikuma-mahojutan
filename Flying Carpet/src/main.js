@@ -149,6 +149,25 @@ window.addEventListener('DOMContentLoaded', async () => {
     enableUi();
   });
 
+  // the receiving device already has a file we are about to send: ask what to do with it.
+  // fork-only (the exchange behind it is version-guarded in core), and the question belongs
+  // here, on the device whose user picked the files.
+  await appWindow.listen('fileConflict', async (event) => {
+    let { name, identical } = event.payload;
+    let choice = await showConflict(name, identical);
+    if (choice === 'rename') {
+      let suggestion = suggestRename(name);
+      let newName = await showPrompt(`Send \u201c${name}\u201d as:`, suggestion);
+      if (newName === null || !newName.trim()) {
+        choice = 'skip';
+      } else {
+        await core.invoke('user_file_conflict', { choice: 'rename', newName: newName.trim() });
+        return;
+      }
+    }
+    await core.invoke('user_file_conflict', { choice: choice, newName: null });
+  });
+
   // show bluetooth PIN and allow user to choose whether to pair on windows
   await appWindow.listen('showPin', async (event) => {
     console.log(event);
@@ -319,14 +338,14 @@ function output(msg) {
 
 // in-page replacement for window.prompt(), whose title shows the webview origin.
 // resolves to the entered string, or null if cancelled.
-let showPrompt = (message) => {
+let showPrompt = (message, prefill) => {
   return new Promise((resolve) => {
     let overlay = document.getElementById('promptOverlay');
     let input = document.getElementById('promptInput');
     let okButton = document.getElementById('promptOk');
     let cancelButton = document.getElementById('promptCancel');
     document.getElementById('promptMessage').innerText = message;
-    input.value = '';
+    input.value = prefill || '';
     let finish = (value) => {
       overlay.style.display = 'none';
       okButton.onclick = null;
@@ -389,6 +408,54 @@ let showSelect = (message, options) => {
     };
     overlay.style.display = 'flex';
     select.focus();
+  });
+}
+
+// "example.jpg (copy).jpg" reads worse than "example (copy).jpg": keep the extension last.
+function suggestRename(name) {
+  let dot = name.lastIndexOf('.');
+  let slash = name.lastIndexOf('/');
+  if (dot > slash + 1) {
+    return name.slice(0, dot) + ' (copy)' + name.slice(dot);
+  }
+  return name + ' (copy)';
+}
+
+// Skip / Overwrite / Rename, wearing the fork's dialog dress. Resolves to one of those three
+// strings; dismissing it counts as skipping, which is the only harmless default.
+let showConflict = (name, identical) => {
+  return new Promise((resolve) => {
+    let overlay = document.createElement('div');
+    overlay.className = 'fork-overlay';
+    let box = document.createElement('div');
+    box.className = 'fork-info-box';
+    let title = document.createElement('div');
+    title.className = 'fork-info-title';
+    title.innerText = 'The other device already has this file';
+    let body = document.createElement('div');
+    body.className = 'fork-info-body';
+    body.innerText = `\u201c${name}\u201d is already there`
+      + (identical ? ', and it is identical to the one being sent.' : ', with different contents.');
+    let actions = document.createElement('div');
+    actions.className = 'fork-info-actions';
+    let finish = (choice) => {
+      overlay.remove();
+      resolve(choice);
+    };
+    for (let [label, choice] of [['Skip', 'skip'], ['Rename', 'rename'], ['Overwrite', 'overwrite']]) {
+      let button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'fork-pill';
+      button.innerText = label;
+      button.onclick = () => finish(choice);
+      actions.appendChild(button);
+    }
+    box.appendChild(title);
+    box.appendChild(body);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish('skip'); });
+    document.body.appendChild(overlay);
   });
 }
 

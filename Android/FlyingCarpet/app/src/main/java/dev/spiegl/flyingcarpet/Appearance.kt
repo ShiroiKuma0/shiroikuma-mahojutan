@@ -2,6 +2,10 @@ package dev.spiegl.flyingcarpet
 
 import android.content.res.ColorStateList
 import android.graphics.Typeface
+import android.graphics.drawable.ClipDrawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.view.Gravity
 import android.util.TypedValue
 import android.view.View
 import android.widget.ImageView
@@ -233,7 +237,11 @@ object UiCatalog {
                 ),
             ),
             colorGroups = listOf(
-                ColorGroup("Progress bar", listOf(ColorField("progress.color", "Bar colour", Defaults.YELLOW))),
+                ColorGroup(
+                    "Progress bar",
+                    listOf(ColorField("progress.color", "Bar colour", Defaults.YELLOW)),
+                    dims = listOf(DimField("progress.height", "Bar thickness", 60, 15f)),
+                ),
             ),
         ),
         Section(
@@ -390,12 +398,11 @@ object Appearance {
         activity.findViewById<ImageView>(R.id.bluetoothIcon)?.drawable
             ?.setTint(bluetoothIconColor(activity, connected = false))
 
-        // Progress bar.
-        activity.findViewById<ProgressBar>(R.id.progressBar)?.progressTintList =
-            ColorStateList.valueOf(s.colorOrNull("progress.color") ?: Defaults.YELLOW)
-        // the sent/total, rate and ETA line above the bar follows the bar's colour
-        activity.findViewById<ProgressBar>(R.id.totalProgressBar)?.progressTintList =
-            ColorStateList.valueOf(s.colorOrNull("progress.color") ?: Defaults.YELLOW)
+        // Progress bars: the desktop's shape rather than Android's hairline -- a bordered empty
+        // box that fills up, at whatever thickness 白い熊 sets (白い熊, 2026-08-09).
+        for (barId in listOf(R.id.progressBar, R.id.totalProgressBar)) {
+            applyProgressBar(activity, s, barId)
+        }
         // the sent/total, rate and ETA lines above the bars follow the bar's colour
         for (labelId in listOf(R.id.progressDetails, R.id.progressTotalDetails)) {
             activity.findViewById<TextView>(labelId)
@@ -435,6 +442,42 @@ object Appearance {
             0f, 0f, 0f, 1f, 0f,
         )
         return android.graphics.ColorMatrixColorFilter(m)
+    }
+
+
+    /// The desktop's progress bar, on Android: an empty box with a one-pixel border that fills
+    /// with the bar colour, at a settable thickness. Android's stock bar is a hairline with a
+    /// faint track, which reads as a different control entirely.
+    private fun applyProgressBar(activity: AppCompatActivity, s: Settings, barId: Int) {
+        val bar = activity.findViewById<ProgressBar>(barId) ?: return
+        val color = s.colorOrNull("progress.color") ?: Defaults.YELLOW
+        val height = dpToPx(activity, s.sizeOrNull("progress.height") ?: 15f)
+
+        val track = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(s.colorOrNull("window.bg") ?: Defaults.BLACK)
+            setStroke(dpToPx(activity, 1f), color)
+            cornerRadius = dpToPx(activity, 2f).toFloat()
+        }
+        val fill = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+        }
+        val clipped = ClipDrawable(fill, Gravity.START, ClipDrawable.HORIZONTAL)
+        val layers = LayerDrawable(arrayOf(track, clipped))
+        layers.setId(0, android.R.id.background)
+        layers.setId(1, android.R.id.progress)
+        // The fill sits inside the border rather than on top of it.
+        val inset = dpToPx(activity, 2f)
+        layers.setLayerInset(1, inset, inset, inset, inset)
+
+        val progress = bar.progress
+        bar.progressDrawable = layers
+        bar.progressTintList = null
+        bar.progress = 0
+        bar.progress = progress
+        bar.layoutParams = bar.layoutParams.apply { this.height = height }
+        bar.minimumHeight = height
     }
 
     private fun applyText(activity: AppCompatActivity, s: Settings, id: Int, key: String, setText: Boolean) {
