@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::{sync::mpsc, sync::Mutex as TokioMutex, time::sleep};
+use tokio::{sync::mpsc, sync::Mutex as TokioMutex, time::sleep, time::timeout};
 
 use crate::{
     error::{fc_error, FCError},
@@ -35,6 +35,22 @@ pub(crate) const PASSWORD_CHARACTERISTIC_UUID: &str = "E1FA8F66-CF88-4572-9527-D
 // A host that hasn't generated its credentials yet answers an SSID read with this (Windows)
 // or with an empty string (Android); centrals treat both as "not ready, re-read".
 pub(crate) const NO_SSID: &str = "NONE";
+
+// Internal marker: we advertised and nobody connected within the grace period, so the role can be
+// handed over to the scan path. Never shown to the user.
+const NO_CONTACT: &str = "__no_contact__";
+
+// How long this side advertises before deciding the peer is not coming to us. Only used when we
+// would otherwise have been the one connecting out.
+//
+// A minute, not ten seconds. The peer that should be connecting is a phone, and it only starts
+// looking when its user starts the transfer there -- which is naturally half a minute after
+// starting it here. Ten seconds meant the desktop had already dropped its GATT service by the
+// time the phone arrived, and the phone found a device with none of our characteristics on it:
+// "Peer's Flying Carpet service is missing characteristics (os: false, ssid: false, password:
+// false)" (白い熊, 2026-08-08). The fall-through exists for a Linux peer that is also waiting to
+// be found, and waiting a minute for that case costs nothing.
+const ADVERTISE_GRACE: Duration = Duration::from_secs(60);
 
 /// Registers a Bluetooth pairing agent for as long as the returned handle is held.
 ///
@@ -168,14 +184,29 @@ pub async fn negotiate_bluetooth<T: UI>(
     // that one fires on characteristic-discovery failure, where a stale bond is the suspected
     // cause rather than the casualty.
 
-    if let Mode::Send(_) = mode {
+    // Advertise FIRST, in both directions, and let the peer connect to us.
+    //
+    // Upstream ties the roles to send/receive: the sender advertises, the receiver connects. That
+    // is fine between two devices whose stacks can insist on the LE transport -- and Linux is not
+    // one of them. Device1.Connect() picks the bearer itself, and against a dual-transport bond it
+    // picks classic Bluetooth, which carries no GATT at all. The bond becomes dual-transport by
+    // itself: cross-transport derivation writes a [LinkKey] next to the LE keys during pairing
+    // (seen in /var/lib/bluetooth/.../info on 白い熊's machine 2026-08-08), so every successful
+    // pairing armed the failure for the next transfer in the other direction -- which is exactly
+    // the alternation that took all evening to pin down.
+    //
+    // Android always connects with TRANSPORT_LE and cannot be steered wrong, so the reliable
+    // arrangement is: this side offers itself, the peer comes to it. When nobody comes within the
+    // grace period -- another Linux machine, which is also waiting to be found -- we fall through
+    // to the scan and connect after all, so every pairing of platforms still works.
+    let peripheral_first: Option<Result<(String, String, String), FCError>> = {
         // acting as peripheral
         let tx = bt_tx;
         let mut rx = bt_rx;
         let password = generate_password();
         let (_, ssid) = get_key_and_ssid(&password);
-        let (app_handle, adv_handle, peer_address) =
-            peripheral::advertise(&adapter, tx, &ssid, &password).await?;
+        let (app_handle, mut adv_handle, peer_address) =
+            peripheral::advertise(&adapter, tx, &ssid, &password, ui).await?;
         ui.output("Started Bluetooth advertisement, waiting for receiving device...");
         ui.output("Nothing happens here until the other device starts its transfer and finds us.");
         // The exchange runs in a block so every exit -- success or error (a rejected
@@ -184,13 +215,45 @@ pub async fn negotiate_bluetooth<T: UI>(
         // transfer to inherit a live ACL in the opposite role (law 9 in
         // docs/bluetooth-field-guide.md, the §3a bug).
         let exchange: Result<(String, String, String), FCError> = async {
-            let peer_os = match with_progress(
-                ui,
-                "Advertising over Bluetooth, waiting for the other device to connect",
-                process_bluetooth_message(BluetoothMessage::PeerOS("".to_string()), &mut rx, ui),
-            )
-            .await?
-            {
+            // Wait in five-second slices rather than one long await, so the advertisement can be
+            // checked while nothing is happening -- BlueZ has been seen accepting it and then
+            // taking it off the air by itself, which leaves this side "advertising" to an empty
+            // room for as long as the user is willing to wait (白い熊, 2026-08-08). Putting it
+            // back costs nothing and is invisible when it was never needed.
+            let waiting_started = tokio::time::Instant::now();
+            let peer_os_msg = loop {
+                match timeout(
+                    Duration::from_secs(5),
+                    process_bluetooth_message(BluetoothMessage::PeerOS("".to_string()), &mut rx, ui),
+                )
+                .await
+                {
+                    Ok(result) => break result?,
+                    Err(_) => {
+                        // The receiving side only offers itself for a while: if the peer is not
+                        // going to connect (it is a Linux machine waiting to be found too), the
+                        // scan path has to get its turn.
+                        if matches!(mode, Mode::Receive(_))
+                            && waiting_started.elapsed() >= ADVERTISE_GRACE
+                        {
+                            ui.output(
+                                "Nobody has connected to us in a minute -- looking for the other \
+                                 device ourselves instead. If it is a phone, start its transfer \
+                                 and this side will be found within a second or two.",
+                            );
+                            fc_error(NO_CONTACT)?;
+                        }
+                        if adapter.active_advertising_instances().await.unwrap_or(1) == 0 {
+                            ui.output(
+                                "Our Bluetooth advertisement stopped by itself -- starting it again",
+                            );
+                            drop(adv_handle);
+                            adv_handle = peripheral::start_advertisement(&adapter, ui).await?;
+                        }
+                    }
+                }
+            };
+            let peer_os = match peer_os_msg {
                 BluetoothMessage::PeerOS(os) => os,
                 other => Err(FCError {
                     message: format!(
@@ -303,8 +366,19 @@ pub async fn negotiate_bluetooth<T: UI>(
             None => println!("No BLE peer address recorded; nothing to disconnect"),
         }
 
-        exchange
-    } else {
+        match exchange {
+            Err(e) if e.message == NO_CONTACT => {
+                ui.output("Nobody has connected to us; looking for the other device instead...");
+                None
+            }
+            other => Some(other),
+        }
+    };
+    if let Some(result) = peripheral_first {
+        return result;
+    }
+
+    {
         // acting as central
         ui.output("Started Bluetooth scan, waiting for sending device...");
         ui.output("The other device has to be advertising -- start the transfer there too.");
@@ -321,6 +395,12 @@ pub async fn negotiate_bluetooth<T: UI>(
         // keeps its half of the bond and cannot be told, which is the failure mode described
         // in docs/bluetooth-field-guide.md (law 4) and the bug fixed in 6039d53. Apple peers
         // cannot clear their half programmatically at all, so the user is told what to do.
+        // The whole sequence retries as one -- scan, connect, enumerate, exchange -- because the
+        // step that fails is not always the one that is wrong. On 2026-08-08 a phone was found,
+        // connected to and fully enumerated, and then the *first read* came back "Not connected":
+        // BlueZ had answered the enumeration out of its cache for a bonded peer while the link
+        // itself was already gone. Only find_characteristics used to be retryable, so that
+        // failure ended the transfer outright, having done everything right up to the last step.
         let mut attempt = 0;
         let (device, characteristics) = loop {
             let device = central::scan(&adapter, ui).await?;
@@ -371,7 +451,114 @@ pub async fn negotiate_bluetooth<T: UI>(
         };
 
         ui.output("Exchanging details over Bluetooth...");
-        let info = exchange_info(characteristics, mode, ui, connection_mode).await;
+        let mut characteristics = characteristics;
+        let mut device = device;
+        let info = loop {
+            // Taken rather than moved: every retry path below puts a fresh set back, and the
+            // compiler cannot see that through the quick-reconnect loop.
+            match exchange_info(
+                std::mem::take(&mut characteristics),
+                mode,
+                ui,
+                connection_mode,
+            )
+            .await
+            {
+                Ok(info) => break Ok(info),
+                Err(e) => {
+                    attempt += 1;
+                    println!("    Exchange failed (attempt {}): {}", attempt, e);
+                    if attempt > 3 {
+                        break Err(e);
+                    }
+                    ui.output(&format!("The Bluetooth exchange failed: {}", e));
+                    ui.output("Reconnecting and trying again...");
+                    // Reconnect on the spot before going back to scanning. The HCI trace of
+                    // 2026-08-08 22:10 shows why: BlueZ issued exactly ONE LE Extended Create
+                    // Connection, the controller reported the link established, and 249ms later
+                    // the very first exchange on it came back "Connection Failed to be
+                    // Established" (0x3e) -- a link that dies before a single packet, which the
+                    // peer never even sees. That is a transient radio failure, and every BLE stack
+                    // answers it by connecting again; BlueZ instead fell back to the classic
+                    // bearer, which carries no GATT, and the transfer inherited the wreckage.
+                    // Rescanning first would waste the peer's advertisement; try the link again.
+                    let mut quick = 0;
+                    while quick < 3 {
+                        quick += 1;
+                        if let Err(disconnect_error) = device.disconnect().await {
+                            println!("    Could not disconnect before reconnect: {}", disconnect_error);
+                        }
+                        sleep(Duration::from_secs(1)).await;
+                        ui.output(&format!("Opening the Bluetooth link again ({} of 3)...", quick));
+                        match find_characteristics(&device, ui).await {
+                            Ok(c) => {
+                                characteristics = c;
+                                break;
+                            }
+                            Err(retry_error) => {
+                                println!("    Reconnect {} failed: {}", quick, retry_error);
+                            }
+                        }
+                    }
+                    if quick < 3 {
+                        continue;
+                    }
+                    // "Not connected" against a peer this side believes it is connected to means
+                    // the link is not carrying GATT at all -- a classic-Bluetooth connection to a
+                    // device we have paired with before, which the peer's app never even sees.
+                    // No amount of retrying fixes a bond that steers the connection to the wrong
+                    // bearer; removing it on both devices does (白い熊, 2026-08-08).
+                    if attempt >= 2 && e.to_string().contains("Not connected") {
+                        // "Not connected" against a peer this side believes it is connected to is
+                        // the classic-bearer trap: a dual-transport bond makes Connect() dial
+                        // BR/EDR, which carries no GATT, and the peer's app never even sees a
+                        // connection. Retrying cannot help -- every round rebuilds the same wrong
+                        // bearer -- and only a bond made LE-only fixes it. So drop ours here and
+                        // let the next round create one: with no bond, find_characteristics takes
+                        // the L2CAP high-security path, which raises an LE link and bonds over it.
+                        //
+                        // This is the one-sided removal law 4 warns about, and it is deliberate in
+                        // exactly this case: the peer's half is *already* out of step with ours
+                        // (that is what the failure means), and the very next attempt pairs afresh
+                        // rather than leaving the two to disagree.
+                        if device.is_paired().await.unwrap_or(false) {
+                            ui.output(
+                                "The pairing between these devices is steering the connection to \
+                                 classic Bluetooth, where this cannot work. Removing it here and \
+                                 pairing again -- expect a passkey to confirm on both screens.",
+                            );
+                            if let Err(remove_error) = adapter.remove_device(device.address()).await
+                            {
+                                println!("    Could not remove device: {}", remove_error);
+                            }
+                        } else {
+                            ui.output(
+                                "This keeps failing at the same point. Remove this computer from \
+                                 the other device's Bluetooth settings, then start again.",
+                            );
+                        }
+                    }
+                    // Drop the link first: an enumeration answered from BlueZ's cache leaves us
+                    // holding characteristics for a connection that no longer exists, and reusing
+                    // them fails the same way for ever.
+                    if let Err(disconnect_error) = device.disconnect().await {
+                        println!("    Could not disconnect before retry: {}", disconnect_error);
+                    }
+                    sleep(Duration::from_secs(2)).await;
+                    let found = central::scan(&adapter, ui).await?;
+                    match find_characteristics(&found, ui).await {
+                        Ok(c) => {
+                            device = found;
+                            characteristics = c;
+                        }
+                        Err(find_error) => {
+                            println!("    Could not re-enumerate: {}", find_error);
+                            break Err(find_error);
+                        }
+                    }
+                }
+            }
+        };
         // Hang up, for the same reason the peripheral branch above does: on success every
         // write was a confirmed WriteOp::Request and every read has returned, so the
         // exchange is complete, and a link left up is one the next transfer inherits in the

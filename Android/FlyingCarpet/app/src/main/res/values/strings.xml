@@ -16,7 +16,7 @@
     <string name="ok">OK</string>
     <string name="cancelSmall">Cancel</string>
     <string name="welcome">Welcome to Flying Carpet!</string>
-    <string name="selectFiles">Select Files</string>
+    <string name="selectFiles">Files to send</string>
     <string name="cancel">Cancel Transfer</string>
     <string name="selectFolder">Select directory</string>
     <string name="receiveIn">Receive in “%1$s”</string>
@@ -25,7 +25,7 @@
     <string name="programTitle">白い熊 魔法絨毯</string>
     <string name="about">About</string>
     <string name="versionNumber">Version 10</string>
-    <string name="sendFolderText">Send Folder</string>
+    <string name="directoryToSend">Directory to send</string>
     <string name="bluetooth">Use Bluetooth</string>
     <!-- The line under the Bluetooth switch: how the password gets from one device to the other. -->
     <string name="bluetoothHintOn">Bluetooth will carry the password: nothing to scan or type.</string>

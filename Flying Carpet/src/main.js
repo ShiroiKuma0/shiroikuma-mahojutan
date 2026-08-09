@@ -5,7 +5,10 @@ let aboutButton;
 let canUseBluetooth = false;
 let usingBluetooth;
 let bluetoothSwitch;
-let sendFolderCheckbox;
+// Set by whichever of the two send buttons started this transfer: "Files to send" or
+// "Directory to send". It replaced a "Send Folder" tick box that had to be found and ticked
+// before pressing Start (白い熊, 2026-08-08).
+let sendingFolder = false;
 let peerLabel;
 let peerBox;
 let outputBox;
@@ -38,7 +41,7 @@ window.onunload = () => {
   let uiState = {
     usingBluetooth: usingBluetooth,
     // canUseBluetooth:
-    sendingFolder: sendFolderCheckbox.checked,
+    sendingFolder: sendingFolder,
     selectedMode: selectedMode,
     selectedPeer: selectedPeer,
     selectedFiles: selectedFiles,
@@ -69,7 +72,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   progressTotalDetails = document.getElementById('progressTotalDetails');
   totalProgressBar = document.getElementById('totalProgressBar');
   bluetoothSwitch = document.getElementById('bluetoothSwitch');
-  sendFolderCheckbox = document.getElementById('sendFolderCheckbox');
   connectionModeLabel = document.getElementById('connectionModeLabel');
   connectionModeBox = document.getElementById('connectionModeBox');
 
@@ -216,7 +218,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (uiState) {
     usingBluetooth = uiState.usingBluetooth;
     bluetoothSwitch.checked = usingBluetooth;
-    sendFolderCheckbox.checked = uiState.sendingFolder;
+    sendingFolder = !!uiState.sendingFolder;
     selectedMode = uiState.selectedMode;
     if (selectedMode === 'send') {
       document.getElementById('sendButton').checked = true;
@@ -494,7 +496,7 @@ async function beginTransfer(filesSelected) {
   // get files or folder
   if (!filesSelected) {
     if (selectedMode == 'send') {
-      if (sendFolderCheckbox.checked) {
+      if (sendingFolder) {
         let folder = await dialog.open({
           multiple: false,
           directory: true,
@@ -698,7 +700,7 @@ let modeChange = async (button) => {
   startButton.innerText = window.forkUI
     ? window.forkUI.startLabel(button)
     : (button === 'receive' ? 'Select directory' : 'Select Files');
-  document.getElementById('sendFolderDiv').style.display = button === 'send' ? '' : 'none';
+  document.getElementById('sendDirButton').style.display = button === 'send' ? '' : 'none';
   selectedMode = button;
   // after selectedMode is set, not before: refreshing first tested the mode we were leaving, which
   // is why the button turned up in Send mode
@@ -740,6 +742,8 @@ let applyBluetoothAvailability = () => {
 let checkStatus = () => {
   // every path that can change the mode, the connection mode or the switch comes through here
   updateBluetoothHint();
+  // the directory button is the start button's twin: same conditions, same moment
+  let sendDirButton = document.getElementById('sendDirButton');
   if (connectionMode === 'shared_network' || usingBluetooth) {
     // Shared network: peer OS not needed (discovery handles it)
     // Bluetooth: peer OS not needed (exchanged over BLE)
@@ -750,6 +754,9 @@ let checkStatus = () => {
     peerLabel.style.display = '';
     peerBox.style.display = '';
     startButton.disabled = !(selectedMode && selectedPeer);
+  }
+  if (sendDirButton) {
+    sendDirButton.disabled = startButton.disabled;
   }
 }
 
@@ -782,14 +789,14 @@ let needPassword = async () => {
 
 let enableUi = async () => {
   transferState = 'idle';
-  // show start button
+  // show start button, and the directory button with it if we are sending
   startButton.style.display = '';
+  document.getElementById('sendDirButton').style.display = selectedMode === 'send' ? '' : 'none';
   // hide cancel button
   cancelButton.style.display = 'none';
   // enable bluetooth switch (stays disabled in shared network mode)
   applyBluetoothAvailability();
   // enable send folder box
-  document.getElementById('sendFolderCheckbox').disabled = false;
   // enable radio buttons, file/folder selection buttons
   let radioButtons = ['sendButton', 'receiveButton', 'androidButton', 'iosButton', 'linuxButton', 'macButton', 'windowsButton', 'hotspotButton', 'sharedNetworkButton'];
   for (let i in radioButtons) {
@@ -814,20 +821,30 @@ let disableUi = async () => {
   if (lastFolderButton) {
     lastFolderButton.style.display = 'none';
   }
-  // hide start button
+  // hide both send buttons
   startButton.style.display = 'none';
+  document.getElementById('sendDirButton').style.display = 'none';
   // show cancel button
   cancelButton.style.display = '';
   // disable bluetooth switch
   document.getElementById('bluetoothSwitch').disabled = true;
   // disable send folder box
-  document.getElementById('sendFolderCheckbox').disabled = true;
   // disable radio buttons, file/folder selection buttons
   let radioButtons = ['sendButton', 'receiveButton', 'androidButton', 'iosButton', 'linuxButton', 'macButton', 'windowsButton', 'hotspotButton', 'sharedNetworkButton'];
   for (let i in radioButtons) {
     document.getElementById(radioButtons[i]).disabled = true;
   }
 }
+
+// The two send buttons. Each says what it will send and starts the transfer in one press.
+window.startFiles = () => {
+  sendingFolder = false;
+  startTransfer(false);
+};
+window.startDirectory = () => {
+  sendingFolder = true;
+  startTransfer(false);
+};
 
 window.startTransfer = startTransfer;
 window.cancelTransfer = cancelTransfer;
