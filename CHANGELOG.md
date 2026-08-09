@@ -7,6 +7,97 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+038 — 2026-08-09
+
+Bluetooth transfers work in **both directions** between the desktop and an EMUI phone — six separate
+faults were in the way, each able to hide the others — and a name collision at the destination is now
+a question asked on the sending device instead of a decision made silently on the receiving one.
+
+### The file that is already there: skip, overwrite, or rename
+
+- Upstream decides a collision on the **receiving** device and says nothing: an identical file is
+  skipped, a differing one is quietly saved as `(1) name`. Both are decisions made on the device
+  whose user is not the one watching the transfer. **The sending device now asks** — *Skip*,
+  *Overwrite*, or *Rename* — on both apps, in the fork's dialog dress, with the rename field
+  pre-filled as `name (copy).ext` and the extension left intact.
+- **Overwriting really overwrites**: the document that is there is truncated and rewritten
+  (`openOutputStream(uri, "wt")` on Android, the same path on the desktop) rather than a `(1) name`
+  appearing beside it, which is the whole point of choosing it.
+- The receiver's own idea of the answer is gone: it no longer skips or renames behind your back, it
+  reports what it found and obeys what comes back.
+- **It is version-guarded**, because the exchange is a wire change. The fork announces itself as
+  version `10001` (`WIRE_VERSION` in `core/src/lib.rs`, mirrored in `MainViewModel.kt`); stock v10
+  sends `10` and, per its own rule, lets the higher-numbered peer decide compatibility — which it
+  then obeys. A stock or Apple peer transfers exactly as before and never sees the extra fields. Two
+  forks recognise each other and say so once in the log.
+- The exchange, spoken only between forks: receiver sends a status (`0` no such file, `1` same name
+  and size, `2` same name, different size); on `1` the sender sends its 32-byte hash and the receiver
+  answers whether they are identical; on anything but `0` the sender sends its choice (`0` skip,
+  `1` overwrite, `2` rename) and, for a rename, a length-prefixed relative name.
+- Covered by a protocol test (`transfer_tests::file_conflict_choices_are_obeyed`) that runs both
+  halves over a duplex for all three answers and asserts what ends up on disk — with a deadlock guard,
+  which immediately caught that an answer sitting in the channel before the question is asked gets
+  eaten by the drain that clears stale answers.
+- The phone asked about the wrong name: `sendFileDetails()` now returns the relative name it actually
+  put on the wire. The `path` argument is the folder part — empty for individually picked files — so
+  the dialog was asking about `""` and offering to rename it to `" (copy)"`.
+
+### Bluetooth: both directions, and the reason they kept trading places
+
+- **Discovery could never find the peer.** The desktop advertises on an extended advertising set and
+  Android's default scan is legacy-only. The phone now asks for both, and after 15 s falls back to a
+  filterless scan that checks the service UUID itself.
+- **The desktop's advertisement was over the 31-byte budget** — flags + 128-bit UUID + `Flying Carpet`
+  is 36 — so BlueZ had to shuffle data out of it. The local name is gone; the UUID is what the peer
+  filters on anyway.
+- **Two harmonically related periods.** BlueZ advertised every 1280 ms while Android's `LOW_POWER`
+  scan listened 512 ms in every 5120 ms — exactly four times 1280 — so a packet that fell in the gap
+  fell in the gap *for ever*. The phone scans continuously while a transfer is being set up; the
+  desktop asks for a 100–150 ms interval.
+- **Pairing could not complete when the peer initiated it.** EMUI's stack does not present an incoming
+  numeric-comparison request (`smp_send_app_cback: Unexpected event: 6`) and resets the bond four
+  seconds later. The phone now calls `createBond()` itself, in both roles, before anything encrypted
+  is touched.
+- **A read that was answered but never delivered stalled the exchange for ever.** `read()` and
+  `write()` each issued their GATT operation twice, and the second was refused *because the first was
+  still in flight*. One operation per call now, retried through the handler, and every read carries a
+  watchdog.
+- **And the one that made the working direction alternate:** pairing writes a classic `[LinkKey]`
+  beside the LE keys (cross-transport key derivation), after which `Device1.Connect()` dials BR/EDR —
+  which carries no GATT. Linux cannot demand LE without experimental `bluetoothd` interfaces; Android
+  always passes `TRANSPORT_LE`. So **the roles are negotiated instead of following send/receive**: the
+  desktop offers itself as advertiser first in both directions, the phone offers both roles and takes
+  the connecting one when it makes contact first, and both the OS exchange and the credential exchange
+  follow the negotiated role rather than the transfer direction.
+- The desktop reports whether its advertisement actually took an advertising slot, re-registers it if
+  BlueZ retires it, and keeps the registration alive for the whole 60-second grace period.
+- `all_properties()` on a service or characteristic no longer fails a transfer: BlueZ does not always
+  publish MTU, and a debug print must not be fatal.
+
+### Being able to see it happen
+
+- `utils::with_progress` ticks every wait with the seconds counted off, and the Android side has its
+  twin, so a Bluetooth step that takes half a minute says so second by second instead of looking hung.
+- **The phone writes its transcript** to `Android/data/shiroikuma.mahojutan/files/logs/transcript.log`.
+  EMUI drops `Log.i` from third-party apps, so this is the only way to read the phone's half of a
+  failed handshake. The scan records every device it hears there, once each.
+- Another program's Bluetooth discovery is **named** when one is running: a classic inquiry loop owns
+  the radio 10.24 seconds at a time, back to back, and no LE connection can be established under it.
+  KDE Connect's was costing about 60 seconds a transfer.
+
+### The send row
+
+- The **Send Folder** tick box is gone from the desktop. Both apps' send row now carries two buttons —
+  **Files to send** and **Directory to send** — so the choice is made by pressing the thing you want
+  rather than by remembering to tick a box first, and the phone gains folder sending, which it never had.
+- The UI page's *start* element dresses all three labels (start, files, directory) together.
+
+### Progress bars
+
+- Both apps draw the desktop's shape: a bordered empty box that fills, rather than a bare line.
+- **Thickness is settable** — a slider under *Progress bar* on the UI page, applied to both bars on
+  Android and to the desktop's, so it can be a hairline or a slab.
+
 ## 10.0.3+013 — 2026-08-08
 
 Bluetooth becomes usable in Shared Network mode — and, along the way, usable at all: the handshake
