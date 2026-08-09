@@ -81,6 +81,25 @@ const CHUNKSIZE: usize = 1_000_000; // 1 MB
                                     // v10 is a breaking change: shared network mode and its new protocol are not compatible
                                     // with v9 or earlier. See docs/shared-network-crypto.md.
 const MAJOR_VERSION: u64 = 10;
+// What this fork puts on the wire in place of the plain major version, and the floor at which a
+// peer is recognised as running it too. Stock v10 sends 10 and treats anything higher as "newer
+// peer decides compatibility", which it then obeys -- so a fork can announce itself without
+// breaking a stock peer, and two forks recognise each other and switch on the extras below.
+// Only ever compared, never displayed.
+const WIRE_VERSION: u64 = 10_001;
+const FORK_WIRE_FLOOR: u64 = 10_000;
+
+/// What to do about a file the receiving device already has, decided on the SENDING device.
+///
+/// Fork-only: the exchange that carries it (receiving.rs / sending.rs) is skipped entirely unless
+/// both ends announced a fork wire version, because a stock peer would read the extra fields as
+/// the next protocol field and desynchronise.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FileConflictChoice {
+    Skip,
+    Overwrite,
+    Rename(String),
+}
 // Sanity bound on the peer-supplied file count (companion to the header bounds in
 // receiving.rs): no legitimate transfer approaches it, and a corrupt or hostile
 // stream shouldn't be able to put us into a near-endless receive loop.
@@ -123,6 +142,9 @@ pub trait UI: Clone + Send + 'static {
     fn update_progress_details(&self, current: &str, total: &str);
     fn enable_ui(&self);
     fn show_pin(&self, pin: &str);
+    /// The receiving device already has a file by this name. Ask which way to go; the answer
+    /// arrives on the channel passed to start_transfer, exactly as the pairing PIN's does.
+    fn ask_file_conflict(&self, name: &str, local_size: u64, incoming_size: u64, identical: bool);
 }
 
 #[derive(Clone)]
@@ -273,6 +295,9 @@ pub struct Transfer {
     pub hotspot: Arc<Mutex<Option<PeerResource>>>,
     pub ssid: Arc<Mutex<Option<String>>>,
     pub ble_ui_tx: Mutex<Option<mpsc::Sender<bool>>>, // used by javascript to report user's choice about whether to pair with bluetooth device to windows custom pairing callback.
+    // The same arrangement for "the other device already has this file": the frontend asks, the
+    // answer comes back here, and the sending half of the transfer is waiting on it.
+    pub conflict_tx: Mutex<Option<mpsc::Sender<FileConflictChoice>>>,
 }
 
 impl Transfer {
@@ -282,6 +307,7 @@ impl Transfer {
             hotspot: Arc::new(Mutex::new(None)),
             ssid: Arc::new(Mutex::new(None)),
             ble_ui_tx: Mutex::new(None),
+            conflict_tx: Mutex::new(None),
         }
     }
 }
@@ -299,6 +325,8 @@ pub async fn start_transfer<T: UI>(
     state_ssid: Arc<Mutex<Option<String>>>,
     ble_ui_rx: mpsc::Receiver<bool>,
     connection_mode: ConnectionMode,
+    // The sending side's answers to "the other device already has this file" (fork-only).
+    mut conflict_rx: mpsc::Receiver<FileConflictChoice>,
 ) -> Option<TransferStream> {
     // get files or receive directory
     // don't panic on bad input: a panic here kills the transfer task without running
@@ -489,14 +517,17 @@ pub async fn start_transfer<T: UI>(
     let mut preamble = noise::RecordingStream::new(tcp);
 
     // make sure the versions are compatible
-    match confirm_version(is_wifi_client, &mut preamble).await {
-        Ok(()) => (),
+    let peer_is_fork = match confirm_version(is_wifi_client, &mut preamble).await {
+        Ok(is_fork) => is_fork,
         Err(e) => {
             ui.output(&format!("Error confirming version: {}", e));
             let (tcp, _, _) = preamble.into_parts();
             return Some(TransferStream::Plain(tcp));
         }
     };
+    if peer_is_fork {
+        println!("Peer is running this fork; the file-conflict exchange is available");
+    }
 
     // confirm that one end is sending and the other is receiving
     match confirm_mode(mode.clone(), is_wifi_client, &mut preamble, connection_mode).await {
@@ -556,8 +587,16 @@ pub async fn start_transfer<T: UI>(
                     files.len(),
                     file.name
                 ));
-                match sending::send_file(&file.path, &file.name, &mut stream, &mut totals, ui)
-                    .await
+                match sending::send_file(
+                    &file.path,
+                    &file.name,
+                    &mut stream,
+                    &mut totals,
+                    ui,
+                    peer_is_fork,
+                    &mut conflict_rx,
+                )
+                .await
                 {
                     Ok(_) => (),
                     Err(e) => {
@@ -591,8 +630,15 @@ pub async fn start_transfer<T: UI>(
                 ui.output("=========================");
                 ui.output(&format!("Receiving file {} of {}.", i + 1, num_files,));
                 let last_file = i == num_files - 1;
-                match receiving::receive_file(&folder, &mut stream, &mut totals, ui, last_file)
-                    .await
+                match receiving::receive_file(
+                    &folder,
+                    &mut stream,
+                    &mut totals,
+                    ui,
+                    last_file,
+                    peer_is_fork,
+                )
+                .await
                 {
                     Ok(_) => (),
                     Err(e) => {
@@ -829,23 +875,23 @@ async fn confirm_mode<S: AsyncRead + AsyncWrite + Unpin>(
 async fn confirm_version<S: AsyncRead + AsyncWrite + Unpin>(
     is_wifi_client: bool,
     stream: &mut S,
-) -> Result<(), FCError> {
+) -> Result<bool, FCError> {
     // only really have to worry about version 6 as that's the only one online and in app store. it will do mode confirmation first,
     // and obey hotspot host/guest rule, and it will write 0 or 1 for mode, so we shouldn't deadlock with both ends waiting.
     let peer_version = if is_wifi_client {
         // send version to hotspot host. in shared network mode both sides are wifi
         // clients, so both send first — symmetric, works via TCP buffering.
-        stream.write_u64(MAJOR_VERSION).await?;
+        stream.write_u64(WIRE_VERSION).await?;
         // receive version of host
         stream.read_u64().await?
     } else {
         // wait for guest to say what version they're using, then send our version
         let _peer_version = stream.read_u64().await?;
-        stream.write_u64(MAJOR_VERSION).await?;
+        stream.write_u64(WIRE_VERSION).await?;
         _peer_version
     };
 
-    if peer_version < MAJOR_VERSION {
+    if peer_version < WIRE_VERSION {
         // we make decision
         if utils::is_compatible(peer_version) {
             stream.write_u64(1).await?; // report that versions are compatible
@@ -853,13 +899,15 @@ async fn confirm_version<S: AsyncRead + AsyncWrite + Unpin>(
             stream.write_u64(0).await?;
             fc_error(&format!("The other device is running Flying Carpet version {}, which is not compatible with this version ({}). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.", peer_version, MAJOR_VERSION))?;
         }
-    } else if peer_version > MAJOR_VERSION {
+    } else if peer_version > WIRE_VERSION {
         // peer makes decision
         if stream.read_u64().await? == 0 {
             fc_error(&format!("The other device is running Flying Carpet version {}, which is not compatible with this version ({}). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.", peer_version, MAJOR_VERSION))?;
         }
     } // otherwise, versions match, implicitly compatible
-    Ok(())
+    // A peer that announced a fork wire version understands the file-conflict exchange; a stock
+    // one does not, and must be spoken to exactly as upstream does.
+    Ok(peer_version >= FORK_WIRE_FLOOR)
 }
 
 // TODO:
@@ -902,9 +950,17 @@ mod transfer_tests {
     use super::*;
     use crate::noise::{handshake, Role};
 
+    // A UI that answers the file-conflict question the moment it is asked, the way the frontend
+    // does: emit -> user -> channel.
     #[derive(Clone)]
-    struct TestUi;
-    impl UI for TestUi {
+    struct AnsweringUi {
+        answer: FileConflictChoice,
+        tx: mpsc::Sender<FileConflictChoice>,
+    }
+    impl UI for AnsweringUi {
+        fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {
+            let _ = self.tx.try_send(self.answer.clone());
+        }
         fn output(&self, _msg: &str) {}
         fn show_progress_bar(&self) {}
         fn update_progress_bar(&self, _percent: u8) {}
@@ -912,6 +968,116 @@ mod transfer_tests {
         fn update_progress_details(&self, _current: &str, _total: &str) {}
         fn enable_ui(&self) {}
         fn show_pin(&self, _pin: &str) {}
+    }
+
+    #[derive(Clone)]
+    struct TestUi;
+    impl UI for TestUi {
+        fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {}
+        fn output(&self, _msg: &str) {}
+        fn show_progress_bar(&self) {}
+        fn update_progress_bar(&self, _percent: u8) {}
+        fn update_total_progress_bar(&self, _percent: u8) {}
+        fn update_progress_details(&self, _current: &str, _total: &str) {}
+        fn enable_ui(&self) {}
+        fn show_pin(&self, _pin: &str) {}
+    }
+
+
+    /// The fork's file-conflict exchange, both halves, over a real duplex: the receiver already
+    /// holds a file by that name, the sender is asked, and each of the three answers lands the
+    /// way it should -- skipped, replaced, or written under a new name. This is a protocol test:
+    /// it is the thing that would desynchronise a transfer if the two halves ever disagreed.
+    #[tokio::test]
+    async fn file_conflict_choices_are_obeyed() {
+        for (answer, expect_original, expect_renamed) in [
+            (FileConflictChoice::Skip, "old", None),
+            (FileConflictChoice::Overwrite, "new", None),
+            (
+                FileConflictChoice::Rename("photo (copy).bin".to_string()),
+                "old",
+                Some("photo (copy).bin"),
+            ),
+        ] {
+            let base = std::env::temp_dir().join(format!(
+                "fc_conflict_{}_{:?}_{:?}",
+                std::process::id(),
+                std::thread::current().id(),
+                std::mem::discriminant(&answer),
+            ));
+            let send_dir = base.join("send");
+            let recv_dir = base.join("recv");
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&send_dir).unwrap();
+            std::fs::create_dir_all(&recv_dir).unwrap();
+            let src = send_dir.join("photo.bin");
+            std::fs::write(&src, b"new").unwrap();
+            // the receiving side already has a *different* file by that name
+            std::fs::write(recv_dir.join("photo.bin"), b"old").unwrap();
+
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let (conflict_tx, mut conflict_rx) = mpsc::channel(1);
+            // Answer when asked, never before: the sender deliberately drops anything already in
+            // the channel when it puts a question, so that a late answer to a previous file
+            // cannot be mistaken for this one's.
+            let answering_ui = AnsweringUi {
+                answer: answer.clone(),
+                tx: conflict_tx,
+            };
+
+            let src2 = src.clone();
+            let sender = tokio::spawn(async move {
+                let mut stream = client;
+                let mut totals = Totals::new(1, Some(3));
+                sending::send_file(
+                    &src2,
+                    "photo.bin",
+                    &mut stream,
+                    &mut totals,
+                    &answering_ui,
+                    true,
+                    &mut conflict_rx,
+                )
+                .await
+                .unwrap();
+            });
+
+            let recv_dir2 = recv_dir.clone();
+            let receiver = tokio::spawn(async move {
+                let mut stream = server;
+                let mut totals = Totals::new(1, None);
+                receiving::receive_file(&recv_dir2, &mut stream, &mut totals, &TestUi, true, true)
+                    .await
+                    .unwrap();
+            });
+
+            // Ten seconds is forever for three bytes; a hang here means the two halves of the
+            // exchange disagree, which is exactly what this test is for.
+            tokio::time::timeout(std::time::Duration::from_secs(10), sender)
+                .await
+                .expect("sender deadlocked")
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+                .await
+                .expect("receiver deadlocked")
+                .unwrap();
+
+            assert_eq!(
+                std::fs::read_to_string(recv_dir.join("photo.bin")).unwrap(),
+                expect_original,
+                "original file after {:?}",
+                answer
+            );
+            if let Some(renamed) = expect_renamed {
+                assert_eq!(
+                    std::fs::read_to_string(recv_dir.join(renamed)).unwrap(),
+                    "new",
+                    "renamed copy after {:?}",
+                    answer
+                );
+            }
+            let _ = std::fs::remove_dir_all(&base);
+        }
     }
 
     // End-to-end shared-network path: the real send_file/receive_file run over a Noise
@@ -950,7 +1116,16 @@ mod transfer_tests {
                                              // so the receiver's directory recreation is covered end to end
             let mut totals = Totals::new(1, None);
             totals.file_index = 1;
-            sending::send_file(&src2, "album/photo.bin", &mut enc, &mut totals, &TestUi)
+            let (_conflict_tx, mut conflict_rx) = mpsc::channel(1);
+            sending::send_file(
+                &src2,
+                "album/photo.bin",
+                &mut enc,
+                &mut totals,
+                &TestUi,
+                false,
+                &mut conflict_rx,
+            )
                 .await
                 .unwrap();
             enc.flush().await.unwrap();
@@ -963,7 +1138,7 @@ mod transfer_tests {
             assert_eq!(count, 1);
             let mut totals = Totals::new(1, None);
             totals.file_index = 1;
-            receiving::receive_file(&recv_dir2, &mut enc, &mut totals, &TestUi, true)
+            receiving::receive_file(&recv_dir2, &mut enc, &mut totals, &TestUi, true, false)
                 .await
                 .unwrap();
         });

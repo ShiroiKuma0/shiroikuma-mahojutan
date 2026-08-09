@@ -27,6 +27,7 @@ pub async fn receive_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     totals: &mut crate::Totals,
     ui: &T,
     last_file: bool,
+    peer_is_fork: bool,
 ) -> Result<(), FCError> {
     let folder = folder.to_owned();
     let start = Instant::now();
@@ -47,18 +48,44 @@ pub async fn receive_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     let relative_path = sanitize_relative_filename(&filename)?;
     let mut full_path = folder.clone();
     full_path.push(&relative_path);
-    let need_transfer = check_for_file(&full_path, file_size, stream).await?;
-    if !need_transfer {
-        ui.output("Recipient already has this file, skipping.");
-        return Ok(());
+    // Fork-only: report what we have and let the sending device decide (see FileConflictChoice).
+    // Upstream's rule -- skip an identical file, silently rename a differing one -- is made here,
+    // on the device whose user is not the one watching the transfer.
+    let mut overwrite = false;
+    if peer_is_fork {
+        match resolve_conflict(&full_path, file_size, stream).await? {
+            ConflictOutcome::Skip => {
+                ui.output("The sending device chose to skip this file.");
+                return Ok(());
+            }
+            ConflictOutcome::Overwrite => {
+                ui.output("Replacing the copy we already had.");
+                overwrite = true;
+            }
+            ConflictOutcome::Receive(new_name) => {
+                if let Some(name) = new_name {
+                    let renamed = sanitize_relative_filename(&name)?;
+                    full_path = folder.clone();
+                    full_path.push(&renamed);
+                    ui.output(&format!("Saving it as \"{}\".", renamed.to_string_lossy()));
+                }
+            }
+        }
+    } else {
+        let need_transfer = check_for_file(&full_path, file_size, stream).await?;
+        if !need_transfer {
+            ui.output("Recipient already has this file, skipping.");
+            return Ok(());
+        }
     }
 
     // make parent directories if necessary
     utils::make_parent_directories(&full_path)?;
 
     // check if file being received already exists. if so, find new filename.
+    // Overwriting is the one case that keeps the path it was given.
     let mut i = 1;
-    while full_path.is_file() {
+    while !overwrite && full_path.is_file() {
         let file_name = full_path
             .file_name()
             .expect("could not get filename from full path")
@@ -211,6 +238,56 @@ async fn receive_file_details<S: AsyncRead + Unpin>(
 }
 
 // returns Ok(true) if we need to perform the transfer
+
+/// What the sending device decided about a file we already have.
+enum ConflictOutcome {
+    Skip,
+    Overwrite,
+    /// Receive it, under the name we were given (Some) or the one already agreed (None).
+    Receive(Option<String>),
+}
+
+/// The fork's file-conflict exchange, receiving half. The wire format is documented on the
+/// sending side (sending.rs::resolve_conflict); this half only reports and obeys.
+async fn resolve_conflict<S: AsyncRead + AsyncWrite + Unpin>(
+    full_path: &Path,
+    incoming_size: u64,
+    stream: &mut S,
+) -> Result<ConflictOutcome, FCError> {
+    if !full_path.is_file() {
+        stream.write_u64(0).await?;
+        return Ok(ConflictOutcome::Receive(None));
+    }
+    let local_size = fs::metadata(full_path)?.len();
+    let same_size = local_size == incoming_size;
+    stream.write_u64(if same_size { 1 } else { 2 }).await?;
+    if same_size {
+        let local_hash = utils::hash_file(full_path)?;
+        let mut peer_hash = vec![0; 32];
+        stream.read_exact(&mut peer_hash).await?;
+        let identical = local_hash[..] == peer_hash[..];
+        stream.write_u64(if identical { 1 } else { 0 }).await?;
+    }
+    match stream.read_u64().await? {
+        0 => Ok(ConflictOutcome::Skip),
+        1 => Ok(ConflictOutcome::Overwrite),
+        2 => {
+            let name_len = stream.read_u64().await?;
+            if name_len > MAX_FILENAME_BYTES {
+                fc_error("Peer sent an unreasonably long replacement filename")?;
+            }
+            let mut buffer = vec![0; name_len as usize];
+            stream.read_exact(&mut buffer).await?;
+            let name = String::from_utf8(buffer)?;
+            Ok(ConflictOutcome::Receive(Some(name)))
+        }
+        other => {
+            fc_error(&format!("Peer sent an unknown file decision: {}", other))?;
+            unreachable!()
+        }
+    }
+}
+
 async fn check_for_file<S: AsyncRead + AsyncWrite + Unpin>(
     filename: &Path,
     size: u64,

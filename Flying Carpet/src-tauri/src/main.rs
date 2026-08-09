@@ -4,8 +4,8 @@
 )]
 
 use flying_carpet_core::{
-    bluetooth, clean_up_transfer, network, start_transfer, utils, ConnectionMode, InterfaceInfo,
-    SendFile, Transfer, WiFiInterface, UI,
+    bluetooth, clean_up_transfer, network, start_transfer, utils, ConnectionMode,
+    FileConflictChoice, InterfaceInfo, SendFile, Transfer, WiFiInterface, UI,
 };
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -13,6 +13,14 @@ use std::sync::Arc;
 use std::{fs, sync::Mutex};
 use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
+
+#[derive(Clone, serde::Serialize)]
+struct FileConflictPayload {
+    name: String,
+    local_size: u64,
+    incoming_size: u64,
+    identical: bool,
+}
 
 #[derive(Clone, serde::Serialize)]
 struct Payload {
@@ -36,6 +44,23 @@ struct GUI {
 }
 
 impl UI for GUI {
+    // The sending side has hit a file the other device already has. Ask, and let
+    // user_file_conflict() below carry the answer back to the transfer.
+    fn ask_file_conflict(&self, name: &str, local_size: u64, incoming_size: u64, identical: bool) {
+        let window = self.window.lock().expect("Could not lock window mutex");
+        window
+            .emit(
+                "fileConflict",
+                FileConflictPayload {
+                    name: name.to_string(),
+                    local_size,
+                    incoming_size,
+                    identical,
+                },
+            )
+            .expect("Could not emit fileConflict event");
+    }
+
     fn output(&self, msg: &str) {
         self.window
             .lock()
@@ -216,6 +241,8 @@ fn start_async(
     // used by windows because we have to implement our own UI for PIN confirmation in non-UWP apps.
     // sends the user's choice of whether the bluetooth PINs match to know whether to pair.
     let (ble_ui_tx, ble_ui_rx) = mpsc::channel(1);
+    // Answers to "the other device already has this file", one question at a time.
+    let (conflict_tx, conflict_rx) = mpsc::channel(1);
 
     // Parse connection mode
     let conn_mode = match connection_mode.as_deref() {
@@ -247,6 +274,7 @@ fn start_async(
             transfer_ssid.clone(),
             ble_ui_rx,
             conn_mode,
+            conflict_rx,
         )
         .await;
         clean_up_transfer(stream, transfer_hotspot, transfer_ssid, &gui).await;
@@ -256,7 +284,31 @@ fn start_async(
     // running transfer off from the pairing dialog's answer
     let mut state_ble_ui_tx = state.ble_ui_tx.lock().unwrap();
     *state_ble_ui_tx = Some(ble_ui_tx);
+    let mut state_conflict_tx = state.conflict_tx.lock().unwrap();
+    *state_conflict_tx = Some(conflict_tx);
     None
+}
+
+/// The frontend's answer to a file the receiving device already has: "skip", "overwrite" or
+/// "rename" with the new name. Mirrors user_bluetooth_pair.
+#[tauri::command]
+fn user_file_conflict(choice: String, new_name: Option<String>, state: State<Transfer>) {
+    let answer = match choice.as_str() {
+        "overwrite" => FileConflictChoice::Overwrite,
+        "rename" => FileConflictChoice::Rename(new_name.unwrap_or_default()),
+        _ => FileConflictChoice::Skip,
+    };
+    println!("file conflict: user chose {:?}", answer);
+    let conflict_tx = state.conflict_tx.lock().expect("Could not lock conflict_tx");
+    let conflict_tx = match conflict_tx.as_ref() {
+        Some(tx) => tx.clone(),
+        None => return,
+    };
+    tokio::spawn(async move {
+        // The receiver lives in the transfer task; if the transfer ended while the dialog was up,
+        // answering it is a no-op rather than a panic.
+        let _ = conflict_tx.send(answer).await;
+    });
 }
 
 #[tokio::main]
@@ -326,6 +378,7 @@ async fn main() {
             get_network_interfaces,
             check_support,
             user_bluetooth_pair,
+            user_file_conflict,
             has_network_connection,
             fork_read_file,
             fork_write_file,

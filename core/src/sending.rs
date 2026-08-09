@@ -19,6 +19,8 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     stream: &mut S,
     totals: &mut crate::Totals,
     ui: &T,
+    peer_is_fork: bool,
+    conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictChoice>,
 ) -> Result<(), FCError> {
     let start = Instant::now();
     let mut handle = File::open(file)?;
@@ -31,10 +33,28 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     send_file_details(relative_name, size, stream).await?;
 
     // check to see if receiving end already has the file
-    let need_transfer = check_for_file(&file, stream).await?;
-    if !need_transfer {
-        ui.output("Recipient already has this file, skipping.");
-        return Ok(());
+    if peer_is_fork {
+        // Fork-only (see FileConflictChoice): the peer says whether it has a file by this name,
+        // and *this* side decides what happens to it, because this is the side with the user who
+        // chose the files. Upstream skips an identical file silently and renames a differing one
+        // without asking, which is a decision made on the wrong device.
+        match resolve_conflict(&file, relative_name, size, stream, ui, conflict_rx).await? {
+            Some(name) => {
+                if name != relative_name {
+                    ui.output(&format!("Sending it as \"{}\".", name));
+                }
+            }
+            None => {
+                ui.output("Skipping this file: the other device already has it.");
+                return Ok(());
+            }
+        }
+    } else {
+        let need_transfer = check_for_file(&file, stream).await?;
+        if !need_transfer {
+            ui.output("Recipient already has this file, skipping.");
+            return Ok(());
+        }
     }
 
     // show progress bar
@@ -125,6 +145,77 @@ async fn send_file_details<S: AsyncWrite + Unpin>(
 }
 
 // returns Ok(true) if we need to perform the transfer
+
+/// The fork's file-conflict exchange, sending half.
+///
+/// Wire (only ever spoken when both ends announced a fork version):
+///   receiver -> u64 status   0 = no such file, 1 = same name and size, 2 = same name, other size
+///   if status != 0:
+///     when status == 1: sender -> 32-byte hash of its copy, receiver -> u64 1 if identical
+///     sender -> u64 choice   0 = skip, 1 = overwrite, 2 = rename
+///     when choice == 2: sender -> u64 length + that many bytes of the new relative name
+///
+/// Returns the name to send the file under, or None to skip it.
+async fn resolve_conflict<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
+    file: &Path,
+    relative_name: &str,
+    size: u64,
+    stream: &mut S,
+    ui: &T,
+    conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictChoice>,
+) -> Result<Option<String>, FCError> {
+    let status = stream.read_u64().await?;
+    if status == 0 {
+        return Ok(Some(relative_name.to_string()));
+    }
+
+    // Same size: settle whether the bytes match too, so the question we ask is the right one.
+    let identical = if status == 1 {
+        let hash = utils::hash_file(file)?;
+        stream.write_all(&hash).await?;
+        stream.read_u64().await? == 1
+    } else {
+        false
+    };
+
+    ui.output(&format!(
+        "The other device already has \"{}\"{}.",
+        relative_name,
+        if identical { " (identical)" } else { " (a different file)" }
+    ));
+    // Drop any answer left over from a question the user was too slow to answer.
+    while conflict_rx.try_recv().is_ok() {}
+    ui.ask_file_conflict(relative_name, size, size, identical);
+    let choice = match conflict_rx.recv().await {
+        Some(choice) => choice,
+        // The channel is gone: the transfer was cancelled while the dialog was up.
+        None => crate::FileConflictChoice::Skip,
+    };
+
+    match choice {
+        crate::FileConflictChoice::Skip => {
+            stream.write_u64(0).await?;
+            Ok(None)
+        }
+        crate::FileConflictChoice::Overwrite => {
+            stream.write_u64(1).await?;
+            Ok(Some(relative_name.to_string()))
+        }
+        crate::FileConflictChoice::Rename(new_name) => {
+            let name = if new_name.trim().is_empty() {
+                relative_name.to_string()
+            } else {
+                new_name
+            };
+            stream.write_u64(2).await?;
+            let bytes = name.as_bytes();
+            stream.write_u64(bytes.len() as u64).await?;
+            stream.write_all(bytes).await?;
+            Ok(Some(name))
+        }
+    }
+}
+
 async fn check_for_file<S: AsyncRead + AsyncWrite + Unpin>(
     filename: &Path,
     stream: &mut S,

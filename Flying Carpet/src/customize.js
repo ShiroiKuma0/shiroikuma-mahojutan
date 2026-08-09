@@ -263,7 +263,11 @@ const SECTIONS = [
       }),
     ],
     colorGroups: [
-      { title: 'Progress bar', colors: [colorField('progress.color', 'Bar colour', YELLOW)] },
+      {
+        title: 'Progress bar',
+        colors: [colorField('progress.color', 'Bar colour', YELLOW)],
+        dims: [dimField('progress.height', 'Bar thickness', 60, 15)],
+      },
     ],
   },
   {
@@ -515,6 +519,8 @@ function buildThemeCss() {
 
   // Progress bar.
   const prog = eColor('progress.color', YELLOW);
+  const barHeight = eDim('progress.height', 15);
+  css += `#progressBar, #totalProgressBar { height: ${barHeight}px; min-height: ${barHeight}px; }\n`;
   css += `#progressBar { accent-color: ${prog}; }\n`;
   css += `#progressBar::-webkit-progress-bar { background-color: ${eColor('window.bg', BLACK)}; border: 1px solid ${prog}; }\n`;
   css += `#progressBar::-webkit-progress-value { background-color: ${prog}; }\n`;
