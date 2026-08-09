@@ -54,6 +54,21 @@ enum class ConnectionMode {
 // v10 is a breaking change: shared network mode and its new protocol are not compatible
 // with v9 or earlier. See docs/shared-network-crypto.md in the main repo.
 const val MAJOR_VERSION: Long = 10
+
+// What this fork puts on the wire in place of the plain major version, and the floor at which a
+// peer counts as running it too. Stock v10 sends 10 and treats anything higher as "the newer peer
+// decides compatibility", which it then obeys -- so the fork can announce itself without breaking
+// a stock peer, and two forks recognise each other and switch on the file-conflict exchange.
+// Mirrors WIRE_VERSION / FORK_WIRE_FLOOR in core/src/lib.rs; the two must stay in step.
+const val WIRE_VERSION: Long = 10_001
+const val FORK_WIRE_FLOOR: Long = 10_000
+
+/** What to do about a file the receiving device already has, decided on the sending device. */
+sealed class FileConflictChoice {
+    data object Skip : FileConflictChoice()
+    data object Overwrite : FileConflictChoice()
+    data class Rename(val newName: String) : FileConflictChoice()
+}
 val zero = ByteArray(8) // meant to represent a 64-bit unsigned 0
 val one = byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1) // meant to represent a 64-bit unsigned 1
 const val chunkSize = 5_000_000
@@ -106,6 +121,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     lateinit var cleanUpUi: () -> Unit
     lateinit var enableBluetoothUi: (Boolean) -> Unit
     lateinit var promptForPassword: () -> Unit // shared network mode: sender asks user for the receiver's password
+    // "The other device already has this file" -- asked on the SENDING device, which is where the
+    // user who picked the files is. Set by MainActivity; answered through the callback.
+    lateinit var askFileConflict: (String, Boolean, (FileConflictChoice) -> Unit) -> Unit
+    // True when the peer announced this fork's wire version, i.e. it understands the conflict
+    // exchange. A stock peer is spoken to exactly as upstream does.
+    var peerIsFork = false
     lateinit var displaySharedNetworkPassword: (String) -> Unit // shared network mode: receiver shows generated password as QR code
     var discoveryManager: DiscoveryManager? = null
     private var discoveryJob: Job? = null // receiver-role background discovery in shared network mode
@@ -1032,22 +1053,22 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             if (connectionMode == ConnectionMode.SharedNetwork) {
                 // symmetric: both sides send their version, then read the peer's.
                 // safe from deadlock because TCP buffers the 8-byte writes.
-                outputStream.write(longToBigEndianBytes(MAJOR_VERSION))
+                outputStream.write(longToBigEndianBytes(WIRE_VERSION))
                 peerVersion = ByteBuffer.wrap(readNBytes(8, inputStream)).long
             } else if (isHosting()) {
                 // wait for peer's version
                 val peerVersionBytes = readNBytes(8, inputStream)
                 peerVersion = ByteBuffer.wrap(peerVersionBytes).long
                 // send our version
-                outputStream.write(longToBigEndianBytes(MAJOR_VERSION))
+                outputStream.write(longToBigEndianBytes(WIRE_VERSION))
             } else {
                 // send our version
-                outputStream.write(longToBigEndianBytes(MAJOR_VERSION))
+                outputStream.write(longToBigEndianBytes(WIRE_VERSION))
                 // wait for peer's version
                 val peerVersionBytes = readNBytes(8, inputStream)
                 peerVersion = ByteBuffer.wrap(peerVersionBytes).long
             }
-            if (peerVersion < MAJOR_VERSION) {
+            if (peerVersion < WIRE_VERSION) {
                 // peer's version is lower, so we make the decision and report it to them.
                 // v10 is a clean break from earlier versions; if transferring with a higher
                 // version, that version decides compatibility.
@@ -1057,15 +1078,32 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                     outputStream.write(zero)
                     throw Exception("The other device is running Flying Carpet version $peerVersion, which is not compatible with this version ($MAJOR_VERSION). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.")
                 }
-            } else if (peerVersion > MAJOR_VERSION) {
+            } else if (peerVersion > WIRE_VERSION) {
                 // peer's version is higher, so they make the decision
                 val isCompatibleBytes = readNBytes(8, inputStream)
                 if (ByteBuffer.wrap(isCompatibleBytes).long != 1L) {
                     throw Exception("The other device is running Flying Carpet version $peerVersion, which is not compatible with this version ($MAJOR_VERSION). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.")
                 }
             } // otherwise versions match, implicitly compatible
+            // A peer that announced a fork wire version understands the file-conflict exchange.
+            peerIsFork = peerVersion >= FORK_WIRE_FLOOR
+        }
+        if (peerIsFork) {
+            outputText("The other device is running this fork; file conflicts will be asked about.")
         }
     }
+
+    /** Ask on this device what to do about a file the other device already has. */
+    suspend fun askAboutExistingFile(name: String, identical: Boolean): FileConflictChoice =
+        kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            handler.post {
+                askFileConflict(name, identical) { choice ->
+                    if (continuation.isActive) {
+                        continuation.resumeWith(Result.success(choice))
+                    }
+                }
+            }
+        }
 
     private suspend fun confirmMode() {
         withContext(Dispatchers.IO) {

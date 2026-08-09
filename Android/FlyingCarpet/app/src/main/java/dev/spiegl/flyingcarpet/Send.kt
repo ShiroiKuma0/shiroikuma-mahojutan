@@ -11,11 +11,24 @@ import java.nio.ByteBuffer
 suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, filePath: String) {
     val start = System.currentTimeMillis()
     outputText("File size: ${makeSizeReadable(file.length())}")
-    sendFileDetails(file, filePath)
-    val needTransfer = checkForFileSending(file)
-    if (!needTransfer) {
-        outputText("Recipient already has this file, skipping.")
-        return
+    val wireName = sendFileDetails(file, filePath)
+    if (peerIsFork) {
+        // Fork-only (version-guarded in confirmVersion): the other device says what it has, and
+        // the choice is made HERE, where the user who picked the files is. Upstream skips an
+        // identical file silently and renames a differing one without asking.
+        val sendAs = resolveConflictSending(file, wireName) ?: run {
+            outputText("Skipping this file: the other device already has it.")
+            return
+        }
+        if (sendAs != wireName) {
+            outputText("Sending it as \"$sendAs\".")
+        }
+    } else {
+        val needTransfer = checkForFileSending(file)
+        if (!needTransfer) {
+            outputText("Recipient already has this file, skipping.")
+            return
+        }
     }
     var bytesLeft = file.length()
     val buffer = ByteArray(chunkSize)
@@ -89,7 +102,11 @@ private fun MainViewModel.sendChunk(chunk: ByteArray) {
     outputStream.write(chunk)
 }
 
-private fun MainViewModel.sendFileDetails(file: DocumentFile, path: String) {
+/** Sends the header and returns the relative name the peer will see -- which is not `path`:
+ *  that is the folder part, empty for individually picked files. Handing it back is the only way
+ *  the conflict question can name the file the peer is actually talking about (白い熊, 2026-08-09:
+ *  the dialog asked about "" and offered to rename it to " (copy)"). */
+private fun MainViewModel.sendFileDetails(file: DocumentFile, path: String): String {
     // send size of filename
     if (file.name == null) {
         throw Exception("Could not get filename.")
@@ -104,6 +121,58 @@ private fun MainViewModel.sendFileDetails(file: DocumentFile, path: String) {
     outputStream.write(filenameBytes)
     // send file size
     outputStream.write(longToBigEndianBytes(file.length()))
+    return fullPath
+}
+
+
+/**
+ * The fork's file-conflict exchange, sending half. The wire format is documented in
+ * core/src/sending.rs (resolve_conflict); the two must stay in step.
+ *
+ * Returns the name to send the file under, or null to skip it.
+ */
+private suspend fun MainViewModel.resolveConflictSending(
+    file: DocumentFile,
+    filePath: String,
+): String? {
+    val status = withContext(Dispatchers.IO) {
+        ByteBuffer.wrap(readNBytes(8, inputStream)).long
+    }
+    if (status == 0L) {
+        return filePath
+    }
+    val identical = if (status == 1L) {
+        withContext(Dispatchers.IO) {
+            outputStream.write(hashFile(file.uri))
+            ByteBuffer.wrap(readNBytes(8, inputStream)).long == 1L
+        }
+    } else {
+        false
+    }
+    outputText(
+        "The other device already has \"$filePath\"" +
+                if (identical) " (identical)." else " (a different file)."
+    )
+    return when (val choice = askAboutExistingFile(filePath, identical)) {
+        is FileConflictChoice.Skip -> {
+            withContext(Dispatchers.IO) { outputStream.write(zero) }
+            null
+        }
+        is FileConflictChoice.Overwrite -> {
+            withContext(Dispatchers.IO) { outputStream.write(longToBigEndianBytes(1)) }
+            filePath
+        }
+        is FileConflictChoice.Rename -> {
+            val name = choice.newName.ifBlank { filePath }
+            withContext(Dispatchers.IO) {
+                outputStream.write(longToBigEndianBytes(2))
+                val bytes = name.toByteArray(Charsets.UTF_8)
+                outputStream.write(longToBigEndianBytes(bytes.size.toLong()))
+                outputStream.write(bytes)
+            }
+            name
+        }
+    }
 }
 
 private fun MainViewModel.checkForFileSending(file: DocumentFile): Boolean {

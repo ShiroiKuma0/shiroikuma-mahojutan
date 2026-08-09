@@ -426,6 +426,7 @@ mod tests {
         #[derive(Clone)]
         struct RecordingUI(Arc<Mutex<Vec<String>>>);
         impl crate::UI for RecordingUI {
+            fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {}
             fn output(&self, msg: &str) {
                 self.0.lock().expect("lock").push(msg.to_string());
             }

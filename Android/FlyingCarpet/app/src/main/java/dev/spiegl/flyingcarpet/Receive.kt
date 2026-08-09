@@ -1,5 +1,6 @@
 package dev.spiegl.flyingcarpet
 
+import android.app.Application
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
@@ -22,25 +23,53 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
     val (rawFilename, fileSize) = receiveFileDetails()
     val filename = sanitizeRelativeFilename(rawFilename)
     outputText("Filename: $filename.  Size: ${makeSizeReadable(fileSize)}")
-    val needTransfer = checkForFileReceiving(filename, fileSize)
-    if (!needTransfer) {
-        outputText("The same file already exists at this location, skipping.")
-        return
+    // Fork-only: report what we have and let the SENDING device decide (see FileConflictChoice).
+    // Upstream's rule -- skip an identical file, silently rename a differing one -- is a decision
+    // made here, on the device whose user is not the one watching the transfer.
+    var saveAs = filename
+    var overwriteUri: Uri? = null
+    if (peerIsFork) {
+        when (val outcome = resolveConflictReceiving(filename, fileSize)) {
+            is ConflictOutcome.Skip -> {
+                outputText("The sending device chose to skip this file.")
+                return
+            }
+            is ConflictOutcome.Overwrite -> {
+                outputText("Replacing the copy we already had.")
+                overwriteUri = outcome.uri
+            }
+            is ConflictOutcome.Receive -> {
+                outcome.newName?.let {
+                    saveAs = sanitizeRelativeFilename(it)
+                    outputText("Saving it as \"$saveAs\".")
+                }
+            }
+        }
+    } else {
+        val needTransfer = checkForFileReceiving(filename, fileSize)
+        if (!needTransfer) {
+            outputText("The same file already exists at this location, skipping.")
+            return
+        }
     }
     var bytesRead: Long = 0
 
     // detect if filename has folders in its path. if so, make them
-    val destinationFolder = makeParentDirectories(filename)
+    val destinationFolder = makeParentDirectories(saveAs)
         ?: safCache?.rootDocumentFile()
         ?: DocumentFile.fromTreeUri(getApplication(), receiveDir)
         ?: throw Exception("Could not get DocumentFile from receiveDir.")
 
-    // check if file being received already exists. if so, find new filename
-    val newFilename =
-        findNewFilename(destinationFolder, filename)
-
-    // open output file
-    val fileOutputStream = getOutputStreamForFile(destinationFolder, newFilename)
+    // open output file. Overwriting keeps the document we already had -- truncating it -- so the
+    // file the user chose to replace is the one that changes, rather than a "(1) name" beside it.
+    val fileOutputStream = if (overwriteUri != null) {
+        getApplication<Application>().contentResolver.openOutputStream(overwriteUri, "wt")
+            ?: throw Exception("Could not open the existing file to replace it")
+    } else {
+        // check if file being received already exists. if so, find new filename
+        val newFilename = findNewFilename(destinationFolder, saveAs)
+        getOutputStreamForFile(destinationFolder, newFilename)
+    }
 
     // receive file
     progressDetailsMut.postValue(progressDetails(0, fileSize, 0.0))
@@ -151,6 +180,58 @@ private fun MainViewModel.receiveFileDetails(): Pair<String, Long> {
     val fileSize = ByteBuffer.wrap(fileSizeBytes).long
 
     return Pair(filename, fileSize)
+}
+
+
+/** What the sending device decided about a file we already have. */
+private sealed class ConflictOutcome {
+    data object Skip : ConflictOutcome()
+    /** Replace the document we already have, at this URI. */
+    class Overwrite(val uri: Uri) : ConflictOutcome()
+    /** Receive it, under the name we were given (or the one already agreed, null). */
+    class Receive(val newName: String?) : ConflictOutcome()
+}
+
+/**
+ * The fork's file-conflict exchange, receiving half. The wire format is documented in
+ * core/src/sending.rs (resolve_conflict); this half only reports and obeys.
+ */
+private suspend fun MainViewModel.resolveConflictReceiving(
+    filename: String,
+    incomingSize: Long,
+): ConflictOutcome = withContext(Dispatchers.IO) {
+    val existing = resolveExistingFile(filename)
+    if (existing == null) {
+        outputStream.write(zero)
+        return@withContext ConflictOutcome.Receive(null)
+    }
+    val sameSize = existing.size == incomingSize
+    outputStream.write(longToBigEndianBytes(if (sameSize) 1 else 2))
+    if (sameSize) {
+        val localHash = hashFile(existing.uri)
+        val peerHash = readNBytes(32, inputStream)
+        var identical = true
+        for (i in 0 until 32) {
+            if (localHash[i] != peerHash[i]) {
+                identical = false
+            }
+        }
+        outputStream.write(if (identical) one else zero)
+    }
+    when (ByteBuffer.wrap(readNBytes(8, inputStream)).long) {
+        0L -> ConflictOutcome.Skip
+        1L -> ConflictOutcome.Overwrite(existing.uri)
+        2L -> {
+            val nameLength = ByteBuffer.wrap(readNBytes(8, inputStream)).long
+            if (nameLength <= 0 || nameLength > 8192) {
+                throw Exception("Peer sent an unreasonable replacement filename length: $nameLength")
+            }
+            ConflictOutcome.Receive(
+                String(readNBytes(nameLength.toInt(), inputStream), Charsets.UTF_8)
+            )
+        }
+        else -> throw Exception("Peer sent an unknown file decision")
+    }
 }
 
 // returns true if we need the transfer, false if not
