@@ -164,8 +164,9 @@ const SECTIONS = [
       toggleSurface('receive', '“Receive” button'),
       toggleSurface('hotspot', '“Hotspot” button'),
       toggleSurface('sharedNetwork', '“Shared Network” button'),
-      textSurface('start', '“Select Files” button', [
-        labelField('start.filesText', '“Select Files” text'),
+      textSurface('start', 'Send / receive buttons', [
+        labelField('start.filesText', '“Files to send” text'),
+        labelField('start.dirText', '“Directory to send” text'),
         labelField('start.folderText', '“Select directory” text (receive mode)'),
       ], {
         extraColors: [
@@ -229,14 +230,6 @@ const SECTIONS = [
       toggleSurface('linuxOs', '“Linux” button'),
       toggleSurface('macOs', '“macOS” button'),
       toggleSurface('windowsOs', '“Windows” button'),
-    ],
-  },
-  {
-    title: '“Send Folder” checkbox',
-    surfaces: [
-      textSurface('sendFolder', '“Send Folder” checkbox', [labelField('sendFolder.text', 'Label text')], {
-        extraColors: [colorField('sendFolder.tint', 'Box tint', YELLOW)],
-      }),
     ],
   },
   {
@@ -376,8 +369,8 @@ const DEFAULT_TEXTS = {
   'macOs.text': 'macOS',
   'windowsOs.text': 'Windows',
   'cancel.text': 'Cancel Transfer',
-  'sendFolder.text': 'Send Folder',
-  'start.filesText': 'Select Files',
+  'start.filesText': 'Files to send',
+  'start.dirText': 'Directory to send',
   'start.folderText': 'Select directory',
   'output.hint': 'Welcome to Flying Carpet!\nOnce other options are selected, drag and drop can be used to start a transfer.',
 };
@@ -406,9 +399,8 @@ const TEXT_SELECTORS = {
   linuxOs: 'label[for=linuxButton]',
   macOs: 'label[for=macButton]',
   windowsOs: 'label[for=windowsButton]',
-  start: '#startButton, #lastFolderButton',
+  start: '#startButton, #sendDirButton, #lastFolderButton',
   cancel: '#cancelButton',
-  sendFolder: 'label[for=sendFolderCheckbox]',
   output: '#outputBox',
   // the password box lives in the prompt dialog (index.html), which doubles as the
   // network-interface chooser -- so the dropdown wears the same dress as the text field
@@ -447,7 +439,7 @@ function buildThemeCss() {
 
   // Simple text surfaces.
   for (const key of ['title', 'version', 'about', 'bluetooth', 'bluetoothHint', 'modeInstruction',
-    'connectionInstruction', 'peerInstruction', 'sendFolder']) {
+    'connectionInstruction', 'peerInstruction']) {
     css += `${TEXT_SELECTORS[key]} { ${textDecls(key, true)} }\n`;
   }
   css += `#aboutButton { cursor: pointer; }\n`;
@@ -468,7 +460,7 @@ function buildThemeCss() {
 
   // Select Files / Start button.
   // the remembered-directory button beside it is styled identically, so the pair reads as one control
-  css += `#startButton, #lastFolderButton { background-color: ${eColor('start.fill', BLACK)} !important;` +
+  css += `#startButton, #sendDirButton, #lastFolderButton { background-color: ${eColor('start.fill', BLACK)} !important;` +
     ` border: ${eDim('start.strokeWidth', BORDER_WIDTH)}px solid ${eColor('start.stroke', YELLOW)} !important;` +
     ` border-radius: ${eDim('start.cornerRadius', CORNER_RADIUS)}px !important; ${textDecls('start', true)} }\n`;
 
@@ -502,8 +494,6 @@ function buildThemeCss() {
     ` border-radius: ${eDim('output.cornerRadius', CORNER_RADIUS)}px !important; padding: 8px;` +
     ` ${textDecls('output', true)} }\n`;
 
-  // Send Folder checkbox tint.
-  css += `#sendFolderCheckbox { accent-color: ${eColor('sendFolder.tint', YELLOW)}; }\n`;
 
   // Bluetooth switch: track via background-color, thumb via an inline SVG circle.
   const thumbOff = encColor(eColor('bt.thumbOff', YELLOW));
@@ -565,17 +555,20 @@ function buildThemeCss() {
 function applyTexts() {
   for (const key of ['title', 'about', 'uiButton', 'bluetooth', 'modeInstruction', 'connectionInstruction',
     'peerInstruction', 'send', 'receive', 'hotspot', 'sharedNetwork', 'androidOs', 'iosOs', 'linuxOs',
-    'macOs', 'windowsOs', 'cancel', 'sendFolder']) {
+    'macOs', 'windowsOs', 'cancel']) {
     const el = document.querySelector(TEXT_SELECTORS[key]);
     if (el) el.innerText = Settings.textOr(key + '.text', DEFAULT_TEXTS[key + '.text']);
   }
   // Version label: full versionName, no "Version" prefix, unless overridden.
   const versionEl = document.querySelector(TEXT_SELECTORS.version);
   if (versionEl) versionEl.innerText = Settings.textOr('version.text', appVersion || versionEl.innerText);
-  // Start button text depends on the current mode.
-  const startEl = document.querySelector(TEXT_SELECTORS.start);
+  // Start button text depends on the current mode; the directory button says the same thing
+  // whichever mode it is in, since it is only shown while sending.
+  const startEl = document.getElementById('startButton');
   const receiveChecked = document.getElementById('receiveButton');
   if (startEl) startEl.innerText = startLabel(receiveChecked && receiveChecked.checked ? 'receive' : 'send');
+  const sendDirEl = document.getElementById('sendDirButton');
+  if (sendDirEl) sendDirEl.innerText = Settings.textOr('start.dirText', DEFAULT_TEXTS['start.dirText']);
   // Welcome text: swap only while the box still shows a known default/hint, never over transfer logs.
   const out = document.getElementById('outputBox');
   if (out) {

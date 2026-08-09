@@ -115,6 +115,23 @@
         app:strokeColor="@color/startButtonStrokeColor"
         app:strokeWidth="2dp" />
 
+    <!-- the folder half of what used to be a "Send Folder" tick box; send mode only -->
+    <Button
+        android:id="@+id/sendDirButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:textAllCaps="false"
+        android:text="@string/directoryToSend"
+        android:textColor="@color/white"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@+id/startButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/startButton"
+        app:layout_constraintTop_toTopOf="@+id/startButton"
+        app:strokeColor="@color/startButtonStrokeColor"
+        app:strokeWidth="2dp" />
+
     <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
     <Button
         android:id="@+id/lastFolderButton"
@@ -397,19 +414,5 @@
         app:layout_constraintBottom_toBottomOf="@+id/modeInstruction"
         app:layout_constraintEnd_toStartOf="@+id/aboutButton"
         app:layout_constraintTop_toTopOf="@+id/modeInstruction" />
-
-    <CheckBox
-        android:id="@+id/sendFolderCheckBox"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="32dp"
-        android:layout_marginTop="16dp"
-        android:buttonTint="@color/darkGreenBlue"
-        android:text="@string/sendFolderText"
-        android:textColorLink="@color/darkGreenBlue"
-        android:visibility="invisible"
-        app:buttonIconTint="@color/black"
-        app:layout_constraintStart_toEndOf="@+id/startButton"
-        app:layout_constraintTop_toBottomOf="@+id/peerGroup" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
