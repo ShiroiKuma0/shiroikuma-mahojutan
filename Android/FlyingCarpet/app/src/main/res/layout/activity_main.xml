@@ -58,6 +58,25 @@
         app:strokeColor="@color/startButtonStrokeColor"
         app:strokeWidth="2dp" />
 
+    <!-- the folder half of what used to be a "Send Folder" tick box: same row, same dress, one
+         tap instead of tick-then-tap. Send mode only, so it never shares the row with the
+         remembered-directory button below. -->
+    <Button
+        android:id="@+id/sendDirButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:textAllCaps="false"
+        android:text="@string/directoryToSend"
+        android:textColor="@color/white"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="@+id/startButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/startButton"
+        app:layout_constraintTop_toTopOf="@+id/startButton"
+        app:strokeColor="@color/startButtonStrokeColor"
+        app:strokeWidth="2dp" />
+
     <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
     <Button
         android:id="@+id/lastFolderButton"
@@ -388,20 +407,6 @@
         app:layout_constraintBottom_toTopOf="@+id/modeGroup"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/qrCodeView" />
-
-    <CheckBox
-        android:id="@+id/sendFolderCheckBox"
-        android:layout_width="0dp"
-        android:layout_height="25dp"
-        android:layout_marginStart="8dp"
-        android:layout_marginTop="1dp"
-        android:layout_marginBottom="16dp"
-        android:buttonTint="@color/startButtonStrokeColor"
-        android:text="@string/sendFolderText"
-        android:visibility="invisible"
-        app:layout_constraintBottom_toTopOf="@+id/modeInstruction"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/bluetoothHint" />
 
     <TextView
         android:id="@+id/textView"

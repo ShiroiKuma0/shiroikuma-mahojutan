@@ -4,12 +4,10 @@ import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.View
-import android.widget.CheckBox
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.widget.CompoundButtonCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 
@@ -124,9 +122,10 @@ object UiCatalog {
                 toggleSurface("hotspot", "“Hotspot” button"),
                 toggleSurface("sharedNetwork", "“Shared Network” button"),
                 TextSurface(
-                    "start", "“Select Files” button",
+                    "start", "Send / receive buttons",
                     listOf(
-                        LabelField("start.filesText", "“Select Files” text"),
+                        LabelField("start.filesText", "“Files to send” text"),
+                        LabelField("start.dirText", "“Directory to send” text"),
                         LabelField("start.folderText", "“Select directory” text (receive mode)"),
                     ),
                     extraColors = listOf(
@@ -198,15 +197,6 @@ object UiCatalog {
                 toggleSurface("linuxOs", "“Linux” button"),
                 toggleSurface("macOs", "“macOS” button"),
                 toggleSurface("windowsOs", "“Windows” button"),
-            ),
-        ),
-        Section(
-            "“Send Folder” checkbox",
-            surfaces = listOf(
-                TextSurface(
-                    "sendFolder", "“Send Folder” checkbox", listOf(LabelField("sendFolder.text", "Label text")),
-                    extraColors = listOf(ColorField("sendFolder.tint", "Box tint", Defaults.YELLOW)),
-                ),
             ),
         ),
         Section(
@@ -350,7 +340,7 @@ object Appearance {
         applyText(activity, s, R.id.macButton, "macOs", setText = true)
         applyText(activity, s, R.id.windowsButton, "windowsOs", setText = true)
         applyText(activity, s, R.id.cancelButton, "cancel", setText = true)
-        applyText(activity, s, R.id.sendFolderCheckBox, "sendFolder", setText = true)
+
 
         // "Customize UI" button: text/font/size via applyText, then background / border / corner radius.
         applyText(activity, s, R.id.uiButton, "uiButton", setText = true)
@@ -372,11 +362,15 @@ object Appearance {
         // Start button: dynamic text (Select Files / Select Folder) + theming + background/border.
         applyStartButton(activity, s)
         applyLastFolderButton(activity, s)
-        activity.findViewById<MaterialButton>(R.id.startButton)?.let { start ->
-            start.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("start.fill") ?: Defaults.BLACK)
-            start.strokeColor = ColorStateList.valueOf(s.colorOrNull("start.stroke") ?: Defaults.YELLOW)
-            start.strokeWidth = dpToPx(activity, s.sizeOrNull("start.strokeWidth") ?: Defaults.BORDER_WIDTH)
-            start.cornerRadius = dpToPx(activity, s.sizeOrNull("start.cornerRadius") ?: Defaults.CORNER_RADIUS)
+        // Both send buttons and the remembered-directory button share one dress, so the row reads
+        // as one control however many of them are showing.
+        for (buttonId in listOf(R.id.startButton, R.id.sendDirButton)) {
+            activity.findViewById<MaterialButton>(buttonId)?.let { start ->
+                start.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("start.fill") ?: Defaults.BLACK)
+                start.strokeColor = ColorStateList.valueOf(s.colorOrNull("start.stroke") ?: Defaults.YELLOW)
+                start.strokeWidth = dpToPx(activity, s.sizeOrNull("start.strokeWidth") ?: Defaults.BORDER_WIDTH)
+                start.cornerRadius = dpToPx(activity, s.sizeOrNull("start.cornerRadius") ?: Defaults.CORNER_RADIUS)
+            }
         }
 
         // Toggle buttons (Send/Receive + the five OS buttons), each styled independently.
@@ -390,10 +384,6 @@ object Appearance {
             cancel.cornerRadius = dpToPx(activity, s.sizeOrNull("cancel.cornerRadius") ?: Defaults.CORNER_RADIUS)
         }
 
-        // Send Folder checkbox tint.
-        activity.findViewById<CheckBox>(R.id.sendFolderCheckBox)?.let {
-            CompoundButtonCompat.setButtonTintList(it, ColorStateList.valueOf(s.colorOrNull("sendFolder.tint") ?: Defaults.YELLOW))
-        }
 
         // Bluetooth switch + idle icon tint.
         applySwitch(activity, s)
@@ -539,6 +529,13 @@ object Appearance {
             s.textOr("start.folderText", activity.getString(R.string.selectFolder))
         } else {
             s.textOr("start.filesText", activity.getString(R.string.selectFiles))
+        }
+        // The directory button says the same thing in either mode; it is only shown while sending.
+        activity.findViewById<MaterialButton>(R.id.sendDirButton)?.let { dir ->
+            dir.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
+            applyTypeface(s, dir, "start")
+            s.size("start.size").let { if (it > 0f) dir.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
+            dir.text = s.textOr("start.dirText", activity.getString(R.string.directoryToSend))
         }
     }
 

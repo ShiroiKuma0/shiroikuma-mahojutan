@@ -73,12 +73,22 @@ val SERVICE_UUID: UUID = UUID.fromString("A70BF3CA-F708-4314-8A0E-5E37C259BE5C")
 val OS_CHARACTERISTIC_UUID: UUID = UUID.fromString("BEE14848-CC55-4FDE-8E9D-2E0F9EC45946")
 val SSID_CHARACTERISTIC_UUID: UUID = UUID.fromString("0D820768-A329-4ED4-8F53-BDF364EDAC75")
 val PASSWORD_CHARACTERISTIC_UUID: UUID = UUID.fromString("E1FA8F66-CF88-4572-9527-D5125A2E0762")
+
+// How many times to re-ask for a characteristic that comes back "not encrypted" while a bond
+// already exists, before calling the bond stale and saying so.
+private const val MAX_ENCRYPTED_READ_RETRIES = 3
+
+// How many times to re-ask for a characteristic whose answer never arrived at all.
+private const val MAX_LOST_READ_RETRIES = 3
 const val NO_SSID = "NONE"
 
 interface BluetoothDelegate {
     // Start (or replace) the ticking "still waiting" line, and stop it once the peer moves.
     fun bleWait(what: String)
     fun bleWaitDone()
+    // Detail for the transcript file and logcat, never for the screen: the scan can hear dozens of
+    // devices and the on-screen log is a bare TextView that a flood pushes straight out of view.
+    fun logDetail(msg: String)
     // Shared network mode carries the password over BLE and nothing else -- there is no hotspot
     // to stand up or join at the end of the exchange. The GATT callbacks narrate what happens
     // next, so they have to know which of the two it is.
@@ -122,6 +132,11 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
     // Whether this transfer's role is the advertising one. The GATT server exists in both roles,
     // so the disconnect handling below has to know which of them we are in.
     private var weAreAdvertiser = false
+    // True once WE connected out to the peer -- i.e. we are the GATT client. Both roles are offered
+    // at the start of a transfer now (see MainActivity.beginTransferWithSelection), so which one we
+    // end up in is decided by whoever makes contact first, not by send/receive.
+    var weAreCentral = false
+        private set
 
     // A line every few seconds while BLE is busy with something invisible -- advertising into an
     // empty room, scanning, waiting for the peer's next move. Each of those can run half a minute
@@ -136,7 +151,8 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         val ticker = object : Runnable {
             override fun run() {
                 val seconds = (SystemClock.elapsedRealtime() - started) / 1000
-                outputText("$what... (${seconds}s)")
+                val heard = if (heardDevices.isEmpty()) "" else ", ${heardDevices.size} devices heard"
+                outputText("$what... (${seconds}s$heard)")
                 waitHandler.postDelayed(this, 3000)
             }
         }
@@ -221,6 +237,22 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun startPairingWith(device: BluetoothDevice) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+        {
+            return
+        }
+        if (device.bondState == BluetoothDevice.BOND_BONDED) {
+            return
+        }
+        outputText("Pairing has to start on this side — asking to pair, accept it on both screens")
+        if (!device.createBond()) {
+            outputText("Could not start pairing with the other device")
+        }
+    }
+
     // stop advertising once the peer has actually engaged with our service. never call this from
     // onConnectionStateChange -- see the comment there.
     @SuppressLint("MissingPermission")
@@ -247,6 +279,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         // ignoring genuine Bluetooth failures. Before the permission gate below because this is
         // just a flag — nothing here needs a permission we might not have.
         bluetoothReceiver.exchangeComplete = false
+        bluetoothReceiver.encryptedReadRetries = 0
         // Same reasoning for `bonded`: it means "this transfer's post-bond connection has been
         // opened", and it was never cleared anywhere, so the first fresh pairing in an app
         // session disarmed the post-bond connectGatt — the connection that reliably completes
@@ -261,6 +294,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         bluetoothReceiver.tearingDown = true
         weAreAdvertiser = false
         stopWaitTicker()
+        cancelUnfilteredFallback()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
             && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
         {
@@ -354,6 +388,20 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 outputText("A device connected over Bluetooth")
                 peerDevice = device
+                // Start the pairing from THIS side. Our characteristics need an encrypted,
+                // MITM-protected link, so somebody has to bond -- and when the other device
+                // initiates it, EMUI's stack cannot present the numeric comparison it is asked
+                // for: `smp_send_app_cback: Unexpected event: 6` (SMP_NC_REQ_EVT), no dialog, and
+                // the bond resets about four seconds later. Measured on 白い熊's phone twice,
+                // 2026-08-08, at 12:37 and 21:27. Initiating here puts the phone in the role its
+                // own stack handles properly: it shows its own pairing prompt, the other device's
+                // agent shows the matching passkey, and both confirm.
+                // Only while we are advertising for a transfer, so an unrelated LE connection
+                // (a watch, earbuds) is never dragged into a pairing.
+                if (weAreAdvertiser && !bluetoothReceiver.exchangeComplete
+                    && !bluetoothReceiver.tearingDown && device != null) {
+                    startPairingWith(device)
+                }
                 // deliberately NOT stopping the advertiser here. this callback fires for LE links
                 // that have nothing to do with us -- on EMUI/Kirin a watch, earbuds or a system
                 // service connecting is enough -- and stopping here took us silently off the air
@@ -550,6 +598,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         // the peripheral never calls scan(), so it must clear the flag here
         bluetoothReceiver.tearingDown = false
         weAreAdvertiser = true
+        weAreCentral = false
         // BluetoothLeAdvertiser. null when Bluetooth is off: report and fail the transfer
         // rather than crash — this used to be an unguarded platform-type dereference.
         val bluetoothLeAdvertiser = bluetoothManager.adapter?.bluetoothLeAdvertiser
@@ -667,22 +716,126 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         val scanFilter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(SERVICE_UUID))
             .build()
+        // setLegacy(false) means "report extended advertisements as well as legacy ones", not
+        // "use extended". The default is legacy-only, for compatibility with old apps -- and a
+        // peer whose stack chose an extended advertising set is then completely invisible, which
+        // is indistinguishable from a peer that is not there (白い熊, 2026-08-08: the desktop
+        // reported itself advertising while the phone, scanning with no filter at all, collected
+        // 23 other devices and never saw it). Asking for both costs nothing.
+        // LOW_LATENCY, not the default LOW_POWER. The default listens for 512 ms every 5120 ms,
+        // and BlueZ's default advertising interval is 1280 ms -- exactly a quarter of that scan
+        // period. Harmonically related periods never drift apart, so an advertisement that first
+        // lands in the gap between two scan windows stays in that gap for ever: the phone hears
+        // beacons three rooms away and not the computer on the same desk, run after run, until
+        // something happens to shift the phase (白い熊, 2026-08-08 -- the "it worked perfectly and
+        // now it never works" of this whole evening). A continuous scan cannot be dodged, and the
+        // battery cost lasts only as long as the transfer is being set up.
         val scanSettings = ScanSettings.Builder()
-            // this was actually the culprit
-            // .setLegacy(false)
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    setLegacy(false)
+                }
+            }
             .build()
         // new transfer: allow the credential exchange (and its retry) to run again, let
         // this transfer's pairing (if one happens) open its own post-bond connection, and
         // re-arm bluetoothFailed() — this transfer's BLE events are real again
         bluetoothReceiver.exchangeComplete = false
         bluetoothReceiver.bonded = false
+        bluetoothReceiver.encryptedReadRetries = 0
         bluetoothReceiver.tearingDown = false
-        weAreAdvertiser = false
+        heardDevices.clear()
         bluetoothLeScanner.startScan(listOf(scanFilter), scanSettings, leScanCallback)
         _status.postValue(true)
         outputText("Scanning for Bluetooth peripherals...")
         outputText("The other device has to be advertising -- start the transfer there too.")
         startWaitTicker("Looking for the other device over Bluetooth")
+        scheduleUnfilteredFallback(scanSettings)
+        scheduleRescan(scanSettings)
+    }
+
+    // Android stops delivering results on a long-running scan without saying so -- no callback, no
+    // error, the scan simply goes quiet -- so a scan that has been running for a minute is not
+    // evidence that the peer is absent. Restarting it costs nothing and puts us back on the air's
+    // receiving end. Well inside the framework's limit of five scan starts per thirty seconds.
+    private var rescanRunnable: Runnable? = null
+
+    @SuppressLint("MissingPermission")
+    private fun scheduleRescan(scanSettings: ScanSettings) {
+        cancelRescan()
+        val rescan = object : Runnable {
+            override fun run() {
+                if (!bluetoothReceiver.waitingForConnection) {
+                    return
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+                {
+                    return
+                }
+                logDetail("Restarting the Bluetooth scan (long scans go quiet without saying so)")
+                try {
+                    bluetoothLeScanner.stopScan(leScanCallback)
+                    bluetoothLeScanner.startScan(null, scanSettings, leScanCallback)
+                } catch (e: Exception) {
+                    Log.e("Bluetooth", "Could not restart the scan: $e")
+                }
+                waitHandler.postDelayed(this, 45000)
+            }
+        }
+        rescanRunnable = rescan
+        waitHandler.postDelayed(rescan, 45000)
+    }
+
+    private fun cancelRescan() {
+        rescanRunnable?.let { waitHandler.removeCallbacks(it) }
+        rescanRunnable = null
+    }
+
+    // A filtered scan asks the framework to match our service UUID for us, and it is the fast,
+    // cheap way to find the peer -- when the UUID is where it expects it. It is not always: an
+    // advertisement is 31 bytes, and a peer that overfills it can end up with the UUID in the scan
+    // response or missing altogether, at which point a filtered scan returns *nothing*, for ever,
+    // with everything looking healthy (白い熊, 2026-08-08: three minutes, zero results, the desktop
+    // advertising the whole time). So if the filter has found nothing after fifteen seconds, drop
+    // it and look at every advertisement ourselves -- onScanResult checks the UUID either way.
+    private var fallbackRunnable: Runnable? = null
+
+    // Addresses already noted in this transfer's scan, so the log records each device once.
+    private val heardDevices = mutableSetOf<String>()
+
+    @SuppressLint("MissingPermission")
+    private fun scheduleUnfilteredFallback(scanSettings: ScanSettings) {
+        cancelUnfilteredFallback()
+        val runnable = Runnable {
+            if (!bluetoothReceiver.waitingForConnection) {
+                return@Runnable
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+            {
+                return@Runnable
+            }
+            outputText(
+                "Nothing matched the filtered scan; looking at every Bluetooth device instead "
+                        + "(${heardDevices.size} heard so far)"
+            )
+            try {
+                bluetoothLeScanner.stopScan(leScanCallback)
+                bluetoothLeScanner.startScan(null, scanSettings, leScanCallback)
+            } catch (e: Exception) {
+                Log.e("Bluetooth", "Could not restart the scan without a filter: $e")
+            }
+        }
+        fallbackRunnable = runnable
+        waitHandler.postDelayed(runnable, 15000)
+    }
+
+    private fun cancelUnfilteredFallback() {
+        fallbackRunnable?.let { waitHandler.removeCallbacks(it) }
+        fallbackRunnable = null
+        cancelRescan()
     }
 
     private val leScanCallback = object : ScanCallback() {
@@ -699,11 +852,39 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 return
             }
             if (result != null) {
+                // With the fallback scan there is no filter doing this for us, and even with one
+                // this is free: the peer is the device advertising our service, nothing else.
+                val advertisesOurService =
+                    result.scanRecord?.serviceUuids?.contains(ParcelUuid(SERVICE_UUID)) == true
+                if (!advertisesOurService) {
+                    // Every device heard, once, in the transcript: the difference between "the
+                    // other device is not advertising" and "we cannot hear it" is otherwise
+                    // invisible from this side, and it is the difference that matters.
+                    val address = result.device?.address ?: return
+                    if (heardDevices.add(address)) {
+                        val uuids = result.scanRecord?.serviceUuids
+                        logDetail(
+                            "Heard $address (${result.scanRecord?.deviceName ?: "no name"}), " +
+                                    "rssi ${result.rssi}, uuids ${uuids ?: "none"}"
+                        )
+                    }
+                    return
+                }
                 if (bluetoothReceiver.waitingForConnection) {
+                    cancelUnfilteredFallback()
                     outputText("Found device: ${result.device}")
                     bluetoothReceiver.waitingForConnection = false
                     bluetoothLeScanner.stopScan(this)
                     outputText("Stopped scanning")
+                    // We found them, so we connect: that makes us the central, and we come off the
+                    // air so they do not connect to us at the same time.
+                    weAreCentral = true
+                    if (advertising) {
+                        advertising = false
+                        bluetoothManager.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
+                        weAreAdvertiser = false
+                        outputText("Taking the connecting role; stopped advertising")
+                    }
                     // the next silent stretch: pairing (if this is a first meeting), connecting,
                     // and resolving the peer's GATT database, all of it several seconds at best
                     startWaitTicker("Connecting to the other device over Bluetooth")
@@ -772,6 +953,9 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         // axes: connectToPeer() for the host, gotPassword() for either kind of joiner.
         // Cleared in scan() and, for roles that never scan, in stop().
         var exchangeComplete = false
+
+        // How many times a read has come back "not encrypted" against a bond that already exists.
+        var encryptedReadRetries = 0
 
         // True from stop() until the next scan() or advertise() — i.e. whenever no transfer
         // owns the BLE stack. Gates bluetoothFailed() (MainViewModel) the same way
@@ -867,6 +1051,12 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
 
         val gattCallback = object : BluetoothGattCallback() {
             // this is called when we as central have read a characteristic from the peer's peripheral
+            // Both callback shapes, one handler. The framework calls the four-argument form on modern
+            // Android and the deprecated three-argument one elsewhere -- and a vendor stack that calls
+            // the one we did not override drops the answer on the floor with nothing logged, which is
+            // what a read that the other device demonstrably answered, and that never arrived here,
+            // looks like (白い熊, 2026-08-08: the desktop served "linux" and the phone sat on
+            // "Connecting..." for ever).
             override fun onCharacteristicRead(
                 gatt: BluetoothGatt,
                 characteristic: BluetoothGattCharacteristic,
@@ -874,15 +1064,65 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 status: Int
             ) {
                 super.onCharacteristicRead(gatt, characteristic, value, status)
+                handleCharacteristicRead(gatt, characteristic, value, status)
+            }
+
+            @Deprecated("Called by stacks that predate the value-carrying callback", ReplaceWith(""))
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt?,
+                characteristic: BluetoothGattCharacteristic?,
+                status: Int
+            ) {
+                if (gatt == null || characteristic == null) return
+                handleCharacteristicRead(gatt, characteristic, characteristic.value ?: ByteArray(0), status)
+            }
+
+            private fun handleCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray,
+                status: Int
+            ) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     // Insufficient authentication/encryption is the *expected* answer to the
                     // first read of an ENCRYPTED_MITM characteristic: the stack starts bonding, and
                     // onReceive() asks again once it reports BOND_BONDED. Leave pendingRead set so
                     // it knows what to ask for, and do not treat this as a failure.
+                    //
+                    // Unless we are already bonded. Then no BOND_BONDED broadcast is ever coming,
+                    // and waiting for one is waiting for ever -- which is what a stall that shows
+                    // nothing but "Connecting to the other device..." for minutes on end actually
+                    // is (白い熊, 2026-08-08). A refusal against a live bond means the two halves of
+                    // that bond no longer match, so ask again a couple of times to give the stack a
+                    // chance to re-encrypt, then say what has to be done about it.
                     if (status == BluetoothGatt.GATT_INSUFFICIENT_AUTHENTICATION
                         || status == BluetoothGatt.GATT_INSUFFICIENT_ENCRYPTION) {
                         Log.i("Bluetooth", "Read of ${characteristic.uuid} needs pairing first")
-                        outputText("Waiting until we are paired to read the other device's details")
+                        val bonded = try {
+                            gatt.device?.bondState == BluetoothDevice.BOND_BONDED
+                        } catch (e: SecurityException) {
+                            false
+                        }
+                        if (!bonded) {
+                            outputText("Waiting until we are paired to read the other device's details")
+                            return
+                        }
+                        if (encryptedReadRetries < MAX_ENCRYPTED_READ_RETRIES) {
+                            encryptedReadRetries++
+                            outputText(
+                                "We are paired, but the link is not encrypted yet — asking again "
+                                        + "($encryptedReadRetries of $MAX_ENCRYPTED_READ_RETRIES)"
+                            )
+                            handler.postDelayed({ read(characteristic.uuid) }, 1500)
+                            return
+                        }
+                        outputText(
+                            "The other device will not answer over this pairing. Remove this phone "
+                                    + "from the other device's Bluetooth settings AND that device "
+                                    + "from this phone's, then start the transfer again."
+                        )
+                        bluetoothFailed()
                         return
                     }
                     // without this, a failed read (e.g. after declined pairing) stalls the
@@ -894,6 +1134,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // the read landed, so nothing is waiting on the bond any more: leaving it set would
                 // make a later BOND_BONDED re-issue a read that has already been answered
                 pendingRead = null
+                cancelReadWatchdog()
                 val stringRepresentation = value.toString(Charsets.UTF_8)
                 Log.i("Bluetooth", "Read characteristic: $stringRepresentation")
                 when (characteristic.uuid) {
@@ -1036,6 +1277,29 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 osCharacteristic = os
                 ssidCharacteristic = ssid
                 passwordCharacteristic = password
+                // Bond first, explicitly, before touching anything that needs an encrypted link.
+                // Letting the read trigger the bonding puts the stack on its implicit
+                // authentication path (`gatt_security_check_start: unknown gatt_sec_act`), and on
+                // this phone that path does not complete: the read comes back 137 and the bond
+                // resets seconds later. Asking for the bond up front is the same thing that made
+                // the advertising side work in +024 -- the phone shows its own prompt, the peer's
+                // agent shows the matching passkey, and the read goes out afterwards. The bond
+                // receiver re-issues pendingRead when BOND_BONDED arrives.
+                val peer = gatt.device
+                val bonded = try {
+                    peer?.bondState == BluetoothDevice.BOND_BONDED
+                } catch (e: SecurityException) {
+                    false
+                }
+                if (!bonded && peer != null) {
+                    pendingRead = OS_CHARACTERISTIC_UUID
+                    outputText("Pairing first — accept it on both screens")
+                    if (!peer.createBond()) {
+                        outputText("Could not start pairing; asking for the details anyway")
+                        read(OS_CHARACTERISTIC_UUID)
+                    }
+                    return
+                }
                 read(OS_CHARACTERISTIC_UUID)
             }
 
@@ -1329,6 +1593,47 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         }
 
         // use to read peripheral's characteristic
+        // A read that goes out and never comes back used to stall the transfer silently and for
+        // ever: every step of the exchange is driven by the previous step's callback, so one lost
+        // answer stops everything with nothing in the log (白い熊, 2026-08-08). Whatever the cause
+        // -- a vendor stack calling a callback shape we do not override, a link that dropped
+        // between request and answer -- asking again is safe, and giving up out loud beats waiting.
+        private var readWatchdog: Runnable? = null
+        private var readRetries = 0
+
+        private fun armReadWatchdog(characteristicUuid: UUID) {
+            cancelReadWatchdog()
+            val watchdog = Runnable {
+                if (pendingRead != characteristicUuid) {
+                    return@Runnable
+                }
+                if (readRetries < MAX_LOST_READ_RETRIES) {
+                    readRetries++
+                    outputText(
+                        "No answer to our request yet — asking again "
+                                + "($readRetries of $MAX_LOST_READ_RETRIES)"
+                    )
+                    read(characteristicUuid)
+                } else {
+                    readRetries = 0
+                    pendingRead = null
+                    outputText(
+                        "The other device is connected but will not answer. Start the transfer "
+                                + "again on both devices."
+                    )
+                    bluetoothFailed()
+                }
+            }
+            readWatchdog = watchdog
+            handler.postDelayed(watchdog, 8000)
+        }
+
+        private fun cancelReadWatchdog() {
+            readWatchdog?.let { handler.removeCallbacks(it) }
+            readWatchdog = null
+            readRetries = 0
+        }
+
         fun read(characteristicUuid: UUID) {
             // outputText("Reading $characteristicUuid")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -1348,35 +1653,47 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             // connections after bonding deliberately coexist and can each be walking the
             // exchange, so one of them finding the queue busy is not grounds for killing a
             // transfer the other is about to complete.
+            //
+            // Exactly ONE readCharacteristic() per call, and the retry goes through the handler.
+            // This used to issue the read twice -- once to test its return value for the message
+            // above, once "for real" -- and Android's GATT queue takes one operation at a time, so
+            // the second call was refused *because the first was in flight*. Then Thread.sleep(500)
+            // blocked the very thread the first read's callback arrives on, the third call was
+            // refused too, and the transfer died with "The other device would not answer" while the
+            // read it was complaining about had already succeeded. Observed PC -> phone on
+            // 2026-08-08: the desktop logged one OS read ("linux") and never heard from the phone
+            // again, and the phone switched its own Bluetooth off.
             val gatt = bluetoothGatt
             val characteristic = characteristicFor(characteristicUuid)
             if (gatt == null) {
+                Log.e("Bluetooth", "read($characteristicUuid): no gatt")
                 outputText("Could not read $characteristicUuid: no Bluetooth connection.")
-            } else if (characteristic == null) {
-                outputText("Could not read $characteristicUuid: characteristic not discovered.")
-            } else if (!gatt.readCharacteristic(characteristic)) {
-                outputText("Bluetooth read of $characteristicUuid was rejected (queue busy or link dropped).")
+                return
             }
-            if (gatt == null || characteristic == null) {
-                Log.e("Bluetooth", "read($characteristicUuid): gatt=$gatt characteristic=$characteristic")
-                outputText("Not connected to the other device yet")
+            if (characteristic == null) {
+                Log.e("Bluetooth", "read($characteristicUuid): characteristic not discovered")
+                outputText("Could not read $characteristicUuid: characteristic not discovered.")
                 return
             }
             pendingRead = characteristicUuid
-            // readCharacteristic() refuses some requests outright, returning false without ever
-            // calling onCharacteristicRead -- so an unchecked call can stall the handshake in total
-            // silence, which is exactly what used to happen. Make the failure audible.
             if (gatt.readCharacteristic(characteristic)) {
+                armReadWatchdog(characteristicUuid)
                 return
             }
+            // A refusal here is legitimately transient -- the pre-bond and post-bond connections
+            // deliberately coexist and either can be mid-operation -- so try once more after the
+            // queue has had a moment, without blocking this thread.
             Log.e("Bluetooth", "readCharacteristic($characteristicUuid) returned false, retrying")
-            Thread.sleep(500)
-            if (!gatt.readCharacteristic(characteristic)) {
-                pendingRead = null
-                Log.e("Bluetooth", "readCharacteristic($characteristicUuid) returned false again")
-                outputText("The other device would not answer. Turn Bluetooth off and on, then try again.")
-                bluetoothFailed()
-            }
+            outputText("Bluetooth read of $characteristicUuid was rejected (queue busy); retrying")
+            handler.postDelayed({
+                val retryGatt = bluetoothGatt
+                if (retryGatt == null || !retryGatt.readCharacteristic(characteristic)) {
+                    pendingRead = null
+                    Log.e("Bluetooth", "readCharacteristic($characteristicUuid) returned false again")
+                    outputText("The other device would not answer. Turn Bluetooth off and on, then try again.")
+                    bluetoothFailed()
+                }
+            }, 500)
         }
 
         // The stack would not open the connection. Ask it again a few times before believing it:
@@ -1456,30 +1773,24 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 outputText("Could not write $characteristicUuid: characteristic not discovered.")
                 return
             }
-            val queued = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                gatt.writeCharacteristic(characteristic, value, writeType) == BluetoothStatusCodes.SUCCESS
-            } else {
-                characteristic.value = value
-                characteristic.writeType = writeType
-                @Suppress("DEPRECATION")
-                gatt.writeCharacteristic(characteristic)
-            }
-            if (!queued) {
-                outputText("Bluetooth write of $characteristicUuid was rejected (queue busy or link dropped).")
-            }
-            // Same trap as read(): a rejected write returns an error code and never calls
-            // onCharacteristicWrite, so an unchecked call stops the handshake dead with nothing in
-            // the log. Writing our OS back is the step that triggers connectToPeer(), so a write
-            // lost here strands both sides waiting.
+            // One write per call, retried through the handler -- the same double-issue bug read()
+            // carried, and with the same consequence: the second call was refused because the
+            // first was still in flight, and the transfer was declared dead over a write that had
+            // gone out. Writing our OS back is the step that triggers connectToPeer(), so a write
+            // wrongly given up on strands both sides waiting.
             if (writeCharacteristicCompat(gatt, characteristic, value, writeType)) {
                 return
             }
             Log.e("Bluetooth", "writeCharacteristic($characteristicUuid) failed, retrying")
-            Thread.sleep(500)
-            if (!writeCharacteristicCompat(gatt, characteristic, value, writeType)) {
-                outputText("Could not send our details to the other device. Turn Bluetooth off and on, then try again.")
-                bluetoothFailed()
-            }
+            outputText("Bluetooth write of $characteristicUuid was rejected (queue busy); retrying")
+            handler.postDelayed({
+                val retryGatt = bluetoothGatt
+                if (retryGatt == null
+                    || !writeCharacteristicCompat(retryGatt, characteristic, value, writeType)) {
+                    outputText("Could not send our details to the other device. Turn Bluetooth off and on, then try again.")
+                    bluetoothFailed()
+                }
+            }, 500)
         }
 
         @SuppressLint("MissingPermission")

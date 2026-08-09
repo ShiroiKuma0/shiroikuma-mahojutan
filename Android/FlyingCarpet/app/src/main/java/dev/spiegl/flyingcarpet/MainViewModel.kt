@@ -132,6 +132,35 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
      */
     fun outputSnapshot(): Pair<String, Long> = outputLog.toString() to outputSeq
 
+    // The transcript, also written to a file under the app's own external directory:
+    //   /sdcard/Android/data/shiroikuma.mahojutan/files/logs/transcript.log
+    // EMUI drops Log.i from third-party apps, so `adb logcat` shows nothing of ours and the phone's
+    // half of a failed transfer can only be read off the screen -- where a three-second progress
+    // ticker pushes it out of view within a minute (白い熊, 2026-08-08). No permission is needed for
+    // this directory, and `adb pull` reaches it. Kept to the last ~200 kB.
+    private val transcriptFile: java.io.File? by lazy {
+        try {
+            val dir = java.io.File(application.getExternalFilesDir(null), "logs")
+            dir.mkdirs()
+            java.io.File(dir, "transcript.log")
+        } catch (e: Exception) {
+            Log.e("FlyingCarpet", "No transcript file: $e")
+            null
+        }
+    }
+
+    private fun appendToTranscript(line: String) {
+        val file = transcriptFile ?: return
+        try {
+            if (file.length() > 200_000) {
+                file.delete()
+            }
+            file.appendText(line + "\n")
+        } catch (e: Exception) {
+            // a log that cannot be written must never take the transfer with it
+        }
+    }
+
     override fun outputText(msg: String) {
         // Mirror every user-facing line to logcat under one greppable tag, so a transfer's
         // on-screen log can be pulled off the device with `adb logcat -s FlyingCarpet` instead
@@ -140,6 +169,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // leading blank line some messages carry ("\nStarting Transfer") is for on-screen
         // spacing and would otherwise print as an empty logcat entry.
         Log.i("FlyingCarpet", msg.trim())
+        appendToTranscript(msg.trim())
         GlobalScope.launch(Dispatchers.Main) {
             outputLog.append(msg).append('\n')
             outputSeq++
@@ -217,6 +247,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     override fun bleWait(what: String) = bluetooth.startWaitTicker(what)
 
     override fun bleWaitDone() = bluetooth.stopWaitTicker()
+
+    // Transcript and logcat only. What the scan hears belongs in the record, not on a screen whose
+    // log is a bare TextView -- thirty devices would push the transfer itself out of view.
+    override fun logDetail(msg: String) {
+        Log.i("FlyingCarpet", msg)
+        appendToTranscript(msg)
+    }
 
     suspend fun startTransfer() {
         outputText("\nStarting Transfer")
@@ -425,6 +462,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                     // the password follows automatically once this write lands (onCharacteristicWrite)
                     bluetooth.bluetoothReceiver.write(SSID_CHARACTERISTIC_UUID, ssid.toByteArray())
                     launchSharedNetworkTransfer()
+                } else if (bluetooth.weAreCentral) {
+                    // We are sending AND we are the one who connected, so the receiving device is
+                    // the peripheral: its password is there to be read rather than waited for.
+                    // This is the arrangement that keeps a Linux peer from ever having to connect
+                    // out -- see the role comment in core/src/linux/bluetooth.rs.
+                    outputText("Reading the password from the other device...")
+                    bluetooth.bluetoothReceiver.read(SSID_CHARACTERISTIC_UUID)
                 } else {
                     // We are the peripheral, and the receiving device has the password: wait for
                     // it to be written to us. gotPassword() picks the transfer up from there.
@@ -853,10 +897,17 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 return
             }
         }
-        if (mode == Mode.Sending) {
-            connectToPeer()
-        } else {
+        // By role, not by send/receive. The central is the side holding a GATT client, so it is
+        // the side that can write -- and the peer's peripheral half is blocked waiting for exactly
+        // that write to learn what we are. Keying this off "sending" was right when the sender was
+        // always the peripheral; with the roles negotiated (2026-08-08) a *sending* central skipped
+        // the write, the peer never learned our OS, and it sat in its advertising wait until the
+        // grace ran out -- while this side had already read the password and gone looking for it on
+        // the network it had not reached yet.
+        if (bluetooth.weAreCentral) {
             bluetooth.bluetoothReceiver.write(OS_CHARACTERISTIC_UUID, "android".toByteArray())
+        } else {
+            connectToPeer()
         }
     }
 

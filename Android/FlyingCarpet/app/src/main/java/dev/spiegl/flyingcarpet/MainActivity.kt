@@ -21,7 +21,6 @@ import android.widget.LinearLayout
 import android.util.Log
 import android.view.View
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.ProgressBar
@@ -206,12 +205,16 @@ class MainActivity : AppCompatActivity() {
             if (viewModel.bluetooth.bluetoothGattServer.getService(SERVICE_UUID) == null) {
                 viewModel.bluetooth.bluetoothGattServer.addService(viewModel.bluetooth.service)
             }
+            // Both roles, always. Whoever makes contact first decides who connects, and this
+            // phone is the side that can insist on the LE transport (connectGatt is passed
+            // TRANSPORT_LE), so it should be free to take the connecting role in either
+            // direction -- a Linux peer cannot, and the classic-bearer trap that cost 白い熊 a
+            // whole evening on 2026-08-08 is exactly what happens when it has to.
+            viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
             if (viewModel.mode == Mode.Sending) {
                 viewModel.bluetooth.advertise()
-            } else if (viewModel.mode == Mode.Receiving) {
-                viewModel.bluetooth.bluetoothReceiver.waitingForConnection = true
-                viewModel.bluetooth.scan()
             }
+            viewModel.bluetooth.scan()
         } else {
             viewModel.connectToPeer()
         }
@@ -586,82 +589,14 @@ class MainActivity : AppCompatActivity() {
         applyConnectionModeUi()
 
         // start button
+        // The two send buttons -- "Files to send" and "Directory to send" -- and, in receive mode,
+        // the single button that picks where to receive. They all run the same start, differing
+        // only in what gets picked afterwards; this used to be a "Send Folder" tick box that had
+        // to be found and ticked before pressing Start (白い熊, 2026-08-08).
         val startButton = findViewById<Button>(id.startButton)
-        startButton.setOnClickListener {
-
-            // Fallback for a denial at launch. Checked here rather than in startHotspot()
-            // because that only covers the hosting path — joining a hotspot and shared network
-            // mode need this just as much, and shared network mode never calls startHotspot()
-            // at all. Runs before any transfer state is touched, so bailing out is a plain
-            // return rather than a half-started transfer to unwind.
-            if (needsLocalNetworkPermission()) {
-                localNetworkPromptedFromStart = true
-                localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
-                return@setOnClickListener
-            }
-
-            // determine send/receive, peer, show file pickers, show or read qr code, or display wifi info
-            // then start or join tcp server and start sending or receiving files
-
-            // register that the transfer is running. this is needed so that if the hotspot is kicked off, then the cancel button is hit,
-            // the hotspot onStarted callback can bail out.
-            viewModel.transferIsRunning = true
-            // clear any hotspot flag left over from a previous transfer so this one can start one
-            viewModel.hotspotRunning = false
-
-            // disable UI elements while transfer is running
-            toggleUI(false)
-
-            // prevent screen rotation while transfer is running
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-
-            // get mode
-            val modeGroup = findViewById<MaterialButtonToggleGroup>(id.modeGroup)
-            val selectedMode = modeGroup.checkedButtonId
-            this.viewModel.mode = when (selectedMode) {
-                id.sendButton -> Mode.Sending
-                id.receiveButton -> Mode.Receiving
-                else -> {
-                    viewModel.outputText("Must select whether this device is sending or receiving.")
-                    viewModel.cleanUpTransfer()
-                    return@setOnClickListener
-                }
-            }
-
-            // get peer. not needed in shared network mode (discovery finds the peer)
-            // or when using bluetooth (peer OS is exchanged over BLE)
-            val selectedPeer = peerGroup.checkedButtonId
-            if (viewModel.connectionMode == ConnectionMode.Hotspot && !viewModel.bluetooth.active) {
-                this.viewModel.peer = when (selectedPeer) {
-                    id.androidButton -> Peer.Android
-                    id.iosButton -> Peer.iOS
-                    id.linuxButton -> Peer.Linux
-                    id.macButton -> Peer.macOS
-                    id.windowsButton -> Peer.Windows
-                    else -> {
-                        viewModel.outputText("Must select operating system of other device.")
-                        viewModel.cleanUpTransfer()
-                        return@setOnClickListener
-                    }
-                }
-            }
-
-            // get whether we're sending a folder
-            val sendFolderCheckBox = findViewById<CheckBox>(id.sendFolderCheckBox)
-            this.viewModel.sendFolder = sendFolderCheckBox.isChecked
-
-            when (viewModel.mode) {
-                Mode.Sending -> {
-                    if (viewModel.sendFolder) {
-                        folderPicker.launch(Uri.EMPTY)
-                    } else {
-                        filePicker.launch(arrayOf("*/*"))
-                    }
-                }
-                Mode.Receiving -> folderPicker.launch(Uri.EMPTY)
-            }
-
-        }
+        val sendDirButton = findViewById<Button>(id.sendDirButton)
+        startButton.setOnClickListener { startPressed(sendFolder = false) }
+        sendDirButton.setOnClickListener { startPressed(sendFolder = true) }
 
         // cancel button
         val cancelButton = findViewById<Button>(id.cancelButton)
@@ -672,9 +607,6 @@ class MainActivity : AppCompatActivity() {
             viewModel.outputText("Transfer cancelled.")
             viewModel.cleanUpTransfer()
         }
-
-        // sending folder checkbox
-        val sendFolderCheckBox = findViewById<CheckBox>(id.sendFolderCheckBox)
 
         // Reuse the directory picked last time: identical to picking it again, minus the dialog.
         lastFolderButton = findViewById(id.lastFolderButton)
@@ -703,11 +635,11 @@ class MainActivity : AppCompatActivity() {
             if (!isChecked) return@addOnButtonCheckedListener
             if (checkedId == id.sendButton) {
                 startButton.text = settings.textOr("start.filesText", getString(R.string.selectFiles))
-                sendFolderCheckBox.visibility = View.VISIBLE
+                sendDirButton.isVisible = true
                 refreshLastFolderButton()
             } else {
                 startButton.text = settings.textOr("start.folderText", getString(R.string.selectFolder))
-                sendFolderCheckBox.visibility = View.GONE
+                sendDirButton.isVisible = false
                 refreshLastFolderButton()
             }
             // which side shows the QR code and which scans it depends on this choice
@@ -790,6 +722,84 @@ class MainActivity : AppCompatActivity() {
                 ?: uri.lastPathSegment ?: uri.toString()
             lastFolderButton.text = getString(R.string.receiveIn, name)
         }
+    }
+
+
+    // What both send buttons (and the receive button, which is the same view) do: arm the transfer,
+    // lock the UI, read the mode and peer, then open the picker the pressed button implies.
+    private fun startPressed(sendFolder: Boolean) {
+
+        // Fallback for a denial at launch. Checked here rather than in startHotspot()
+        // because that only covers the hosting path — joining a hotspot and shared network
+        // mode need this just as much, and shared network mode never calls startHotspot()
+        // at all. Runs before any transfer state is touched, so bailing out is a plain
+        // return rather than a half-started transfer to unwind.
+        if (needsLocalNetworkPermission()) {
+            localNetworkPromptedFromStart = true
+            localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            return
+        }
+
+        // determine send/receive, peer, show file pickers, show or read qr code, or display wifi info
+        // then start or join tcp server and start sending or receiving files
+
+        // register that the transfer is running. this is needed so that if the hotspot is kicked off, then the cancel button is hit,
+        // the hotspot onStarted callback can bail out.
+        viewModel.transferIsRunning = true
+        // clear any hotspot flag left over from a previous transfer so this one can start one
+        viewModel.hotspotRunning = false
+
+        // disable UI elements while transfer is running
+        toggleUI(false)
+
+        // prevent screen rotation while transfer is running
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+
+        // get mode
+        val modeGroup = findViewById<MaterialButtonToggleGroup>(id.modeGroup)
+        val selectedMode = modeGroup.checkedButtonId
+        this.viewModel.mode = when (selectedMode) {
+            id.sendButton -> Mode.Sending
+            id.receiveButton -> Mode.Receiving
+            else -> {
+                viewModel.outputText("Must select whether this device is sending or receiving.")
+                viewModel.cleanUpTransfer()
+                return
+            }
+        }
+
+        // get peer. not needed in shared network mode (discovery finds the peer)
+        // or when using bluetooth (peer OS is exchanged over BLE)
+        val selectedPeer = peerGroup.checkedButtonId
+        if (viewModel.connectionMode == ConnectionMode.Hotspot && !viewModel.bluetooth.active) {
+            this.viewModel.peer = when (selectedPeer) {
+                id.androidButton -> Peer.Android
+                id.iosButton -> Peer.iOS
+                id.linuxButton -> Peer.Linux
+                id.macButton -> Peer.macOS
+                id.windowsButton -> Peer.Windows
+                else -> {
+                    viewModel.outputText("Must select operating system of other device.")
+                    viewModel.cleanUpTransfer()
+                    return
+                }
+            }
+        }
+
+        // which of the two send buttons was pressed
+        this.viewModel.sendFolder = sendFolder
+
+        when (viewModel.mode) {
+            Mode.Sending -> {
+                if (viewModel.sendFolder) {
+                    folderPicker.launch(Uri.EMPTY)
+                } else {
+                    filePicker.launch(arrayOf("*/*"))
+                }
+            }
+            Mode.Receiving -> folderPicker.launch(Uri.EMPTY)
+        }
+
     }
 
     // Bluetooth is usable in both connection modes (fork, 白い熊 2026-08-07): in hotspot mode it
@@ -1008,7 +1018,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(id.linuxButton).isEnabled = enabled
         findViewById<Button>(id.macButton).isEnabled = enabled
         findViewById<Button>(id.windowsButton).isEnabled = enabled
-        findViewById<CheckBox>(id.sendFolderCheckBox).isEnabled = enabled
+        findViewById<Button>(id.sendDirButton).isEnabled = enabled
 
         findViewById<Button>(id.startButton).isInvisible = !enabled
         findViewById<Button>(id.cancelButton).isInvisible = enabled
@@ -1092,9 +1102,6 @@ class MainActivity : AppCompatActivity() {
             else -> 0
         }
         outState.putInt("peer", peerIndex)
-        val sendFolderCheckBox = findViewById<CheckBox>(id.sendFolderCheckBox)
-        outState.putBoolean("sendFolderChecked", sendFolderCheckBox.isChecked)
-        outState.putBoolean("sendFolderVisible", sendFolderCheckBox.isVisible)
         val transferRunning = !findViewById<Button>(id.startButton).isVisible
         outState.putBoolean("transferRunning", transferRunning)
         val progressBarValue = findViewById<ProgressBar>(id.progressBar).progress
@@ -1118,9 +1125,6 @@ class MainActivity : AppCompatActivity() {
             4 -> peerGroup.check(id.macButton)
             5 -> peerGroup.check(id.windowsButton)
         }
-        val sendFolderCheckBox = findViewById<CheckBox>(id.sendFolderCheckBox)
-        sendFolderCheckBox.isChecked = savedInstanceState.getBoolean("sendFolderChecked")
-        sendFolderCheckBox.isVisible = savedInstanceState.getBoolean("sendFolderVisible")
         val transferRunning = savedInstanceState.getBoolean("transferRunning")
         toggleUI(!transferRunning)
         if (transferRunning) {

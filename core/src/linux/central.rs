@@ -142,8 +142,14 @@ pub async fn find_characteristics<T: UI>(
         // a link that serves no GATT. Nothing on Linux disconnects at the end of a transfer,
         // so the reverse direction routinely walks in on exactly that link. Observed
         // 2026-07-25, Linux->Android then Android->Linux.
+        // Raising the LE link ourselves, rather than asking bluetoothd to connect with an explicit
+        // transport: Adapter1.ConnectDevice would say it in one call, but it exists only when the
+        // daemon runs with experimental interfaces enabled, and that is not a thing to require of
+        // the whole machine for one app (白い熊, 2026-08-08). The socket below does the same job
+        // with what a stock bluetoothd offers -- it raises an LE ACL, after which Connect() picks
+        // the bonded LE bearer rather than classic.
         if device.is_paired().await.unwrap_or(false) {
-            ensure_le_link(device).await;
+            with_progress(ui, "Raising the Bluetooth LE link", ensure_le_link(device)).await;
         }
 
         if !device.is_connected().await? {
@@ -201,6 +207,32 @@ pub async fn find_characteristics<T: UI>(
             println!("    Could not set device trusted: {}", e);
         }
 
+        // A link that carries GATT resolves its services. A classic (BR/EDR) ACL against a
+        // dual-transport bond never does -- and BlueZ will still answer a service enumeration for
+        // a bonded peer out of its cache, which is how this side can report "Connected", list all
+        // three characteristics, and fail its first read with "Not connected" while the peer never
+        // saw a connection at all (白い熊, 2026-08-08). Wait for the real thing, then say so.
+        {
+            let mut waited = 0;
+            while !device.is_services_resolved().await.unwrap_or(false) && waited < 10 {
+                if waited == 0 {
+                    ui.output("Waiting for the Bluetooth link to carry the peer's services...");
+                }
+                sleep(Duration::from_secs(1)).await;
+                waited += 1;
+            }
+            if !device.is_services_resolved().await.unwrap_or(false) {
+                println!("    Services never resolved; the link is not carrying GATT");
+                return Err(bluer::Error {
+                    kind: ErrorKind::ServicesUnresolved,
+                    message: "The Bluetooth link came up but carries no services -- it is a classic \
+                              Bluetooth connection to a device we have paired with before, which \
+                              cannot be used for this. Retrying."
+                        .to_string(),
+                });
+            }
+        }
+
         // macOS may only expose the Flying Carpet service once the link is encrypted,
         // re-publishing it via a Service Changed indication that makes BlueZ toggle
         // ServicesResolved and re-discover. Retry enumeration briefly rather than failing
@@ -211,17 +243,25 @@ pub async fn find_characteristics<T: UI>(
             for service in with_progress(ui, "Reading the peer's Bluetooth services", device.services()).await? {
                 let uuid = service.uuid().await?;
                 println!("    Service UUID: {}", &uuid);
-                println!("    Service data: {:?}", service.all_properties().await?);
+                // Diagnostics only, and never fatal. Reading every property of a service or a
+                // characteristic asks BlueZ for things it does not always have -- on 2026-08-08 a
+                // phone that had been found, connected to and enumerated failed the whole transfer
+                // three times over `No such property 'MTU'`, thrown by this line and the one below.
+                // A print that cannot be made must not take the transfer with it.
+                match service.all_properties().await {
+                    Ok(props) => println!("    Service data: {:?}", props),
+                    Err(e) => println!("    (service properties unavailable: {})", e),
+                }
                 if uuid == Uuid::parse_str(SERVICE_UUID).unwrap() {
                     println!("    Found our service!");
                     ui.output("Found Flying Carpet's Bluetooth service on peer");
                     for char in service.characteristics().await? {
                         let uuid = char.uuid().await?;
                         println!("    Characteristic UUID: {}", &uuid);
-                        println!(
-                            "    Characteristic data: {:?}",
-                            char.all_properties().await?
-                        );
+                        match char.all_properties().await {
+                            Ok(props) => println!("    Characteristic data: {:?}", props),
+                            Err(e) => println!("    (characteristic properties unavailable: {})", e),
+                        }
                         if uuid == os_characteristic_uuid {
                             characteristics.insert(OS_CHARACTERISTIC_UUID, char);
                             println!("found OS characteristic")
@@ -240,6 +280,18 @@ pub async fn find_characteristics<T: UI>(
                 && characteristics.contains_key(SSID_CHARACTERISTIC_UUID)
                 && characteristics.contains_key(PASSWORD_CHARACTERISTIC_UUID)
             {
+                // Found all three -- but from where? For a bonded peer BlueZ will answer a service
+                // enumeration out of its cache, link or no link, and handing back characteristics
+                // that belong to a connection that has already gone leaves the caller to discover
+                // it on the first read, one step too late (白い熊, 2026-08-08: "Not connected"
+                // after a clean-looking enumeration). Ask before promising.
+                if !device.is_connected().await.unwrap_or(false) {
+                    return Err(bluer::Error {
+                        kind: ErrorKind::Failed,
+                        message: "The Bluetooth link dropped while reading the peer's services."
+                            .to_string(),
+                    });
+                }
                 return Ok(characteristics);
             }
             if retries == 0 {
@@ -291,6 +343,7 @@ pub async fn find_characteristics<T: UI>(
 // live LE ACL is cheap: the kernel reuses the existing link and the peer refuses the dead PSM
 // immediately.
 async fn ensure_le_link(device: &Device) {
+    // (the caller ticks around this; see find_characteristics)
     if device.is_services_resolved().await.unwrap_or(false) {
         return;
     }
@@ -301,46 +354,67 @@ async fn ensure_le_link(device: &Device) {
             return;
         }
     };
-    let socket = match Socket::<SeqPacket>::new_seq_packet() {
-        Ok(s) => s,
-        Err(e) => {
-            println!("    Could not open LE socket: {}", e);
+    // Both address types, reported one first. BlueZ hands back the address it currently knows the
+    // peer by, and for a bonded peer whose private address it has resolved that is a *random*
+    // (resolvable) address reported as LePublic -- so a socket aimed at it as public never reaches
+    // anything, times out, and Connect() then falls back to the classic bearer, which carries no
+    // GATT. That is the alternating phone -> PC failure: it took eight seconds of watching
+    // "Raising LE link to 54:43:C6:45:10:D0 (LePublic)... LE link socket timed out" to see that
+    // 54:43:… has 01 in its top two bits and is therefore not a public address at all
+    // (白い熊, 2026-08-08).
+    let other_type = match addr_type {
+        AddressType::LePublic => AddressType::LeRandom,
+        _ => AddressType::LePublic,
+    };
+    for attempt_type in [addr_type, other_type] {
+        if device.is_connected().await.unwrap_or(false)
+            && device.is_services_resolved().await.unwrap_or(false)
+        {
+            break;
+        }
+        let socket = match Socket::<SeqPacket>::new_seq_packet() {
+            Ok(s) => s,
+            Err(e) => {
+                println!("    Could not open LE socket: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = socket.bind(SocketAddr::new(Address::any(), AddressType::LePublic, 0)) {
+            println!("    Could not bind LE socket: {}", e);
             return;
         }
-    };
-    if let Err(e) = socket.bind(SocketAddr::new(Address::any(), AddressType::LePublic, 0)) {
-        println!("    Could not bind LE socket: {}", e);
-        return;
+        if let Err(e) = socket.set_security(Security {
+            level: SecurityLevel::High,
+            key_size: 16,
+        }) {
+            println!("    Could not set LE socket security: {}", e);
+            return;
+        }
+        let target = SocketAddr::new(device.address(), attempt_type, BOND_PSM);
+        println!(
+            "    Raising LE link to {} ({:?})...",
+            device.address(),
+            attempt_type
+        );
+        // Ten seconds per address type: long enough for a peer that is advertising to answer,
+        // short enough that trying the second type is not a minute away. The waiting is ticked by
+        // the caller, so it is visible rather than silent.
+        match timeout(Duration::from_secs(10), socket.connect(target)).await {
+            Ok(Ok(_)) => println!("    LE link socket connected"),
+            Ok(Err(e)) => println!(
+                "    LE link socket refused: {} (expected; the link is the point)",
+                e
+            ),
+            Err(_) => println!("    LE link socket timed out"),
+        }
+        println!(
+            "    connected over LE afterward: {:?}",
+            device.is_connected().await
+        );
+        if device.is_connected().await.unwrap_or(false) {
+            break;
+        }
     }
-    if let Err(e) = socket.set_security(Security {
-        level: SecurityLevel::High,
-        key_size: 16,
-    }) {
-        println!("    Could not set LE socket security: {}", e);
-        return;
-    }
-    let target = SocketAddr::new(device.address(), addr_type, BOND_PSM);
-    println!(
-        "    Raising LE link to {} ({:?})...",
-        device.address(),
-        addr_type
-    );
-    // Five seconds, not fifteen: this is a best-effort nudge to make BlueZ pick the LE bearer,
-    // and the code carries on either way. When the radio is busy -- another program's Bluetooth
-    // scan will do it -- the socket cannot connect at all, and the old timeout simply added a
-    // quarter minute of silence before the real connect was even tried (白い熊, 2026-08-08).
-    match timeout(Duration::from_secs(5), socket.connect(target)).await {
-        Ok(Ok(_)) => println!("    LE link socket connected"),
-        Ok(Err(e)) => println!(
-            "    LE link socket refused: {} (expected; the link is the point)",
-            e
-        ),
-        Err(_) => println!("    LE link socket timed out"),
-    }
-    println!(
-        "    connected over LE afterward: {:?}",
-        device.is_connected().await
-    );
 }
 
 // Connect and ask BlueZ to resolve the peer's GATT database, then report whether our service
