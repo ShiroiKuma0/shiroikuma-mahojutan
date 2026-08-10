@@ -1,12 +1,16 @@
 package dev.spiegl.flyingcarpet
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.*
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
+import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pGroup
+import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -32,6 +36,13 @@ import java.nio.ByteBuffer
 import java.security.SecureRandom
 
 const val PORT = 3290
+
+// How long to give a Wi-Fi Direct group before falling back to LocalOnlyHotspot. Generous enough
+// for a driver that is slow to bring the group up, short enough that the fallback still feels like
+// part of starting the transfer rather than a hang.
+const val WIFI_DIRECT_TIMEOUT_MS = 8000L
+// Some devices announce the group before its network name and passphrase can be read back.
+const val WIFI_DIRECT_GROUP_READ_ATTEMPTS = 10
 
 enum class Mode {
     Sending,
@@ -441,6 +452,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         if (this::reservation.isInitialized) {
             reservation.close()
         }
+        // and the Wi-Fi Direct group, if that is what raised the AP this time. A group left behind
+        // keeps the radio as a group owner and the peer able to associate, which is the P2P
+        // equivalent of the stranded LocalOnlyHotspot reservation above.
+        removeWifiDirectGroup()
         hotspotRunning = false
         // Give the peer's hotspot back, after the sockets above are closed. This is the joining
         // side's half of the teardown: without it the phone stayed on the peer's AP once the
@@ -791,46 +806,197 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 info.passphrase?.let { password = it }
             }
 
-            // ensure no quotes around the ssid, not sure why this is necessary
-            ssid = ssid.replace("\"", "")
-
-            if (bluetooth.active) {
-                if (mode == Mode.Sending) {
-                    // we're peripheral, and hosting, so just need to wait for the central to read from our
-                    // wifi characteristic. nothing to do here.
-                } else {
-                    // write the wifi details to peer
-                    bluetooth.bluetoothReceiver.write(SSID_CHARACTERISTIC_UUID, ssid.toByteArray())
-                }
-            } else {
-                // android generates ssid and password for us
-                displayQrCode(ssid, password)
-            }
-
-            outputText("SSID: $ssid")
-            outputText("Password: $password")
-
-            transferCoroutine = GlobalScope.launch {
-                try {
-                    startTransfer()
-                } catch (e: CancellationException) {
-                    // cancelling the transfer is not an error; rethrow so cancellation
-                    // propagates instead of being swallowed and reported.
-                    throw e
-                } catch (e: Exception) {
-                    outputText("Transfer error: ${e.message}\n")
-                } finally {
-                    // runs on success, error, and cancellation alike
-                    finishTransfer()
-                }
-            }
-
+            hotspotCredentialsReady()
         }
 
         override fun onStopped() {
             super.onStopped()
             outputText("Hotspot stopped")
             hotspotRunning = false
+        }
+    }
+
+    // Everything that happens once an access point is up and its ssid/password are known, whether
+    // LocalOnlyHotspot or Wi-Fi Direct raised it. Both paths end here so the credential handover
+    // and the transfer launch cannot drift apart between them.
+    private fun hotspotCredentialsReady() {
+        // ensure no quotes around the ssid, not sure why this is necessary
+        ssid = ssid.replace("\"", "")
+
+        if (bluetooth.active) {
+            if (mode == Mode.Sending) {
+                // we're peripheral, and hosting, so just need to wait for the central to read from our
+                // wifi characteristic. nothing to do here.
+            } else {
+                // write the wifi details to peer
+                bluetooth.bluetoothReceiver.write(SSID_CHARACTERISTIC_UUID, ssid.toByteArray())
+            }
+        } else {
+            // android generates ssid and password for us
+            displayQrCode(ssid, password)
+        }
+
+        outputText("SSID: $ssid")
+        outputText("Password: $password")
+
+        transferCoroutine = GlobalScope.launch {
+            try {
+                startTransfer()
+            } catch (e: CancellationException) {
+                // cancelling the transfer is not an error; rethrow so cancellation
+                // propagates instead of being swallowed and reported.
+                throw e
+            } catch (e: Exception) {
+                outputText("Transfer error: ${e.message}\n")
+            } finally {
+                // runs on success, error, and cancellation alike
+                finishTransfer()
+            }
+        }
+    }
+
+    // ── Wi-Fi Direct hotspot ────────────────────────────────────────────────────
+    // LocalOnlyHotspot cannot be asked for a band. The overload that takes a
+    // SoftApConfiguration is @SystemApi behind NETWORK_SETTINGS, so an ordinary app gets whatever
+    // the framework picks -- and on 白い熊's Z Fold that is always 2.4 GHz, 20 MHz, 802.11n
+    // (every LocalOnlyHotspot session in the phone's own softap history sat on 2412 or 2437 MHz,
+    // while the same device reports config_wifiSoftap5ghzSupported: true). That link is the
+    // 17 MB/s ceiling: the identical encrypted transfer path did 42 MB/s over a 5 GHz network.
+    //
+    // A Wi-Fi Direct group owner is the way out that stays within public API. createGroup() with
+    // a WifiP2pConfig has been public since API 29 and takes setGroupOperatingBand(), and a P2P
+    // group owner still presents as an ordinary WPA2 access point with a network name and a
+    // passphrase -- so the peer joins it exactly as it joins a LocalOnlyHotspot, the credentials
+    // travel over Bluetooth exactly as before, and the wire protocol is untouched.
+    //
+    // The band is a *request*: drivers and regulatory domain get the final say, so this can come
+    // up on 2.4 GHz anyway, and on some devices createGroup fails outright. Hence the fallback --
+    // any failure, and the timeout below for the case where it neither succeeds nor reports,
+    // lands us back on LocalOnlyHotspot with nothing lost but a couple of seconds.
+    private var p2pManager: WifiP2pManager? = null
+    private var p2pChannel: WifiP2pManager.Channel? = null
+    private var p2pGroupActive = false
+    // Guards the fallback so it can fire only once per transfer: the timeout and an ActionListener
+    // failure can both arrive, and two fallbacks would start two hotspots.
+    private var wifiDirectSettled = false
+
+    private fun fallBackToLocalOnlyHotspot(why: String) {
+        if (wifiDirectSettled) return
+        wifiDirectSettled = true
+        outputText("Wi-Fi Direct unavailable ($why) — falling back to the standard hotspot.")
+        removeWifiDirectGroup()
+        startLocalOnlyHotspot()
+    }
+
+    fun removeWifiDirectGroup() {
+        val mgr = p2pManager
+        val ch = p2pChannel
+        p2pManager = null
+        p2pChannel = null
+        if (mgr == null || ch == null || !p2pGroupActive) return
+        p2pGroupActive = false
+        try {
+            mgr.removeGroup(ch, null)
+        } catch (e: Exception) {
+            Log.i("WiFi", "removeGroup() failed: ${e.message}")
+        }
+    }
+
+    @SuppressLint("MissingPermission") // startHotspot() checked the nearby-devices permission
+    private fun startWifiDirectGroup() {
+        val mgr = application.getSystemService(AppCompatActivity.WIFI_P2P_SERVICE) as? WifiP2pManager
+        val ch = mgr?.initialize(application, Looper.getMainLooper(), null)
+        if (mgr == null || ch == null) {
+            fallBackToLocalOnlyHotspot("this device has no Wi-Fi Direct")
+            return
+        }
+        p2pManager = mgr
+        p2pChannel = ch
+
+        // We choose the credentials rather than reading them back, which is what lets the network
+        // name carry the DIRECT- prefix the framework requires while the passphrase stays the
+        // transfer password everything else is keyed from.
+        val generated = generatePassword()
+        val netName = "DIRECT-fc-$generated"
+        val config = WifiP2pConfig.Builder()
+            .setNetworkName(netName)
+            .setPassphrase(generated)
+            .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_5GHZ)
+            .build()
+
+        // createGroup's onSuccess only means the request was accepted, so the credentials are
+        // taken from the group itself once it exists rather than assumed from the config.
+        outputText("Starting a 5 GHz Wi-Fi Direct hotspot...")
+        try {
+            mgr.createGroup(ch, config, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = readWifiDirectGroup(mgr, ch, attempt = 0)
+                override fun onFailure(reason: Int) =
+                    fallBackToLocalOnlyHotspot("group creation refused, reason $reason")
+            })
+        } catch (e: Exception) {
+            fallBackToLocalOnlyHotspot("group creation threw: ${e.message}")
+            return
+        }
+
+        // Neither listener is guaranteed to fire on every driver. Without this the transfer would
+        // sit on "Starting a 5 GHz Wi-Fi Direct hotspot..." for ever.
+        handler.postDelayed({
+            fallBackToLocalOnlyHotspot("it did not come up within ${WIFI_DIRECT_TIMEOUT_MS / 1000}s")
+        }, WIFI_DIRECT_TIMEOUT_MS)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun readWifiDirectGroup(mgr: WifiP2pManager, ch: WifiP2pManager.Channel, attempt: Int) {
+        if (wifiDirectSettled) return
+        mgr.requestGroupInfo(ch) { group: WifiP2pGroup? ->
+            if (wifiDirectSettled) return@requestGroupInfo
+            val name = group?.networkName
+            val pass = group?.passphrase
+            if (group == null || !group.isGroupOwner || name.isNullOrEmpty() || pass.isNullOrEmpty()) {
+                // The group is announced before its credentials are readable on some devices.
+                if (attempt < WIFI_DIRECT_GROUP_READ_ATTEMPTS) {
+                    handler.postDelayed({ readWifiDirectGroup(mgr, ch, attempt + 1) }, 400)
+                } else {
+                    fallBackToLocalOnlyHotspot("its details never became readable")
+                }
+                return@requestGroupInfo
+            }
+            if (!transferIsRunning) {
+                outputText("Wi-Fi Direct came up after the transfer was cancelled — releasing it")
+                removeWifiDirectGroup()
+                return@requestGroupInfo
+            }
+            wifiDirectSettled = true
+            p2pGroupActive = true
+            hotspotRunning = true
+            ssid = name
+            password = pass
+            // The band was a request, not an instruction, so say which one we actually got --
+            // the whole point of this path is the 5 GHz link, and a silent 2.4 GHz group would
+            // look identical to the LocalOnlyHotspot it replaced.
+            val freq = try { group.frequency } catch (e: Throwable) { 0 }
+            val band = when {
+                freq >= 5925 -> "6 GHz"
+                freq >= 4900 -> "5 GHz"
+                freq > 0 -> "2.4 GHz"
+                else -> "an unreported band"
+            }
+            outputText("Wi-Fi Direct hotspot up on $band${if (freq > 0) " ($freq MHz)" else ""}.")
+            hotspotCredentialsReady()
+        }
+    }
+
+    private fun startLocalOnlyHotspot() {
+        try {
+            if (!hotspotRunning) {
+                wifiManager.startLocalOnlyHotspot(localOnlyHotspotCallback, handler)
+                outputText("Started hotspot. Waiting for the other device to join...")
+            } else {
+                Log.e("Flying Carpet", "startHotspot() called when hotspot already running")
+            }
+        } catch (e: Exception) {
+            e.message?.let { outputText(it) }
+            cleanUpTransfer()
         }
     }
 
@@ -847,12 +1013,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             requestPermissionLauncher.launch(requiredPermission)
         } else {
             try {
-                if (!hotspotRunning) {
-                    wifiManager.startLocalOnlyHotspot(localOnlyHotspotCallback, handler)
-                    outputText("Started hotspot. Waiting for the other device to join...")
-                } else {
+                if (hotspotRunning) {
                     Log.e("Flying Carpet", "startHotspot() called when hotspot already running")
+                    return
                 }
+                wifiDirectSettled = false
+                startWifiDirectGroup()
             } catch (e: Exception) {
                 e.message?.let { outputText(it) }
                 cleanUpTransfer()
