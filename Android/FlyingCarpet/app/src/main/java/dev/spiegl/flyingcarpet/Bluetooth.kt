@@ -523,6 +523,20 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                     // now we know peer's OS
                     // thought we had to figure out hosting and connect here, but that doesn't
                     // happen till central writes wifi info
+                    //
+                    // The post-bond connection replays this write, and once the credentials have
+                    // been exchanged there is nothing left for it to tell us. Replaying it anyway
+                    // reprinted the whole opening of the negotiation -- "The other device is
+                    // android", "It is setting up its hotspot now", "Waiting for it to send us the
+                    // network name and password" -- and restarted the wait ticker, on top of a
+                    // transfer that was already joining the peer's hotspot. The log read as though
+                    // the exchange had gone back to the beginning and then stalled, which is
+                    // exactly how it looked to 白い熊 on 2026-08-10. The damage that replay did is
+                    // fixed in connectToPeer(); this keeps it out of the log as well.
+                    if (bluetoothReceiver.exchangeComplete) {
+                        Log.i("Bluetooth", "Peer replayed its OS write after the exchange; ignoring")
+                        return
+                    }
                     value?.let {
                         val os = it.toString(Charsets.UTF_8)
                         // This is the long quiet stretch on the sending side: the receiver goes off
@@ -1185,6 +1199,15 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 when (characteristic?.uuid) {
                     OS_CHARACTERISTIC_UUID -> {
                         outputText("Wrote OS to peer")
+                        // The central's quiet stretch. connectToPeer() goes off to drop our WiFi
+                        // and bring a hotspot up, which takes the better part of twenty seconds
+                        // and prints nothing while it does -- so the receiving side's log simply
+                        // ended at "Wrote OS to peer" and stayed there, indistinguishable from a
+                        // hang (白い熊, 2026-08-10). The peripheral half has ticked through the
+                        // matching wait since 白い熊 asked for it on 2026-08-07; this is the same
+                        // courtesy for the central. Stopped by the password write below, or by
+                        // whichever ticker the next phase starts.
+                        bleWait("Setting up WiFi for the transfer")
                         connectToPeer()
                     }
                     SSID_CHARACTERISTIC_UUID -> {
@@ -1448,6 +1471,23 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                         // the live one is allowed to fail the transfer.
                         current != null && current !== gatt ->
                             Log.i("Bluetooth", "Stale connection dropped (status $status)")
+                        // A connection we never had cannot have "dropped": this is a connect
+                        // attempt that failed, and it belongs in the retry ladder rather than at
+                        // the end of the transfer. connectionAttemptFailed() was written for
+                        // exactly this -- "133 in particular is thrown by a healthy stack talking
+                        // to a peer that is right there and still advertising, and the next
+                        // attempt usually lands" -- but it was only reachable from the newState
+                        // branch below, and a failed connect reports STATE_DISCONNECTED, so every
+                        // 133 fell through to bluetoothFailed() and killed the transfer on the
+                        // first try. The Samsung did that to every attempt, in both connection
+                        // modes, while the Huawei advertised at it for a minute (白い熊,
+                        // 2026-08-10). bluetoothGatt is assigned only once a connection reaches
+                        // CONNECTED, so `current == null` is precisely "we never got a link".
+                        // gatt.close() above already ran, which is what makes a retry safe.
+                        current == null && status != BluetoothGatt.GATT_SUCCESS -> {
+                            outputText("Bluetooth connection failed with status $status.")
+                            connectionAttemptFailed(status)
+                        }
                         else -> {
                             outputText("Bluetooth connection failed with status $status.")
                             if (status == 133) {
@@ -1709,6 +1749,13 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                     "The other device would not accept a Bluetooth connection (error $status). " +
                             "Start receiving again to try afresh."
                 )
+                if (status == 133) {
+                    outputText(
+                        "Status 133 is Android's generic GATT failure. If it keeps happening, " +
+                        "restart Flying Carpet on this device; if it still fails, unpair the two " +
+                        "devices from each other."
+                    )
+                }
                 connectRetries = 0
                 waitingForConnection = false
                 cleanUpTransfer()
