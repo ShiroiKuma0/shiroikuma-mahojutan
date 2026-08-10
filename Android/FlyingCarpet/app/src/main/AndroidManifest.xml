@@ -20,6 +20,10 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Fork: WifiP2pManager reads group state through this. It has been arriving by manifest
+         merge from a dependency rather than being asked for here, which is not something the
+         Wi-Fi Direct hotspot path should rely on. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
