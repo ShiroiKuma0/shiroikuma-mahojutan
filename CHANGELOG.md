@@ -7,6 +7,17 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+048 — 2026-08-10
+
+- **The "Directory to send" button is cleared while a transfer runs.** `toggleUI()` only disabled
+  it, so it stayed on screen — greyed out but still there — beside CANCEL TRANSFER, offering
+  something that was no longer on offer. It shares its row with the start button, which goes
+  invisible so the cancel button can take its place, and the remembered-directory button beside it
+  has always been hidden outright; this one was the odd one out. It is hidden for the duration and
+  restored from the mode afterwards, which is what governs it the rest of the time. With it gone the
+  start button holds the whole row while invisible, so the row keeps its height and CANCEL TRANSFER
+  sits centred rather than pushed to one side.
+
 ## 10.0.3+047 — 2026-08-10
 
 Hotspot transfers are **three times faster** and work again at all: five separate faults stood
