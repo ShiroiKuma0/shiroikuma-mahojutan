@@ -7,6 +7,22 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+049 — 2026-08-10
+
+- **Sharing a file to the app no longer starts the transfer on the spot.** The share sheet hands over
+  files; it does not hand over a decision — and the previous behaviour began transferring immediately
+  with whatever connection type happened to be selected last, which is not a detail: hotspot mode
+  takes both devices off their network for the duration, and Shared Network does not. There was no
+  moment in which to choose.
+- The share now **arms** the selection instead of consuming it: the files are preselected, the mode
+  switches to Send, and the log says what to do. **Choose Hotspot or Shared Network, then press the
+  send button** — the connection type is read at that moment, not at the moment the share arrived.
+  The prompt names the send button by its *actual current label*, since that label is one of the
+  things the UI page can change.
+- Two ways out: pressing **Directory to send** replaces the shared files with a picked directory, and
+  switching to **Receive** abandons the selection — those files were handed over to be sent, and the
+  button is about to mean something else.
+
 ## 10.0.3+048 — 2026-08-10
 
 - **The "Directory to send" button is cleared while a transfer runs.** `toggleUI()` only disabled
