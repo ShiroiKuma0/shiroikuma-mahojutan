@@ -42,57 +42,86 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.476"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/startButton" />
+        app:layout_constraintTop_toBottomOf="@+id/sendButtonRow" />
 
-    <Button
-        android:id="@+id/startButton"
-        android:layout_width="wrap_content"
+    <!-- One weighted row rather than a packed chain of wrap_content buttons, which is what the
+         two toggle groups above already are and now what this row matches: same 16dp margins,
+         same full width, both halves the same size. The chain could not express this because the
+         second slot is two alternative buttons (sendDirButton while sending, lastFolderButton
+         while receiving) and a chain to a GONE view collapses — which is exactly what centred the
+         first pill and pushed the second off to the side (白い熊, 2026-08-10). A LinearLayout gets
+         it right for free: GONE children take no space, so the visible ones always split the row,
+         and startButton takes the whole width when it is alone. Text autosizes down inside its
+         half instead of overflowing, so no width-qualified sizes are needed. -->
+    <LinearLayout
+        android:id="@+id/sendButtonRow"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:textAllCaps="false"
-        android:text="@string/selectFiles"
-        android:textColor="@color/white"
-        app:layout_constraintEnd_toStartOf="@+id/lastFolderButton"
-        app:layout_constraintHorizontal_chainStyle="packed"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:baselineAligned="false"
+        android:orientation="horizontal"
+        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/peerGroup"
-        app:strokeColor="@color/startButtonStrokeColor"
-        app:strokeWidth="2dp" />
+        app:layout_constraintTop_toBottomOf="@+id/peerGroup">
 
-    <!-- the folder half of what used to be a "Send Folder" tick box: same row, same dress, one
-         tap instead of tick-then-tap. Send mode only, so it never shares the row with the
-         remembered-directory button below. -->
-    <Button
-        android:id="@+id/sendDirButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:textAllCaps="false"
-        android:text="@string/directoryToSend"
-        android:textColor="@color/white"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="@+id/startButton"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@+id/startButton"
-        app:layout_constraintTop_toTopOf="@+id/startButton"
-        app:strokeColor="@color/startButtonStrokeColor"
-        app:strokeWidth="2dp" />
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/selectFiles"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            app:autoSizeMaxTextSize="14sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeStepGranularity="1sp"
+            app:autoSizeTextType="uniform"
+            app:strokeColor="@color/startButtonStrokeColor"
+            app:strokeWidth="2dp" />
 
-    <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
-    <Button
-        android:id="@+id/lastFolderButton"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:ellipsize="middle"
-        android:maxLines="1"
-        android:textAllCaps="false"
-        android:visibility="gone"
-        app:layout_constraintBottom_toBottomOf="@+id/startButton"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toEndOf="@+id/startButton"
-        app:layout_constraintTop_toTopOf="@+id/startButton"
-        app:strokeColor="@color/startButtonStrokeColor"
-        app:strokeWidth="2dp" />
+        <!-- the folder half of what used to be a "Send Folder" tick box: same row, same dress, one
+             tap instead of tick-then-tap. Send mode only, so it never shares the row with the
+             remembered-directory button below. -->
+        <Button
+            android:id="@+id/sendDirButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/directoryToSend"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            android:visibility="gone"
+            app:autoSizeMaxTextSize="14sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeStepGranularity="1sp"
+            app:autoSizeTextType="uniform"
+            app:strokeColor="@color/startButtonStrokeColor"
+            app:strokeWidth="2dp" />
+
+        <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
+        <Button
+            android:id="@+id/lastFolderButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:ellipsize="middle"
+            android:maxLines="1"
+            android:textAllCaps="false"
+            android:visibility="gone"
+            app:autoSizeMaxTextSize="14sp"
+            app:autoSizeMinTextSize="9sp"
+            app:autoSizeStepGranularity="1sp"
+            app:autoSizeTextType="uniform"
+            app:strokeColor="@color/startButtonStrokeColor"
+            app:strokeWidth="2dp" />
+    </LinearLayout>
 
     <Button
         android:id="@+id/cancelButton"
@@ -104,7 +133,7 @@
         android:visibility="invisible"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="@+id/startButton" />
+        app:layout_constraintTop_toTopOf="@+id/sendButtonRow" />
 
     <!-- sent/total, rate and ETA, shown above the bar while a transfer runs -->
     <TextView
@@ -372,14 +401,22 @@
 
     <TextView
         android:id="@+id/programTitle"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
         android:layout_marginTop="32dp"
+        android:layout_marginEnd="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
         android:text="@string/programTitle"
         android:textColor="?android:attr/textColorPrimary"
-        android:textSize="34sp"
         android:textStyle="bold"
+        app:autoSizeMaxTextSize="34sp"
+        app:autoSizeMinTextSize="12sp"
+        app:autoSizeStepGranularity="1sp"
+        app:autoSizeTextType="uniform"
+        app:layout_constraintEnd_toStartOf="@+id/qrCodeView"
+        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
