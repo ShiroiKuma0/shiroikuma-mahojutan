@@ -11,8 +11,9 @@ yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles 
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a token-gated hook for headless backups, external font
 support, a custom icon, a share-sheet target, and a rebranded Linux desktop build shipped as an
-amd64 `.deb` — plus Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog
-when the other device already has a file, and the Bluetooth work an EMUI phone needs to pair at all.
+amd64 `.deb` — plus a **5 GHz Wi-Fi Direct hotspot** that transfers three times faster than stock,
+Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog when the other
+device already has a file, and the Bluetooth work an EMUI phone needs to pair at all.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
@@ -23,9 +24,28 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.3+038`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.3+047`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
+
+---
+
+## 🚀 A hotspot on 5 GHz — three times faster
+
+Stock raises its hotspot with `LocalOnlyHotspot`, which **cannot be asked for a band**: the API that
+takes a configuration is reserved for system apps, so an ordinary app gets whatever the framework
+picks. On a Huawei Mate XT and a Galaxy Z Fold that is always **2.4 GHz, 20 MHz, 802.11n** — and
+setting 5 GHz in the system hotspot settings changes nothing, because that governs a different
+access point entirely.
+
+This fork raises the hotspot as a **Wi-Fi Direct group owner** instead and asks for 5 GHz. A group
+owner still presents as an ordinary WPA2 access point, so the other device joins it exactly as
+before and the transfer protocol is untouched — it is only the way the access point is created that
+changes. Measured between those two phones: **17 MB/s → 55 MB/s.**
+
+The band is a request rather than an instruction, so the log names the band actually obtained, and
+every way it can fail — refused, unreadable, or simply never arriving — falls back to the old
+hotspot automatically.
 
 ---
 

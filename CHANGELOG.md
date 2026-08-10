@@ -7,6 +7,93 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+047 — 2026-08-10
+
+Hotspot transfers are **three times faster** and work again at all: five separate faults stood
+between the two phones, each one hidden behind the last, and the access point Android hands an
+ordinary app turned out to be the speed limit.
+
+### Wi-Fi Direct: 17 MB/s → 55 MB/s
+
+- `LocalOnlyHotspot` **cannot be asked for a band**. The overload taking a `SoftApConfiguration` is
+  `@SystemApi` behind `NETWORK_SETTINGS`, so an ordinary app gets whatever the framework picks — and
+  on the test phone that is always **2.4 GHz, 20 MHz, 802.11n**: every session in the device's own
+  softap history sat on 2412 or 2437 MHz, while the same device reports
+  `config_wifiSoftap5ghzSupported: true`. Setting 5 GHz in the system hotspot settings does nothing,
+  because that is the *tethering* softAP — a different path with its own stored configuration.
+- The hotspot is now raised as a **Wi-Fi Direct group owner**. `createGroup()` with a `WifiP2pConfig`
+  has been public since API 29 and takes `setGroupOperatingBand()`, and a P2P group owner still
+  presents as an ordinary WPA2 access point — so the peer joins it exactly as before, the credentials
+  travel over Bluetooth unchanged, and the wire protocol is untouched. **Measured: 17 MB/s → 55 MB/s.**
+- The band is a *request*, not an instruction, so the log names the band actually obtained — a silent
+  2.4 GHz group would look identical to the hotspot it replaced.
+- **Every route out falls back to `LocalOnlyHotspot`**: group creation refused, credentials never
+  becoming readable (retried, since some devices announce a group before they can be read), and a
+  timeout for the case where neither listener fires. One latch ensures only one fallback can act, so
+  two hotspots can never start. The group is removed on teardown, like the reservation beside it.
+- This also settles a question worth recording: **encryption was never the bottleneck.** The same
+  ChaCha20-Poly1305 path had already run at 42 MB/s over a 5 GHz network while hotspot transfers sat
+  at 17 MB/s. Dropping it would have bought nothing and cost the peer authentication.
+
+### The joiner that wiped its own credentials
+
+- `connectToPeer()` clears ssid and password before setting them afresh, and guarded that against the
+  deliberate two-connection BLE replay — but **only for the side that hosts**. A device *joining* the
+  peer's hotspot set neither guard, so the post-bond OS write fell through and erased the credentials
+  it had just been given and was already associating with. The join completed, its network callback
+  started the transfer, and the password was gone. Guarded now on `exchangeComplete`, which is set
+  only for a non-empty password — so the empty-password retry still gets through.
+- A hotspot transfer reaching `startTransfer()` without a password now **names how it got there**
+  (hosting, joining, or neither) instead of `derivePsk()`'s generic "the credentials were lost". It
+  was that distinction that identified the bug above.
+
+### Bluetooth status 133 could never reach its own retry
+
+- A failed GATT connect reports `STATE_DISCONNECTED` with its status, so **every status 133 fell
+  through to the terminal branch** and killed the transfer on the first attempt.
+  `connectionAttemptFailed()` was written for exactly this case — *"133 in particular is thrown by a
+  healthy stack talking to a peer that is right there and still advertising, and the next attempt
+  usually lands"* — but was only reachable from a branch that never fires for it, so its three
+  retries were never once invoked.
+- The receiving side no longer goes silent for twenty seconds after "Wrote OS to peer": the stretch
+  where it drops WiFi and raises a hotspot now **ticks every three seconds**, as the peripheral half
+  already did.
+- "A device connected over Bluetooth" is no longer announced for links that cannot belong to a live
+  transfer. It fires for **any** LE connection to our GATT server — a watch or a pair of earbuds is
+  enough — so it turned up under "Transfer complete" and read as though something were restarting.
+
+### Shared Network on a large or locked-down WiFi
+
+- **Android 17 blocks local network access by default.** `ACCESS_LOCAL_NETWORK` is a runtime
+  permission there, and the app declared it but never asked for it on an install that already had
+  Bluetooth granted, because the request it rode on only fires when a Bluetooth permission is
+  missing. Every discovery packet was rejected with `EPERM`. The real gate now sits in
+  `beginTransferWithSelection()` — the point every transfer passes through, including the one-tap
+  receive and the share sheet, both of which bypassed the old one.
+- **A `/21` switched the unicast scan off entirely.** The cap was 1024 hosts and a `/21` has 2046, so
+  discovery fell back to multicast alone on exactly the kind of large managed network most likely to
+  drop multicast between clients. The cap now covers everything up to a `/20`, and the sweep is paced
+  so 2046 datagrams go out as a trickle rather than one burst.
+- **Directed broadcast** is sent alongside multicast now: one datagram, independent of subnet size,
+  and an ordinary on-link destination that needs no group membership or IGMP snooping to survive the
+  access point.
+
+### UI
+
+- **No more white flash.** `Theme.FlyingCarpet` never set `android:windowBackground`, so the window
+  behind the yellow-on-black UI stayed the stock light one and showed through whenever a frame was
+  drawn before the views were — most visibly returning from the system Wi-Fi dialog when joining the
+  peer's hotspot.
+- **The send row spans the full width**, in halves, with the same margins as the Send/Receive and
+  Hotspot/Shared Network groups above it. It was a ConstraintLayout chain, which cannot express a
+  slot holding two alternative buttons: chaining to a `GONE` view collapses, which centred one pill
+  and pushed the other off the edge of a folded screen.
+- **The title shrinks rather than colliding.** It had no end constraint at all, so it ran under the
+  logo and took the About link with it. It is now bounded by the logo and autosizes between 12sp and
+  34sp — full size on a wide screen, only as small as a narrow panel requires.
+- The idle progress bar is gone. It was the one view in its group with no visibility handling, so the
+  fork theme's border drew an empty box under the log whenever no transfer was running.
+
 ## 10.0.3+038 — 2026-08-09
 
 Bluetooth transfers work in **both directions** between the desktop and an EMUI phone — six separate
