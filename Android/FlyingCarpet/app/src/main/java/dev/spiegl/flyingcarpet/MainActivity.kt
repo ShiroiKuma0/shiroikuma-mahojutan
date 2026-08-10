@@ -68,6 +68,8 @@ class MainActivity : AppCompatActivity() {
     // true when the local network prompt was raised by the start button rather than at
     // launch, so only that case tells the user to press Start again
     private var localNetworkPromptedFromStart = false
+    // one launch-time prompt per Activity, however many times onResume re-runs initializeBluetooth()
+    private var askedForLocalNetworkAtLaunch = false
     private lateinit var peerGroup: MaterialButtonToggleGroup
     private lateinit var peerInstruction: TextView
     private lateinit var connectionGroup: MaterialButtonToggleGroup
@@ -197,6 +199,16 @@ class MainActivity : AppCompatActivity() {
     // What the file picker does once files are chosen: hand off to Bluetooth if it is on, otherwise
     // fall through to the manual (QR / password) path. Shared files take the same route.
     private fun beginTransferWithSelection() {
+        // The real local-network gate. startPressed() checks too, but it is not the only way in:
+        // the one-tap "Receive in <folder>" button and the share sheet both arm a transfer and
+        // come straight here, so on Android 17 they ran the whole thing with local network access
+        // denied -- Bluetooth negotiated fine, then discovery sent into a wall of EPERM and the
+        // transfer simply never connected (白い熊, 2026-08-10). Unlike startPressed()'s early
+        // return, callers have already armed the transfer by this point, so unwind it.
+        if (blockedOnLocalNetworkPermission()) {
+            viewModel.cleanUpTransfer()
+            return
+        }
         if (viewModel.mode == Mode.Receiving && viewModel.bluetooth.active
             && !locationEnabledForScanning()) {
             return
@@ -401,6 +413,29 @@ class MainActivity : AppCompatActivity() {
             permissions
         }
 
+    // The Bluetooth request above only ever runs when a Bluetooth permission is missing, so on
+    // an install that was granted Bluetooth before the targetSdk 37 bump the rider never went
+    // out and ACCESS_LOCAL_NETWORK was never asked for at all -- not once, in the whole life of
+    // the install (白い熊's Z Fold, 2026-08-10: granted=false with no USER_SET flag, and every
+    // discovery packet rejected with EPERM). Ask for it on its own in exactly that case. Guarded
+    // so it happens once per launch: initializeBluetooth() also runs from onResume().
+    private fun requestLocalNetworkPermissionAtLaunch() {
+        if (askedForLocalNetworkAtLaunch || !needsLocalNetworkPermission()) return
+        askedForLocalNetworkAtLaunch = true
+        localNetworkPromptedFromStart = false
+        localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+    }
+
+    // Raise the prompt if local network access is still missing, and report whether the caller
+    // must abandon what it was about to do. Every transfer runs through this, whichever button
+    // started it -- see the call in beginTransferWithSelection().
+    private fun blockedOnLocalNetworkPermission(): Boolean {
+        if (!needsLocalNetworkPermission()) return false
+        localNetworkPromptedFromStart = true
+        localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+        return true
+    }
+
     // Deliberately not the launcher above: that one calls startHotspot() on grant, which is
     // right for the nearby-devices permission it was written for and wrong here — this
     // permission is needed by joining and shared network mode too, neither of which hosts a
@@ -532,7 +567,12 @@ class MainActivity : AppCompatActivity() {
         progressDetails = findViewById(id.progressDetails)
         viewModel.progressDetails.observe(this) { details ->
             progressDetails.text = details
-            progressDetails.isVisible = details.isNotEmpty()
+            // The bar rides with its own detail line, exactly as totalProgressBar rides with
+            // progressTotalDetails below. cleanUpTransfer() already blanks both details strings,
+            // so a finished or cancelled transfer puts the bar away with them.
+            val show = details.isNotEmpty()
+            progressDetails.isVisible = show
+            progressBar.isVisible = show
         }
         progressTotalDetails = findViewById(id.progressTotalDetails)
         totalProgressBar = findViewById(id.totalProgressBar)
@@ -735,9 +775,7 @@ class MainActivity : AppCompatActivity() {
         // mode need this just as much, and shared network mode never calls startHotspot()
         // at all. Runs before any transfer state is touched, so bailing out is a plain
         // return rather than a half-started transfer to unwind.
-        if (needsLocalNetworkPermission()) {
-            localNetworkPromptedFromStart = true
-            localNetworkPermissionLauncher.launch(Manifest.permission.ACCESS_LOCAL_NETWORK)
+        if (blockedOnLocalNetworkPermission()) {
             return
         }
 
@@ -1391,6 +1429,10 @@ class MainActivity : AppCompatActivity() {
             return false
         }
         bluetoothPermissionsMissing = false
+        // Bluetooth was already granted, so the request above -- the one ACCESS_LOCAL_NETWORK
+        // rides on -- never went out. Ask for it on its own instead. No dialog is in flight in
+        // this branch, so there is nothing for Android to drop.
+        requestLocalNetworkPermissionAtLaunch()
         var initialized = false
         try {
             val initializedPeripheral = viewModel.bluetooth.initializePeripheral(this)
