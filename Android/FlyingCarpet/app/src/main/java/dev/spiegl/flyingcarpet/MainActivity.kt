@@ -1142,7 +1142,17 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(id.linuxButton).isEnabled = enabled
         findViewById<Button>(id.macButton).isEnabled = enabled
         findViewById<Button>(id.windowsButton).isEnabled = enabled
-        findViewById<Button>(id.sendDirButton).isEnabled = enabled
+        // Cleared while a transfer runs, not merely greyed out — the same as the other half of its
+        // row. The start button goes invisible below and the cancel button takes its place, so a
+        // still-visible "Directory to send" sat next to CANCEL TRANSFER offering something that was
+        // no longer on offer (白い熊, 2026-08-10). Restored from the mode, which is what governs it
+        // the rest of the time: it belongs to send mode alone.
+        findViewById<Button>(id.sendDirButton).let { dir ->
+            dir.isEnabled = enabled
+            val sending = findViewById<MaterialButtonToggleGroup>(id.modeGroup)
+                ?.checkedButtonId == id.sendButton
+            dir.isVisible = enabled && sending
+        }
 
         findViewById<Button>(id.startButton).isInvisible = !enabled
         findViewById<Button>(id.cancelButton).isInvisible = enabled
