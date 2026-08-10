@@ -70,6 +70,9 @@ class MainActivity : AppCompatActivity() {
     private var localNetworkPromptedFromStart = false
     // one launch-time prompt per Activity, however many times onResume re-runs initializeBluetooth()
     private var askedForLocalNetworkAtLaunch = false
+    // Files arrived from the share sheet and have not been sent yet. While this is set the send
+    // button confirms that selection instead of opening the picker over the top of it.
+    private var sharedSelectionPending = false
     private lateinit var peerGroup: MaterialButtonToggleGroup
     private lateinit var peerInstruction: TextView
     private lateinit var connectionGroup: MaterialButtonToggleGroup
@@ -290,25 +293,35 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<MaterialButtonToggleGroup>(id.modeGroup).check(id.sendButton)
         viewModel.mode = Mode.Sending
+        sharedSelectionPending = true
         viewModel.outputText(
             "Sharing ${viewModel.files.size} file${if (viewModel.files.size == 1) "" else "s"} from another app."
         )
         return true
     }
 
-    // Run the shared selection once the activity is set up: permissions are requested during
-    // onCreate, and Bluetooth is initialized from their result, so starting inline would race both.
-    private fun startSharedTransferWhenReady() {
+    // The share sheet hands us files; it does not hand us a decision. This used to call
+    // beginTransferWithSelection() on the spot, so a share began transferring immediately with
+    // whatever connection type happened to be selected last — there was no moment in which to
+    // switch between Hotspot and Shared Network, and the two are not interchangeable: hotspot mode
+    // takes both devices off their network for the duration (白い熊, 2026-08-10). So this only arms
+    // the selection now and says what to do with it; startPressed() sends it. Still posted rather
+    // than run inline, because permissions are requested during onCreate and Bluetooth is
+    // initialized from their result, so the permission check below would otherwise race both.
+    private fun promptForSharedSelection() {
         window.decorView.post {
+            // Name the button as it is actually labelled: the label is one of the things the UI
+            // page can change, so a hardcoded "Files to send" could name a button that is not there.
+            val label = findViewById<Button>(id.startButton)?.text?.toString().orEmpty()
+            val press = if (label.isBlank()) "the send button" else "“$label”"
             if (!checkForBluetoothPermissions()) {
-                // Permissions are still being asked for. The files stay selected; the transfer is
-                // one tap on the start button rather than a silent failure.
-                viewModel.outputText("Grant the permissions, then press the button to send.")
+                // Permissions are still being asked for. The files stay selected either way.
+                viewModel.outputText(
+                    "Grant the permissions, then choose Hotspot or Shared Network and press $press to send."
+                )
                 return@post
             }
-            toggleUI(false)
-            viewModel.transferIsRunning = true
-            beginTransferWithSelection()
+            viewModel.outputText("Choose Hotspot or Shared Network, then press $press to send.")
         }
     }
 
@@ -316,7 +329,7 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (handleShareIntent(intent)) {
-            startSharedTransferWhenReady()
+            promptForSharedSelection()
         }
     }
 
@@ -682,6 +695,9 @@ class MainActivity : AppCompatActivity() {
                 startButton.text = settings.textOr("start.folderText", getString(R.string.selectFolder))
                 sendDirButton.isVisible = false
                 refreshLastFolderButton()
+                // Switching to Receive abandons a shared selection: those files were handed to us
+                // to send, and the button is about to mean "pick where to receive" instead.
+                sharedSelectionPending = false
             }
             // which side shows the QR code and which scans it depends on this choice
             updateBluetoothHint()
@@ -703,7 +719,7 @@ class MainActivity : AppCompatActivity() {
         // Launched from the share sheet? Preselect what was shared and start looking for the peer.
         // Skipped on a recreate (rotation), where the files are already in the ViewModel.
         if (savedInstanceState == null && handleShareIntent(intent)) {
-            startSharedTransferWhenReady()
+            promptForSharedSelection()
         }
     }
 
@@ -831,7 +847,15 @@ class MainActivity : AppCompatActivity() {
         when (viewModel.mode) {
             Mode.Sending -> {
                 if (viewModel.sendFolder) {
+                    // Picking a directory replaces whatever the share sheet handed us.
+                    sharedSelectionPending = false
                     folderPicker.launch(Uri.EMPTY)
+                } else if (sharedSelectionPending) {
+                    // The files were chosen in the other app; this press is the confirmation, and
+                    // the connection type is whatever has been selected in the meantime. Opening
+                    // the picker here would ask for a choice that has already been made.
+                    sharedSelectionPending = false
+                    beginTransferWithSelection()
                 } else {
                     filePicker.launch(arrayOf("*/*"))
                 }
