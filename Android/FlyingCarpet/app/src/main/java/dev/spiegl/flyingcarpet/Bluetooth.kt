@@ -386,7 +386,18 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             Log.i("Bluetooth", "In serverCallback")
             super.onConnectionStateChange(device, status, newState)
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                outputText("A device connected over Bluetooth")
+                // Only when a connection could plausibly be this transfer's. This callback fires
+                // for any LE link opened to our GATT server -- see the note below about watches
+                // and earbuds on EMUI/Kirin -- and the line was printed before every guard in
+                // this method, so it turned up under "Transfer complete" on a finished transfer
+                // and read as though something were starting up again (白い熊, 2026-08-10).
+                // tearingDown means no transfer owns the BLE stack; exchangeComplete means this
+                // one is already past the point where Bluetooth has anything left to contribute.
+                if (!bluetoothReceiver.tearingDown && !bluetoothReceiver.exchangeComplete) {
+                    outputText("A device connected over Bluetooth")
+                } else {
+                    Log.i("Bluetooth", "LE connection while idle or after the exchange; not announcing")
+                }
                 peerDevice = device
                 // Start the pairing from THIS side. Our characteristics need an encrypted,
                 // MITM-protected link, so somebody has to bond -- and when the other device
