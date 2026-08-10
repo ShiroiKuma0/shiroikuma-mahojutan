@@ -14,7 +14,16 @@ val DISCOVERY_MAGIC = byteArrayOf('F'.code.toByte(), 'C'.code.toByte(), 'A'.code
 const val ANNOUNCEMENT_SIZE = 93
 const val TIMESTAMP_WINDOW_SECS = 60L
 const val DISCOVERY_INTERVAL_MS = 500L
-const val MAX_UNICAST_SCAN_HOSTS = 1024
+// A /21 guest network has 2046 hosts, and the old 1024 cap turned the unicast scan off for it
+// entirely -- leaving multicast as the only mechanism on exactly the kind of large managed WiFi
+// that is most likely to drop multicast between clients. 白い熊's transfer died that way on
+// 2026-08-10 (both phones on 192.168.128.0/21, both printing "relying on multicast only"). 4096
+// covers everything up to a /20; past that the subnet really is too big to sweep politely.
+const val MAX_UNICAST_SCAN_HOSTS = 4096
+// The sweep is spread over the interval instead of being fired as one burst: 2046 datagrams
+// back-to-back is a traffic spike an AP may rate-limit, and nothing needs them to be simultaneous.
+const val UNICAST_SCAN_CHUNK = 128
+const val UNICAST_SCAN_CHUNK_DELAY_MS = 20L
 
 enum class DiscoveryRole(val value: Byte) {
     SENDER(0),
@@ -124,18 +133,42 @@ data class DiscoveryAnnouncement(
     }
 }
 
+private fun ipToInt(ip: InetAddress): Int {
+    val b = ip.address
+    return ((b[0].toInt() and 0xFF) shl 24) or
+            ((b[1].toInt() and 0xFF) shl 16) or
+            ((b[2].toInt() and 0xFF) shl 8) or
+            (b[3].toInt() and 0xFF)
+}
+
+private fun intToIp(addr: Int): InetAddress = InetAddress.getByAddress(
+    byteArrayOf(
+        ((addr shr 24) and 0xFF).toByte(),
+        ((addr shr 16) and 0xFF).toByte(),
+        ((addr shr 8) and 0xFF).toByte(),
+        (addr and 0xFF).toByte()
+    )
+)
+
+/// The subnet's directed broadcast address (192.168.135.255 for 192.168.134.202/21), or null
+/// when the prefix leaves no room for one. One datagram reaches every host on the link whatever
+/// the subnet's size, so it is the discovery mechanism that does not care how big the network is
+/// -- and unlike multicast it is an ordinary on-link destination, so it needs no group
+/// membership and no IGMP snooping to survive the access point.
+fun subnetBroadcastAddress(localIp: InetAddress, prefixLength: Int): InetAddress? {
+    if (prefixLength > 30 || prefixLength <= 0) return null
+    if (localIp.address.size != 4) return null
+    val mask = -1 shl (32 - prefixLength)
+    return intToIp((ipToInt(localIp) and mask) or mask.inv())
+}
+
 /// Returns the list of host IPs to scan, or null if the subnet is too large or has no
 /// other host addresses (/31, /32).
 fun unicastScanTargets(localIp: InetAddress, prefixLength: Int): List<InetAddress>? {
     if (prefixLength > 30 || prefixLength <= 0) return null
 
-    val ipBytes = localIp.address
-    val ipInt = ((ipBytes[0].toInt() and 0xFF) shl 24) or
-            ((ipBytes[1].toInt() and 0xFF) shl 16) or
-            ((ipBytes[2].toInt() and 0xFF) shl 8) or
-            (ipBytes[3].toInt() and 0xFF)
-
-    val mask = if (prefixLength == 0) 0 else (-1 shl (32 - prefixLength))
+    val ipInt = ipToInt(localIp)
+    val mask = -1 shl (32 - prefixLength)
     val network = ipInt and mask
     val broadcast = network or mask.inv()
     val numHosts = broadcast - network - 1
@@ -145,13 +178,7 @@ fun unicastScanTargets(localIp: InetAddress, prefixLength: Int): List<InetAddres
     val targets = mutableListOf<InetAddress>()
     for (addr in (network + 1) until broadcast) {
         if (addr == ipInt) continue
-        val bytes = byteArrayOf(
-            ((addr shr 24) and 0xFF).toByte(),
-            ((addr shr 16) and 0xFF).toByte(),
-            ((addr shr 8) and 0xFF).toByte(),
-            (addr and 0xFF).toByte()
-        )
-        targets.add(InetAddress.getByAddress(bytes))
+        targets.add(intToIp(addr))
     }
     return targets
 }
@@ -218,17 +245,33 @@ class DiscoveryManager(
             coroutineScope {
                 val result = CompletableDeferred<Inet4Address?>()
 
+                // Multicast and directed broadcast go out together, from the same socket and the
+                // same signed announcement. They fail independently: a network that drops
+                // multicast between clients usually still forwards a subnet broadcast, and each
+                // is one datagram, so there is no reason to pick.
+                val broadcastAddr = subnetBroadcastAddress(localIp, prefixLength)
+                socket.broadcast = true
                 val multicastSender = launch {
-                    val dest = InetSocketAddress(multicastAddr, DISCOVERY_PORT)
+                    val destinations = listOfNotNull(
+                        "multicast" to InetSocketAddress(multicastAddr, DISCOVERY_PORT),
+                        broadcastAddr?.let { "broadcast" to InetSocketAddress(it, DISCOVERY_PORT) }
+                    )
+                    val loggedFailure = mutableSetOf<String>()
                     var sequence = 0
                     while (isActive && !cancelled.get()) {
                         val announcement = DiscoveryAnnouncement.create(role, localIp, sequence)
                         announcement.sign(key)
                         val data = announcement.serialize()
-                        try {
-                            socket.send(DatagramPacket(data, data.size, dest))
-                        } catch (e: Exception) {
-                            Log.w("Discovery", "Failed to send multicast: ${e.message}")
+                        for ((label, dest) in destinations) {
+                            try {
+                                socket.send(DatagramPacket(data, data.size, dest))
+                            } catch (e: Exception) {
+                                // once per destination: this used to log twice a second for as
+                                // long as the search ran, which buried everything else in logcat
+                                if (loggedFailure.add(label)) {
+                                    Log.w("Discovery", "Failed to send $label: ${e.message}")
+                                }
+                            }
                         }
                         sequence++
                         delay(DISCOVERY_INTERVAL_MS)
@@ -238,10 +281,15 @@ class DiscoveryManager(
                 val unicastSender = launch {
                     val targets = unicastScanTargets(localIp, prefixLength)
                     if (targets == null) {
-                        if (prefixLength > 30 || prefixLength <= 0) {
-                            outputText("No other hosts possible on a /$prefixLength network, relying on multicast only.")
+                        val reach = if (broadcastAddr != null) {
+                            "relying on multicast and broadcast (${broadcastAddr.hostAddress})"
                         } else {
-                            outputText("Subnet too large for unicast scan (/$prefixLength), relying on multicast only.")
+                            "relying on multicast only"
+                        }
+                        if (prefixLength > 30 || prefixLength <= 0) {
+                            outputText("No other hosts possible on a /$prefixLength network, $reach.")
+                        } else {
+                            outputText("Subnet too large for unicast scan (/$prefixLength), $reach.")
                         }
                         return@launch
                     }
@@ -253,6 +301,7 @@ class DiscoveryManager(
                         val announcement = DiscoveryAnnouncement.create(role, localIp, sequence)
                         announcement.sign(key)
                         val data = announcement.serialize()
+                        var sentInChunk = 0
                         for (target in targets) {
                             if (!isActive || cancelled.get()) return@launch
                             try {
@@ -264,6 +313,12 @@ class DiscoveryManager(
                                     loggedSendFailure = true
                                     Log.w("Discovery", "Unicast send to $target failed: ${e.message}")
                                 }
+                            }
+                            // breathe between chunks so a /21's 2046 datagrams go out as a steady
+                            // trickle rather than one burst the access point may police
+                            if (++sentInChunk >= UNICAST_SCAN_CHUNK) {
+                                sentInChunk = 0
+                                delay(UNICAST_SCAN_CHUNK_DELAY_MS)
                             }
                         }
                         sequence++
