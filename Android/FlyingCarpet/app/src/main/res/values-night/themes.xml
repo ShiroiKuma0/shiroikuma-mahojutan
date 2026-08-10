@@ -11,6 +11,11 @@
         <item name="colorSecondaryVariant">@color/teal_200</item>
         <item name="colorOnSecondary">@color/black</item>
         <item name="android:textColorPrimary">@color/white</item>
+        <!-- Same as the day theme: this file redeclares Theme.FlyingCarpet from the Material
+             parent rather than inheriting from values/themes.xml, so the window background has to
+             be set here too or dark mode keeps the stock one. -->
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
     </style>
     <style name="CustomButtonStyle" parent="Widget.MaterialComponents.Button.OutlinedButton">
         <item name="android:textColor">@drawable/button_selector</item>
