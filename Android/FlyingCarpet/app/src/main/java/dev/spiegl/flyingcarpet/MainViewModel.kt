@@ -286,6 +286,22 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // announcement HMAC from it. Same PSK either way: this is ordering only, not a wire
         // change.
         if (connectionMode == ConnectionMode.Hotspot) {
+            // Name the path rather than letting derivePsk()'s require() fire. Its message says
+            // the credentials "were lost", which gives nothing to act on and does not say which
+            // of startTransfer()'s three callers ran -- and on 白い熊's Huawei this fired with no
+            // "Joining", no "SSID:" and no hotspot line anywhere above it, i.e. from a caller the
+            // visible log did not account for (2026-08-10). These three states tell them apart.
+            if (password.isEmpty()) {
+                val how = when {
+                    hotspotRunning -> "after starting our own hotspot"
+                    peerIP != null -> "after joining the peer's hotspot"
+                    else -> "without ever hosting or joining a hotspot"
+                }
+                throw Exception(
+                    "Hotspot transfer started $how, but no password was ever exchanged over " +
+                        "Bluetooth. Cancel and start the transfer again."
+                )
+            }
             withContext(Dispatchers.IO) { psk = derivePsk(password) }
         }
         startTCP()
@@ -450,6 +466,21 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // LocalOnlyHotspot onStarted callback sets it), and every later replay is a no-op.
         if (hotspotRunning) {
             Log.i("Flying Carpet", "connectToPeer() replayed after hotspot start; ignoring")
+            return
+        }
+        // The joiner's half of that same guard, and the one that was missing. hotspotRunning
+        // catches the replay only for the side that *hosts*; a device joining the peer's hotspot
+        // never sets it, and in Hotspot mode the shared-network guard below does not apply
+        // either — so the post-bond OS write fell straight through to the two lines that clear
+        // ssid and password, wiping the credentials this device had just been given and was
+        // already using to associate. The join then finished, its network callback started the
+        // transfer, and the password was gone: "Hotspot transfer started after joining the
+        // peer's hotspot, but no password was ever exchanged" (白い熊, 2026-08-10, the Huawei
+        // joining AndroidShare_9975). exchangeComplete is the symmetric condition — gotPassword()
+        // sets it only for a non-empty password, precisely so that the empty-password retry this
+        // flag would otherwise suppress still gets through.
+        if (bluetooth.bluetoothReceiver.exchangeComplete) {
+            Log.i("Flying Carpet", "connectToPeer() replayed after the credential exchange; ignoring")
             return
         }
         // The same replay reaches the shared-network path, which has no hotspot flag to catch it.
