@@ -138,6 +138,8 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
+    <!-- hidden until a transfer is actually moving bytes, like the two rows above it: the fork
+         theme draws the bar with a border, so an idle one was an empty box sitting under the log -->
     <ProgressBar
         android:id="@+id/progressBar"
         style="@android:style/Widget.DeviceDefault.Light.ProgressBar.Horizontal"
@@ -145,6 +147,7 @@
         android:layout_height="24dp"
         android:layout_marginBottom="8dp"
         android:paddingHorizontal="20dp"
+        android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@+id/totalProgressBar"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.0"
