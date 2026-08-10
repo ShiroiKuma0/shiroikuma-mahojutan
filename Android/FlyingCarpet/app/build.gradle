@@ -19,7 +19,7 @@ plugins {
 // artifacts carry 10.0.3 and keep sharing one version string.
 def releaseVersionName = "10.0.3"   // = latest upstream `v*` tag
 def upstreamVersionCode = 24        // = upstream Android defaultConfig.versionCode
-def buildNumber = 48                // fork build; reset to 1 each upstream bump
+def buildNumber = 49                // fork build; reset to 1 each upstream bump
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
