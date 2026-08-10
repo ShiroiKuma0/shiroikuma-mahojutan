@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.TextViewCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 
@@ -480,12 +481,24 @@ object Appearance {
         bar.minimumHeight = height
     }
 
+    // An explicit size and XML autosizing are mutually exclusive: setTextSize() on a view with
+    // autoSizeTextType="uniform" throws IllegalStateException. The program title and the three
+    // send-row buttons autosize so they shrink to fit the Mate XT's folded panel instead of being
+    // clipped, which would have made every one of these call sites crash the moment 白い熊 set a
+    // size for one of them on the UI page. Switching autosizing off first is the right resolution
+    // rather than a workaround: an explicit size is 白い熊 saying exactly how big it should be, and
+    // that has to win over the layout fitting it automatically.
+    private fun setTextSizeSp(v: TextView, sp: Float) {
+        TextViewCompat.setAutoSizeTextTypeWithDefaults(v, TextViewCompat.AUTO_SIZE_TEXT_TYPE_NONE)
+        v.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+    }
+
     private fun applyText(activity: AppCompatActivity, s: Settings, id: Int, key: String, setText: Boolean) {
         val v = activity.findViewById<TextView>(id) ?: return
         if (setText) s.text("$key.text").ifEmpty { null }?.let { v.text = it }
         v.setTextColor(s.colorOrNull("$key.color") ?: Defaults.YELLOW)
         applyTypeface(s, v, key)
-        s.size("$key.size").let { if (it > 0f) v.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
+        s.size("$key.size").let { if (it > 0f) setTextSizeSp(v, it) }
     }
 
     private fun applyTypeface(s: Settings, v: TextView, key: String) {
@@ -558,14 +571,14 @@ object Appearance {
         b.strokeWidth = dpToPx(activity, s.sizeOrNull("start.strokeWidth") ?: Defaults.BORDER_WIDTH)
         b.cornerRadius = dpToPx(activity, s.sizeOrNull("start.cornerRadius") ?: Defaults.CORNER_RADIUS)
         applyTypeface(s, b, "start")
-        s.size("start.size").let { if (it > 0f) b.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
+        s.size("start.size").let { if (it > 0f) setTextSizeSp(b, it) }
     }
 
     private fun applyStartButton(activity: AppCompatActivity, s: Settings) {
         val start = activity.findViewById<MaterialButton>(R.id.startButton) ?: return
         start.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
         applyTypeface(s, start, "start")
-        s.size("start.size").let { if (it > 0f) start.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
+        s.size("start.size").let { if (it > 0f) setTextSizeSp(start, it) }
         // Pick the label matching the current mode selection (defaults match the XML).
         val modeGroup = activity.findViewById<MaterialButtonToggleGroup>(R.id.modeGroup)
         start.text = if (modeGroup?.checkedButtonId == R.id.receiveButton) {
@@ -577,7 +590,7 @@ object Appearance {
         activity.findViewById<MaterialButton>(R.id.sendDirButton)?.let { dir ->
             dir.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
             applyTypeface(s, dir, "start")
-            s.size("start.size").let { if (it > 0f) dir.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
+            s.size("start.size").let { if (it > 0f) setTextSizeSp(dir, it) }
             dir.text = s.textOr("start.dirText", activity.getString(R.string.directoryToSend))
         }
     }
