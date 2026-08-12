@@ -329,7 +329,7 @@ impl DiscoveryService {
 
         socket.bind(&bind_addr.into()).map_err(|e| {
             DiscoveryError::MulticastBindFailed(format!(
-                "{} (is another copy of Flying Carpet running?)",
+                "{} (is another copy of 白い熊 魔法絨毯 running?)",
                 e
             ))
         })?;

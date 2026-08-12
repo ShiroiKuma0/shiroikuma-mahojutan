@@ -13,6 +13,10 @@ import java.nio.ByteBuffer
 const val MAX_FILENAME_BYTES = 8192L
 const val MAX_CHUNK_BYTES = chunkSize.toLong() // max raw chunk (Apple/Android use 5MB)
 
+// How long the chunk loop waits for the next byte before giving up on the peer. See the matching
+// CHUNK_IDLE_TIMEOUT in core/src/receiving.rs for why 30s and why it is safe only here.
+const val CHUNK_IDLE_TIMEOUT_MS = 30_000
+
 // v10+: file contents are protected by the Noise transport (see Noise.kt), which wraps the
 // whole connection, so chunks arrive as raw bytes here — no application-level decryption.
 suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
@@ -60,16 +64,23 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
         ?: DocumentFile.fromTreeUri(getApplication(), receiveDir)
         ?: throw Exception("Could not get DocumentFile from receiveDir.")
 
-    // open output file. Overwriting keeps the document we already had -- truncating it -- so the
-    // file the user chose to replace is the one that changes, rather than a "(1) name" beside it.
-    val fileOutputStream = if (overwriteUri != null) {
-        getApplication<Application>().contentResolver.openOutputStream(overwriteUri, "wt")
-            ?: throw Exception("Could not open the existing file to replace it")
+    // The name this file will end up under. Overwriting keeps the name of the document the user
+    // chose to replace, so the file that changes is the one they picked rather than a "(1) name"
+    // beside it; otherwise the collision loop picks a free one.
+    val finalName = if (overwriteUri != null) {
+        DocumentFile.fromSingleUri(getApplication(), overwriteUri)?.name
+            ?: saveAs.split("/").last()
     } else {
-        // check if file being received already exists. if so, find new filename
-        val newFilename = findNewFilename(destinationFolder, saveAs)
-        getOutputStreamForFile(destinationFolder, newFilename)
+        findNewFilename(destinationFolder, saveAs).split("/").last()
     }
+    // A peer that has gone quiet for this long is not coming back -- it was cancelled over there.
+    // Guards only the chunk loop, where data arrives continuously; the conflict hash that can
+    // legitimately take minutes has already happened by now. Mirrors CHUNK_IDLE_TIMEOUT in
+    // core/src/receiving.rs, and is reset to 2s further down for the final confirmation read.
+    client.soTimeout = CHUNK_IDLE_TIMEOUT_MS
+
+    // Open "<finalName>.part", never the final name itself: see createPartFile().
+    val (partFile, fileOutputStream) = createPartFile(destinationFolder, finalName)
 
     // receive file
     progressDetailsMut.postValue(progressDetails(0, fileSize, 0.0))
@@ -79,6 +90,12 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
     }
     // Throttled: see the matching comment in Send.kt.
     var lastDetails = 0L
+    val rateWindow = RateWindow()
+    // The clock for the *rate*, as opposed to `start`, which has been running since this function
+    // was entered. The file-conflict exchange sits between them, and when the peer already has the
+    // file both ends hash it end to end first -- tens of seconds on a multi-gigabyte file with not
+    // a byte moving. Matches transfer_start in core/src/{sending,receiving}.rs.
+    val transferStart = System.currentTimeMillis()
     while (true) {
         val chunk = receiveChunk()
         if (chunk.isEmpty()) {
@@ -93,7 +110,9 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
         val now = System.currentTimeMillis()
         if (now - lastDetails >= 250) {
             lastDetails = now
-            progressDetailsMut.postValue(progressDetails(bytesRead, fileSize, (now - start) / 1000.0))
+            val (dataLine, clockLine) = progressDetailsParts(
+                bytesRead, fileSize, (now - transferStart) / 1000.0, rateWindow.sample(bytesRead))
+            progressDetailsMut.postValue("$dataLine\n$clockLine")
             totals?.snapshot(bytesRead, fileSize)?.let { (pct, text) ->
                 totalProgressBarMut.postValue(pct)
                 progressTotalDetailsMut.postValue(text)
@@ -108,6 +127,15 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
         progressTotalDetailsMut.postValue(text)
     }
 
+    // The file is whole. Close it so every byte is with the provider -- this stream was never
+    // closed before, which was survivable while the document was already under its real name and
+    // is not now -- then put it under that name. Both happen before the peer is told we finished,
+    // so "Transfer complete" can never appear while a .part is still lying there.
+    withContext(Dispatchers.IO) {
+        fileOutputStream.close()
+        promotePartFile(partFile, finalName, overwriteUri, destinationFolder)
+    }
+
     // tell sending end we're finished
     withContext(Dispatchers.IO) {
         this@receiveFile.outputStream.write(one)
@@ -117,11 +145,15 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
     progressBarMut.postValue(100)
     // outputText("Received $newFilename.")
     val end = System.currentTimeMillis()
-    val seconds = (end - start) / 1000.0
+    // Data phase, not the whole call: the wait for a file-conflict answer is a human wait and does
+    // not belong in a transfer time. Matches core/src/{sending,receiving}.rs.
+    val seconds = (end - transferStart) / 1000.0
     outputText("Receiving took ${formatTime(seconds)}")
     val megabits = 8 * (fileSize / 1_000_000.0)
-    val mbps = megabits / seconds
-    outputText("Speed: %.2fmbps".format(mbps))
+    val mbps = megabits / ((end - transferStart) / 1000.0)
+    // MB/s first; see the matching line in core/src/receiving.rs.
+    val mbytesPerSec = (fileSize / 1_000_000.0) / ((end - transferStart) / 1000.0)
+    outputText("Speed: %.2fMB/s (%.2fmbps)".format(mbytesPerSec, mbps))
 
     // wait for double confirmation
     // catch won't run in most cases because if peer closes hotspot, onLost in

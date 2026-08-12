@@ -922,7 +922,7 @@ fn check_for_firewall_rule(rule_name: &str, program_path: &str) -> Result<bool, 
                 continue;
             }
             if rule.Action() == Ok(NET_FW_ACTION_BLOCK) {
-                fc_error("a Windows Firewall rule is blocking Flying Carpet connections. Please delete or modify the rule to allow incoming connections on TCP port 3290.")?;
+                fc_error("a Windows Firewall rule is blocking 白い熊 魔法絨毯 connections. Please delete or modify the rule to allow incoming connections on TCP port 3290.")?;
             }
             if rule.Enabled() == Ok(VARIANT_TRUE) {
                 found = true;

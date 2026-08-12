@@ -387,24 +387,101 @@ pub fn format_eta(seconds: f64) -> String {
 }
 
 // The line shown above the progress bar: how far along, how fast, how much longer.
-pub fn progress_details(done: u64, total: u64, elapsed_secs: f64) -> String {
-    let rate = if elapsed_secs > 0.0 {
-        done as f64 / elapsed_secs
-    } else {
-        0.0
+// Two lines, not one: how much and how fast on the first, the clock on the second.
+//
+// They used to share a line, which wrapped anyway at the window's natural width -- and a wrapped
+// line breaks wherever the glyphs happen to land, splitting "4m 20s" across rows rather than
+// between the two ideas (白い熊, 2026-08-11). Breaking it ourselves puts the seam where it
+// belongs and costs nothing, since the space was already being used.
+//
+// The clock line also gained elapsed. Remaining alone answers "how much longer" but not "has this
+// been going long enough that something is wrong", which is the question actually being asked of
+// a transfer that has slowed down.
+// The rate shown is a *recent* rate, not the whole-transfer average.
+//
+// Averaging from the first byte means the figure carries every second of connection setup and the
+// "do you already have this file?" hash exchange for ever -- on a 4GB file the receiver's SHA-256
+// runs before a single byte moves, and the average never recovers from it. The desktop read
+// 13.61MB/s while the wire was carrying 18.4 (白い熊, 2026-08-11), and the gap only closes
+// asymptotically. A window over the last few seconds answers the question actually being asked,
+// which is "how fast is it going *now*", and it also makes a stall visible instead of averaging
+// it away. The ETA is derived from the same recent rate, so it reacts too.
+pub struct RateWindow {
+    samples: std::collections::VecDeque<(std::time::Instant, u64)>,
+}
+
+impl RateWindow {
+    const SPAN: Duration = Duration::from_secs(5);
+
+    pub fn new() -> Self {
+        RateWindow {
+            samples: std::collections::VecDeque::new(),
+        }
+    }
+
+    // Records progress and returns bytes/sec over the trailing window, or None until there is
+    // enough of a window to divide by.
+    pub fn sample(&mut self, done: u64) -> Option<f64> {
+        let now = std::time::Instant::now();
+        self.samples.push_back((now, done));
+        while let Some(&(t, _)) = self.samples.front() {
+            if now.duration_since(t) > Self::SPAN && self.samples.len() > 2 {
+                self.samples.pop_front();
+            } else {
+                break;
+            }
+        }
+        let (oldest_t, oldest_done) = *self.samples.front()?;
+        let span = now.duration_since(oldest_t).as_secs_f64();
+        if span < 0.25 {
+            return None;
+        }
+        Some(done.saturating_sub(oldest_done) as f64 / span)
+    }
+}
+
+impl Default for RateWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn progress_details_parts(done: u64, total: u64, elapsed_secs: f64) -> (String, String) {
+    progress_details_parts_at(done, total, elapsed_secs, None)
+}
+
+// `recent_rate` is bytes/sec over the last few seconds (see RateWindow). Falling back to the
+// cumulative average keeps the first moments of a transfer showing something sensible.
+pub fn progress_details_parts_at(
+    done: u64,
+    total: u64,
+    elapsed_secs: f64,
+    recent_rate: Option<f64>,
+) -> (String, String) {
+    let rate = match recent_rate {
+        Some(r) => r,
+        None if elapsed_secs > 0.0 => done as f64 / elapsed_secs,
+        None => 0.0,
     };
     let eta = if rate > 0.0 {
         format_eta((total.saturating_sub(done)) as f64 / rate)
     } else {
         "--".to_string()
     };
-    format!(
-        "{} / {}  ·  {}/s  ·  {} left",
-        make_size_readable(done),
-        make_size_readable(total),
-        make_size_readable(rate as u64),
-        eta,
+    (
+        format!(
+            "{} / {}  ·  {}/s",
+            make_size_readable(done),
+            make_size_readable(total),
+            make_size_readable(rate as u64),
+        ),
+        format!("{} elapsed  ·  {} left", format_eta(elapsed_secs), eta),
     )
+}
+
+pub fn progress_details(done: u64, total: u64, elapsed_secs: f64) -> String {
+    let (data, clock) = progress_details_parts(done, total, elapsed_secs);
+    format!("{}\n{}", data, clock)
 }
 
 pub fn is_compatible(peer_version: u64) -> bool {

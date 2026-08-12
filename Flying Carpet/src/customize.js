@@ -376,7 +376,7 @@ const DEFAULT_TEXTS = {
   'start.filesText': 'Files to send',
   'start.dirText': 'Directory to send',
   'start.folderText': 'Select directory',
-  'output.hint': 'Welcome to Flying Carpet!\nOnce other options are selected, drag and drop can be used to start a transfer.',
+  'output.hint': 'Welcome to 白い熊 魔法絨毯!\nOnce other options are selected, drag and drop can be used to start a transfer.',
 };
 
 // The version label defaults to the app's full version (fetched from Tauri); no "Version" prefix.
