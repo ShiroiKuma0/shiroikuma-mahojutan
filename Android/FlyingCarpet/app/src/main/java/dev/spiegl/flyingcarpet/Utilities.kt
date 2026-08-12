@@ -112,6 +112,9 @@ class Totals(val numFiles: Int, val totalBytes: Long?) {
     var fileIndex = 0      // 1-based
     var bytesDone = 0L     // completed files only
     val start = System.currentTimeMillis()
+    // Its own window, so this line quotes the same rate as the per-file line above it rather than
+    // a cumulative average sitting next to a recent one.
+    private val rateWindow = RateWindow()
 
     // Pair(percent, text) for the whole transfer, given how far into the current file we are.
     fun snapshot(currentDone: Long, currentSize: Long): Pair<Int, String> {
@@ -120,9 +123,11 @@ class Totals(val numFiles: Int, val totalBytes: Long?) {
         return if (total != null && total > 0) {
             val done = minOf(bytesDone + currentDone, total)
             val elapsed = (System.currentTimeMillis() - start) / 1000.0
+            // The file counter rides on the data line, so the split stays two rows, not three.
+            val (data, clock) = progressDetailsParts(done, total, elapsed, rateWindow.sample(done))
             Pair(
                 Math.round(done.toDouble() / total * 100).toInt(),
-                "$files  ·  ${progressDetails(done, total, elapsed)}",
+                "$files  ·  $data\n$clock",
             )
         } else {
             val within = if (currentSize > 0) currentDone.toDouble() / currentSize else 0.0
@@ -136,12 +141,50 @@ class Totals(val numFiles: Int, val totalBytes: Long?) {
     }
 }
 
-// The line shown above the progress bar: how far along, how fast, how much longer.
-fun progressDetails(done: Long, total: Long, elapsedSecs: Double): String {
-    val rate = if (elapsedSecs > 0) done / elapsedSecs else 0.0
+// Recent rate over a trailing window rather than the whole-transfer average. The reasoning is in
+// core/src/utils.rs's RateWindow; the short version is that averaging from the first byte drags
+// the connection setup and the conflict-hash of a multi-gigabyte file through the figure for ever,
+// so it reads low long after the transfer is up to speed, and a stall never shows at all.
+class RateWindow {
+    private val samples = ArrayDeque<Pair<Long, Long>>() // (millis, bytes done)
+
+    fun sample(done: Long): Double? {
+        val now = System.currentTimeMillis()
+        samples.addLast(Pair(now, done))
+        while (samples.size > 2 && now - samples.first().first > SPAN_MS) {
+            samples.removeFirst()
+        }
+        val (oldestAt, oldestDone) = samples.first()
+        val span = (now - oldestAt) / 1000.0
+        if (span < 0.25) return null
+        return (done - oldestDone).coerceAtLeast(0) / span
+    }
+
+    companion object {
+        const val SPAN_MS = 5_000L
+    }
+}
+
+// The two lines shown above the progress bar: how much and how fast on the first, the clock on
+// the second. Kept in step with the desktop's progress_details_parts() in core/src/utils.rs --
+// the reasoning for both the split and the added "elapsed" lives there.
+fun progressDetailsParts(
+    done: Long,
+    total: Long,
+    elapsedSecs: Double,
+    recentRate: Double? = null,
+): Pair<String, String> {
+    val rate = recentRate ?: if (elapsedSecs > 0) done / elapsedSecs else 0.0
     val eta = if (rate > 0) formatEta((total - done) / rate) else "--"
-    return "${makeSizeReadable(done)} / ${makeSizeReadable(total)}  ·  " +
-            "${makeSizeReadable(rate.toLong())}/s  ·  $eta left"
+    return Pair(
+        "${makeSizeReadable(done)} / ${makeSizeReadable(total)}  ·  ${makeSizeReadable(rate.toLong())}/s",
+        "${formatEta(elapsedSecs)} elapsed  ·  $eta left",
+    )
+}
+
+fun progressDetails(done: Long, total: Long, elapsedSecs: Double): String {
+    val (data, clock) = progressDetailsParts(done, total, elapsedSecs)
+    return "$data\n$clock"
 }
 
 fun formatTime(seconds: Double): String {

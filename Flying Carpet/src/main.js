@@ -80,7 +80,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // check for bluetooth support
   let error = await core.invoke('check_support');
   if (error != null) {
-    output(`Bluetooth initialization failed: ${error}. Disable the Bluetooth switch in Flying Carpet on the other device to run a transfer.`);
+    output(`Bluetooth initialization failed: ${error}. Disable the Bluetooth switch in 白い熊 魔法絨毯 on the other device to run a transfer.`);
     bluetoothSwitch.disabled = true;
     bluetoothSwitch.checked = false;
     usingBluetooth = false;
@@ -136,16 +136,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (transferState === 'cancelling') {
       return;
     }
-    // clear the readout: leaving the last file's figures on screen reads as if a transfer is
-    // still in flight (Android already clears its line on finish).
-    progressDetails.innerText = '';
-    progressTotalDetails.innerText = '';
-    progressDetails.style.display = 'none';
-    progressTotalDetails.style.display = 'none';
-    progressBar.style.display = 'none';
-    totalProgressBar.style.display = 'none';
-    progressBar.value = 0;
-    totalProgressBar.value = 0;
     enableUi();
   });
 
@@ -655,7 +645,7 @@ async function beginTransfer(filesSelected) {
     } else {
       output(`Password: ${password}`);
       // not awaited: the transfer below must start without waiting for the dialog to be dismissed
-      dialog.message(`Start the transfer on the other device and enter this password when prompted:\n\n${password}`, { title: 'Flying Carpet' });
+      dialog.message(`Start the transfer on the other device and enter this password when prompted:\n\n${password}`, { title: '白い熊 魔法絨毯' });
     }
   }
 
@@ -856,6 +846,22 @@ let needPassword = async () => {
 
 let enableUi = async () => {
   transferState = 'idle';
+  // Clear the readout here rather than in the enableUi *event* handler, which is where it used
+  // to live -- behind that handler's `transferState === 'cancelling'` early return. The guard is
+  // right (it stops a stray click starting a second transfer while the cancel unwinds), but it
+  // also skipped the clearing, so a cancelled transfer kept its progress bar and its
+  // "505.00MB / 4.05GB · 13.61MB/s · 4m 20s left" on screen for ever, still counting down a
+  // transfer that had already stopped (白い熊, 2026-08-11). Every path that ends a transfer ends
+  // here -- the event handler when it completes, cancelTransfer()'s finally when it is cancelled
+  // -- so this is the one place that catches both.
+  progressDetails.innerText = '';
+  progressTotalDetails.innerText = '';
+  progressDetails.style.display = 'none';
+  progressTotalDetails.style.display = 'none';
+  progressBar.style.display = 'none';
+  totalProgressBar.style.display = 'none';
+  progressBar.value = 0;
+  totalProgressBar.value = 0;
   // show start button, and the directory button with it if we are sending
   startButton.style.display = '';
   document.getElementById('sendDirButton').style.display = selectedMode === 'send' ? '' : 'none';
@@ -922,25 +928,30 @@ window.modeChange = modeChange;
 window.peerChange = peerChange;
 window.connectionModeChange = connectionModeChange;
 
-const aboutMessage = `https://flyingcarpet.spiegl.dev
+const aboutMessage = `白い熊 魔法絨毯
+https://github.com/ShiroiKuma0/shiroikuma-mahojutan
+
+A personal fork of Flying Carpet, whose original author and copyright follow.
+
+https://flyingcarpet.spiegl.dev
 Version: 10.0.1
 theron@spiegl.dev
 Copyright (c) 2026, Theron Spiegl
 All rights reserved.
 
-Flying Carpet transfers files between two Android, iOS, Linux, macOS, and Windows devices over ad hoc WiFi. In Hotspot mode, no access point or shared network is required, just two WiFi cards in close range. Hotspot mode does not work from one Apple device (macOS or iOS) to another, because Apple no longer allows hotspots to be started programmatically: use Shared Network mode for those transfers.
+白い熊 魔法絨毯 transfers files between two Android, iOS, Linux, macOS, and Windows devices over ad hoc WiFi. In Hotspot mode, no access point or shared network is required, just two WiFi cards in close range. Hotspot mode does not work from one Apple device (macOS or iOS) to another, because Apple no longer allows hotspots to be started programmatically: use Shared Network mode for those transfers.
 
 In Shared Network mode, both devices must be connected to the same network. No hotspot is created: the devices find each other on the network automatically. The receiving device generates the password either way, and the "Use Bluetooth" switch decides how the sending device gets it: with the switch off the receiver displays the password and its QR code, to be typed or scanned on the sender; with the switch on it is handed over Bluetooth and there is nothing to type or scan.
 
 INSTRUCTIONS
 
-Turn Bluetooth on or off on both devices. If one side fails to initialize Bluetooth or has it turned off, the other side must disable the "Use Bluetooth" switch in Flying Carpet.
+Turn Bluetooth on or off on both devices. If one side fails to initialize Bluetooth or has it turned off, the other side must disable the "Use Bluetooth" switch in 白い熊 魔法絨毯.
 
 Select Sending on one device and Receiving on the other. If not using Bluetooth, select the operating system of the other device. Click the "Start Transfer" button on each device. On the sending device, select the files or folder to send. On the receiving device, select the folder in which to receive files. (To send a folder, check "Send Folder" before clicking "Start Transfer", or drag the folder onto the window. A folder you send is recreated inside the destination folder on the receiving device, with its contents inside.)
 
 If using Bluetooth, confirm the 6-digit PIN on each side. The WiFi connection will be configured automatically. If not using Bluetooth, you will need to scan a QR code or type in a password.
 
-If prompted to join a WiFi network or modify WiFi settings, say Allow. On Windows you may have to grant permission to add a firewall rule. On macOS you may have to grant location permissions, which Apple requires to scan for WiFi networks. Flying Carpet does not read or collect your location, nor any other data.
+If prompted to join a WiFi network or modify WiFi settings, say Allow. On Windows you may have to grant permission to add a firewall rule. On macOS you may have to grant location permissions, which Apple requires to scan for WiFi networks. 白い熊 魔法絨毯 does not read or collect your location, nor any other data.
 
 TROUBLESHOOTING
 
@@ -950,6 +961,6 @@ If using Bluetooth fails, try manually unpairing the devices from one another an
 
 If sending from macOS to Linux, you must first initiate pairing from the macOS System Settings > Bluetooth menu. Otherwise, disable Bluetooth on both sides and enter the password manually when prompted.
 
-Flying Carpet may make multiple attempts to join the other device's hotspot.
+白い熊 魔法絨毯 may make multiple attempts to join the other device's hotspot.
 
 Licensed under the GPL3: https://www.gnu.org/licenses/gpl-3.0.html#license-text`

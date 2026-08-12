@@ -451,8 +451,8 @@ impl BluetoothCentral {
             // Don't unpair here: a missing or partial service list can be transient (the
             // peer's GATT database changes between transfers, and Windows can report it
             // mid-refresh), so the caller retries enumeration before deciding to unpair.
-            println!("Flying Carpet service not found in peer's service list");
-            fc_error("Flying Carpet service not found in peer's service list")?;
+            println!("白い熊 魔法絨毯 service not found in peer's service list");
+            fc_error("白い熊 魔法絨毯 service not found in peer's service list")?;
         }
         // we had exited this function without setting OS_CHARACTERISTIC_UUID and panicked later.
         // there was a problem where if we hit pair on iOS first, windows sees flying carpet service. but if windows pairs first, we don't: solved by adding service to peripheralManager when it's powered on on iOS?

@@ -10,7 +10,17 @@ pub struct WindowsHotspot {
 
 pub fn is_hosting(peer: &Peer, mode: &Mode) -> bool {
     match peer {
-        Peer::Android | Peer::IOS | Peer::MacOS => true,
+        // Android hosts for us, not the other way round (fork, 白い熊 2026-08-11). Our AP is a
+        // NetworkManager profile and NM 1.46 has no channel-width setting, so it comes up 20 MHz
+        // whatever band we ask for -- measured at 2437 MHz and, after the band fix, again at
+        // 5745 MHz, both 20 MHz. The phone's Wi-Fi Direct group gets a wide channel instead, and
+        // width is the whole difference: 25.8 MB/s peak over the 20 MHz hotspot against 58.8 over
+        // a 160 MHz link between the same two devices.
+        //
+        // The matching change is isHosting() in Android's MainViewModel.kt, which adds Peer.Linux.
+        // Both sides must move together or they will both sit waiting to join.
+        Peer::Android => false,
+        Peer::IOS | Peer::MacOS => true,
         Peer::Windows => false,
         Peer::Linux => match mode {
             Mode::Send(_) => false,
@@ -59,7 +69,7 @@ pub async fn connect_to_peer<T: UI>(
 
 // async, and using the async command runner, so that a cancel lands between (or during) the
 // nmcli calls instead of after the whole sequence: `con up` is the slow one
-async fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Result<(), FCError> {
+async fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Result<String, FCError> {
     let nmcli = "nmcli";
     let user_str = &format!("user:{}", get_username());
     let commands = vec![
@@ -101,7 +111,6 @@ async fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Result<()
         // use WPA2, not WPA
         vec!["con", "modify", ssid, "wifi-sec.proto", "rsn"],
         vec!["con", "modify", ssid, "wifi-sec.psk", password],
-        vec!["con", "up", ssid],
     ];
     for command in commands {
         let res = run_command_async(nmcli, Some(command)).await?;
@@ -111,14 +120,64 @@ async fn start_hotspot(ssid: &str, password: &str, interface: &str) -> Result<()
         }
         // println!("output: {}", String::from_utf8_lossy(&res.stdout));
     }
-    Ok(())
+
+    // Ask for 5 GHz, and only then settle for what we used to get.
+    //
+    // A profile that names no band is a 2.4 GHz profile: NetworkManager's AP default picks a bg
+    // channel every time, and every hotspot this app has ever raised on Linux came up there
+    // (journal, 白い熊's machine 2026-08-11: `Config: added 'frequency' value '2437'` -- channel 6).
+    // That is the desktop twin of the LocalOnlyHotspot ceiling the Android side escaped with its
+    // Wi-Fi Direct group, and it costs twice over: 2.4 GHz is the crowded band, and it is the band
+    // the BLE credential exchange is already sitting in, so the radio contends with our own
+    // Bluetooth.
+    //
+    // Channel 149 is the pick because it is the one 5 GHz range that is free of both encumbrances
+    // on this card (`iw reg get`, self-managed phy, country DE): 5170-5250 carries IR-CONCURRENT
+    // and NO-IR, so an AP may not beacon there once we have dropped the network we were joined to,
+    // and everything from 5250 to 5710 is DFS. 5735-5755 has neither flag.
+    //
+    // One attempt, then the fallback. A channel the regulatory domain refuses does not fail fast --
+    // NetworkManager sits on it for the full supplicant timeout, measured at 25.6s -- so a longer
+    // ladder of candidates would spend minutes in the dark before landing where it started.
+    const FIVE_GHZ_CHANNEL: &str = "149";
+    let radios: [(&str, &str, &str); 2] = [
+        ("a", FIVE_GHZ_CHANNEL, "5 GHz"),
+        // Clearing both puts the profile back exactly as it was before this block existed.
+        ("", "0", "2.4 GHz"),
+    ];
+    let mut last_error = String::new();
+    for (band, channel, label) in radios {
+        let res = run_command_async(
+            nmcli,
+            Some(vec![
+                "con",
+                "modify",
+                ssid,
+                "802-11-wireless.band",
+                band,
+                "802-11-wireless.channel",
+                channel,
+            ]),
+        )
+        .await?;
+        if !res.status.success() {
+            last_error = String::from_utf8_lossy(&res.stderr).to_string();
+            continue;
+        }
+        let res = run_command_async(nmcli, Some(vec!["con", "up", ssid])).await?;
+        if res.status.success() {
+            return Ok(label.to_string());
+        }
+        last_error = String::from_utf8_lossy(&res.stderr).to_string();
+    }
+    fc_error(&format!("Could not start hotspot: {}", last_error))?;
+    unreachable!("fc_error always returns Err")
 }
 
-// Deletes leftover flyingCarpet_* NetworkManager connections from previous runs that
-// crashed or were killed before stop_hotspot() could run (#51). Both hosting and
-// joining create a connection named after the SSID, which is always "flyingCarpet_"
-// plus 4 hex characters, so anything with that prefix is ours. Returns the names of
-// the connections deleted.
+// Deletes leftover NetworkManager connections from previous runs that crashed or were killed
+// before stop_hotspot() could run (#51). Both hosting and joining create a connection named after
+// the SSID: "flyingCarpet_" plus 4 hex characters when a desktop hosts, and "DIRECT-fc-" plus the
+// password when the Android peer does. Returns the names of the connections deleted.
 pub fn cleanup_stale_connections() -> Result<Vec<String>, FCError> {
     let output = run_command(
         "nmcli",
@@ -138,7 +197,14 @@ pub fn cleanup_stale_connections() -> Result<Vec<String>, FCError> {
         let Some((name, connection_type)) = line.rsplit_once(':') else {
             continue;
         };
-        if connection_type == "802-11-wireless" && name.starts_with("flyingCarpet_") {
+        // "DIRECT-fc-" as well as "flyingCarpet_": since Android hosts for us (is_hosting), a
+        // joined profile is named after the peer's Wi-Fi Direct group, and one of those left by a
+        // killed run is exactly as stranding as our own. The "fc-" keeps it to groups this app
+        // created -- a plain "DIRECT-" prefix would match every Wi-Fi Direct network on the
+        // machine, including ones we know nothing about.
+        if connection_type == "802-11-wireless"
+            && (name.starts_with("flyingCarpet_") || name.starts_with("DIRECT-fc-"))
+        {
             let delete = run_command("nmcli", Some(vec!["connection", "delete", name]))?;
             if delete.status.success() {
                 deleted.push(name.to_string());
@@ -277,14 +343,75 @@ fn default_route_interface() -> Option<String> {
     tokens.get(dev_idx + 1).map(|s| s.to_string())
 }
 
+// Where the peer is, once we have joined its network. Three sources, weakest assumption last.
+//
+// This used to be `route -n | grep <iface> | grep UG`, which has two faults. `route` is net-tools,
+// deprecated and no longer installed by default on modern distributions -- it is absent on 白い熊's
+// Tuxedo OS -- so the pipeline printed "route: not found" to stderr, produced nothing on stdout,
+// and this returned an empty string. connect_to_peer treats empty as "not ready yet" and polls, so
+// the joining device sat on "Waiting for the network to hand out an address..." for ever while
+// NetworkManager had in fact handed it one seconds earlier (白い熊, 2026-08-11: address
+// 192.168.49.178 at 22:28:56, app still waiting at 22:30:27 when it was cancelled).
+//
+// It stayed hidden because this side never joined: the desktop hosted for every peer that mattered
+// until is_hosting() changed. Anyone joining a Windows host on a net-tools-less machine had the
+// same bug waiting for them.
+//
+// The second fault is the UG flag itself. A Wi-Fi Direct group owner is not a router -- it offers
+// an address and, having no internet to hand out, need not offer a default route at all. So even
+// with net-tools present there may be no UG line to find, and the DHCP server's own address is
+// what we actually want: for a group owner that is the peer.
 fn find_gateway(interface: &str) -> Result<String, FCError> {
-    let route_command = format!(
-        "route -n | grep {} | grep UG | awk '{{print $2}}'",
-        interface
-    ); // TODO: not the best but it will do? use regex in rust?
-    let output = run_command("sh", Some(vec!["-c", &route_command]))?;
+    // 1. The default route, via iproute2 (present everywhere net-tools is not).
+    let output = run_command(
+        "ip",
+        Some(vec!["-4", "route", "show", "default", "dev", interface]),
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.trim().to_string())
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        while let Some(token) = parts.next() {
+            if token == "via" {
+                if let Some(address) = parts.next() {
+                    return Ok(address.to_string());
+                }
+            }
+        }
+    }
+
+    // 2. NetworkManager's view of the lease, which knows a gateway even when no default route was
+    //    installed (another connection may already own the default).
+    if let Ok(output) = run_command(
+        "nmcli",
+        Some(vec!["-g", "IP4.GATEWAY", "device", "show", interface]),
+    ) {
+        let gateway = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !gateway.is_empty() && gateway != "--" {
+            return Ok(gateway);
+        }
+    }
+
+    // 3. The DHCP server that answered us. On a Wi-Fi Direct group that is the group owner, i.e.
+    //    the peer -- the one case where there is no gateway to find because there is no gateway.
+    if let Ok(output) = run_command(
+        "nmcli",
+        Some(vec!["-g", "DHCP4.OPTION", "device", "show", interface]),
+    ) {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for option in text.split(['|', '\n']) {
+            if let Some((key, value)) = option.split_once('=') {
+                if key.trim() == "dhcp_server_identifier" {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        return Ok(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Nothing yet: the caller polls, so this means "ask again in a moment".
+    Ok(String::new())
 }
 
 /// Get local IPv4 address on the specified interface (works for WiFi or wired)
