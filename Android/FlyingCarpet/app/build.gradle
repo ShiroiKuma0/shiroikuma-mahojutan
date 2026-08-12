@@ -14,16 +14,22 @@ plugins {
 // three digits — "+026", never "+26" — so builds sort correctly in ~/tmp, in the
 // phone's file manager and in the release list, where "+10" would otherwise land
 // before "+3". The versionCode keeps the plain integer; padding is text only.
-// NB at v10.0.3 the two upstream sources disagree: the release tag says 10.0.3 (Android was
-// bumped last) while the desktop crates still say 10.0.1. The tag is the release, so both our
-// artifacts carry 10.0.3 and keep sharing one version string.
-def releaseVersionName = "10.0.3"   // = latest upstream `v*` tag
+// NB since v10.0.3 the two upstream sources disagree: the release tag says 10.0.4 (only the
+// Apple apps were bumped for it) while the desktop crates still say 10.0.1 and Android's own
+// versionName says 10.0.3. The tag is the release, so both our artifacts carry 10.0.4 and keep
+// sharing one version string.
+// NB2 the buildNumber reset was SKIPPED for the 10.0.4 rebase (白い熊, 2026-08-12): upstream's
+// Android versionCode did NOT climb for that release — it stayed at 24 — so the reset the skill
+// prescribes would have produced versionCode 240001 against the installed 240058, i.e. an
+// uninstallable downgrade. The reset is only safe when the upstream code climbs; when it stands
+// still, the counter continues instead. upstreamVersionCode always mirrors upstream verbatim.
+def releaseVersionName = "10.0.4"   // = latest upstream `v*` tag
 def upstreamVersionCode = 24        // = upstream Android defaultConfig.versionCode
-def buildNumber = 58                // fork build; reset to 1 each upstream bump
+def buildNumber = 60                // fork build; reset to 1 each upstream bump (see NB2)
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
-def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240001
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240060
 
 // Release signing: read from a gitignored keystore.properties at the Gradle
 // project root, falling back to SIGNING_* env vars. Without either, the release
