@@ -27,7 +27,7 @@ class About : DialogFragment() {
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         return activity?.let {
             val builder = AlertDialog.Builder(it)
-                .setTitle("About Flying Carpet")
+                .setTitle("About 白い熊 魔法絨毯")
                 .setMessage(AboutMessage.trimIndent())
 //                .setPositiveButton("OK") {_, _ -> }
             val dialog = builder.create()
@@ -58,24 +58,29 @@ class About : DialogFragment() {
 }
 
 const val AboutMessage = """
+    白い熊 魔法絨毯
+    https://github.com/ShiroiKuma0/shiroikuma-mahojutan
+
+    A personal fork of Flying Carpet, whose original author and copyright follow.
+
     https://flyingcarpet.spiegl.dev
     Version 10.0.3
     theron@spiegl.dev
     Copyright 2026, Theron Spiegl, all rights reserved.
 
-    Flying Carpet transfers files between two Android, iOS, Linux, macOS, and Windows devices over ad hoc WiFi. In Hotspot mode, no access point or shared network is required, just two WiFi cards in close range. Hotspot mode does not work from one Apple device (macOS or iOS) to another, because Apple no longer allows hotspots to be started programmatically: use Shared Network mode for those transfers.
+    白い熊 魔法絨毯 transfers files between two Android, iOS, Linux, macOS, and Windows devices over ad hoc WiFi. In Hotspot mode, no access point or shared network is required, just two WiFi cards in close range. Hotspot mode does not work from one Apple device (macOS or iOS) to another, because Apple no longer allows hotspots to be started programmatically: use Shared Network mode for those transfers.
 
     In Shared Network mode, both devices must be connected to the same network. No hotspot is created: the devices find each other on the network automatically. The receiving device generates the password either way, and the "Use Bluetooth" switch decides how the sending device gets it: with the switch off the receiver displays the password and its QR code, to be scanned or typed on the sending device; with the switch on it is handed over Bluetooth and there is nothing to scan or type.
 
     INSTRUCTIONS
 
-    Turn Bluetooth on or off on both devices. If one side fails to initialize Bluetooth or has it turned off, the other side must disable the "Use Bluetooth" switch in Flying Carpet.
+    Turn Bluetooth on or off on both devices. If one side fails to initialize Bluetooth or has it turned off, the other side must disable the "Use Bluetooth" switch in 白い熊 魔法絨毯.
     
     Select Sending on one device and Receiving on the other. If not using Bluetooth, select the operating system of the other device. Click the "Start Transfer" button on each device. On the sending device, select the files or folder to send. On the receiving device, select the folder in which to receive files. (To send a folder, check "Send Folder" before clicking "Start Transfer". A folder you send is recreated inside the destination folder on the receiving device, with its contents inside.)
     
     If using Bluetooth, confirm the 6-digit PIN on each side. The WiFi connection will be configured automatically. If not using Bluetooth, you will need to scan a QR code or type in a password.
     
-    When prompted to join a WiFi network or modify WiFi settings, say Allow. On Windows you may have to grant permission to add a firewall rule. On macOS you may have to grant location permissions, which Apple requires to scan for WiFi networks. Flying Carpet does not read or collect your location, nor any other data.
+    When prompted to join a WiFi network or modify WiFi settings, say Allow. On Windows you may have to grant permission to add a firewall rule. On macOS you may have to grant location permissions, which Apple requires to scan for WiFi networks. 白い熊 魔法絨毯 does not read or collect your location, nor any other data.
     
     TROUBLESHOOTING
 
@@ -85,7 +90,7 @@ const val AboutMessage = """
     
     If sending from macOS to Linux, disable Bluetooth on both sides.
 
-    Flying Carpet may make multiple attempts to join the other device's hotspot.
+    白い熊 魔法絨毯 may make multiple attempts to join the other device's hotspot.
     
     Licensed under the GPL3: https://www.gnu.org/licenses/gpl-3.0.html#license-text`
 """

@@ -77,7 +77,7 @@ pub async fn find_characteristics<T: UI>(
     let already_connected = device.is_connected().await.unwrap_or(false);
     if uuids.contains(&Uuid::parse_str(SERVICE_UUID).unwrap()) || already_connected {
         println!("    Device provides our service!");
-        ui.output("Peer is running Flying Carpet, connecting over Bluetooth...");
+        ui.output("Peer is running 白い熊 魔法絨毯, connecting over Bluetooth...");
         let mut characteristics = HashMap::new();
 
         sleep(Duration::from_secs(2)).await;
@@ -254,7 +254,7 @@ pub async fn find_characteristics<T: UI>(
                 }
                 if uuid == Uuid::parse_str(SERVICE_UUID).unwrap() {
                     println!("    Found our service!");
-                    ui.output("Found Flying Carpet's Bluetooth service on peer");
+                    ui.output("Found 白い熊 魔法絨毯's Bluetooth service on peer");
                     for char in service.characteristics().await? {
                         let uuid = char.uuid().await?;
                         println!("    Characteristic UUID: {}", &uuid);
@@ -297,7 +297,7 @@ pub async fn find_characteristics<T: UI>(
             if retries == 0 {
                 let e = bluer::Error {
                     kind: bluer::ErrorKind::ServicesUnresolved,
-                    message: "Did not read all Flying Carpet characteristics from peer."
+                    message: "Did not read all 白い熊 魔法絨毯 characteristics from peer."
                         .to_string(),
                 };
                 return Err(e);

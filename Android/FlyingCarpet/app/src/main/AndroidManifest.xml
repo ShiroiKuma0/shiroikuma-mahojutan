@@ -46,6 +46,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <!-- Keeps the CPU up for the length of a transfer, alongside the WifiLock that keeps the
+         radio out of power-save. See acquireTransferLocks() in MainViewModel.kt. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- required for the MulticastLock used by shared network discovery -->
