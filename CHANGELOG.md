@@ -7,6 +7,98 @@ increases with every delivered build. The Android and desktop artifacts share on
 same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
 artifacts as a pair.
 
+## 10.0.3+058 — 2026-08-12
+
+Built on upstream release 10.0.3. Nine delivered builds (`+050`–`+058`), measured throughout
+against both phones over hotspot and shared network.
+
+### The hotspot is now the phone's, and it is four times wider
+
+- **Android hosts the hotspot when the peer is Linux.** Its Wi-Fi Direct group negotiates an
+  **80 MHz** channel; NetworkManager exposes `band` and `channel` but nothing for width, so the
+  desktop's access point comes up **20 MHz** on any band — measured at 2437 MHz and again at
+  5745 MHz, both 20. Measured result: **47.5 MB/s peak against 20.3**. Both sides' `is_hosting`
+  move together by necessity; split them and both ends would sit waiting to join.
+- **The desktop's own hotspot asks for 5 GHz** (channel 149) with a single fallback to the old
+  behaviour, for the cases where it still hosts. One attempt only — a channel the regulatory
+  domain refuses takes 25.6 s to fail, so a ladder of candidates would spend minutes in the dark.
+- **A joiner uses the SSID the peer sent** instead of deriving it from the password. Every hotspot
+  name is normally derived — `flyingCarpet_` plus two bytes of the key — which works only while
+  every host names its own access point that way. A Wi-Fi Direct group owner's network name *must*
+  begin with `DIRECT-`, so the desktop computed a network that did not exist and NetworkManager
+  correctly reported it missing.
+- **`find_gateway()` no longer depends on net-tools.** It shelled out to `route`, which modern
+  distributions no longer install, so it returned an empty string and the joining device waited
+  for ever for an address NetworkManager had handed it seconds earlier. It also required a default
+  route, which a group owner — having no internet to share — need not offer at all. Now: iproute2,
+  then NetworkManager's gateway, then the DHCP server itself, which for a group owner *is* the peer.
+- **The system network picker opens only once the peer's hotspot is on the air.** It used to be
+  asked to pick a network that did not exist yet, sit there, and offer to keep trying — which
+  always worked, which was the tell.
+- Teardown and the stale-profile sweep both learned about `DIRECT-fc-*` connections, which a
+  joining desktop now creates and would otherwise leak one per transfer.
+
+### Sending from the phone over a hotspot works again
+
+- **The BLE role, not send/receive, decides who reads the credentials.** This fork made Linux
+  advertise first in both directions so it never has to connect out, which makes a *sending* phone
+  the central against a desktop peer. Both `connectToPeer()`'s joining branch and
+  `hotspotCredentialsReady()` still assumed sender ⇒ peripheral, so a sending phone took the
+  do-nothing branch meant for the other role and never issued the SSID read: the transfer sat on
+  "Setting up WiFi for the transfer" indefinitely while the desktop waited to be read. Receiving
+  worked only because it happened to fall in the other branch.
+
+### Transfers hold the radio, and notice when the other end disappears
+
+- **A WifiLock (`FULL_LOW_LATENCY`) and a wake lock for the length of a transfer.** Without one the
+  WiFi driver power-saves and runs background scans mid-transfer, regardless of the screen being on
+  and the app in front — and only the *receiving* side is idle enough for it to happen. The desktop
+  peer measured round-trip time swinging from 4.7 ms to 541 ms and the sender's pacing collapsing to
+  19.5 mbps. With the lock: 14–41 ms, 191–383 mbps, and that direction roughly doubled.
+- **The receive buffer is no longer pinned.** Setting `SO_RCVBUF` by hand switches off receive-window
+  autotuning for the life of the socket, freezing the window at 1023 KB — ample at a 20 ms round
+  trip, a hard ceiling once latency climbs. The send buffer stays: it is write-ahead rather than a
+  window, and removing it halved sending by making storage reads and network writes serialise.
+- **TCP keepalive and a 30-second idle timeout on the chunk loop.** Cancelling on the sending device
+  drops its WiFi as part of teardown, so the FIN often never arrives and the connection is left
+  half-open — the receiving end used to sit blocked in `read` for ever, progress bar frozen, with
+  Cancel the only way out. The timeout guards only the chunk loop, where data arrives continuously;
+  the waits that legitimately take minutes happen before it.
+- **Files are received into `<name>.part` and renamed once whole.** A cancelled or dropped transfer
+  used to leave a truncated file wearing the real filename, indistinguishable from a complete one
+  and quietly wrong months later. On Android this also fixed an output stream that was never closed.
+
+### The readout says something true
+
+- **Two lines instead of one** — data on the first, clock on the second. They shared a line that
+  wrapped anyway, and a wrapped line breaks wherever the glyphs land rather than between the two
+  ideas in it.
+- **Elapsed as well as remaining.** Remaining answers "how much longer"; elapsed answers "has this
+  been going long enough that something is wrong", which is the question a slow transfer provokes.
+- **Speed is a rolling five-second rate, quoted MB/s first**, with megabits in brackets. The old
+  figure averaged from the first byte, so it dragged connection setup and the file-conflict hash of
+  a multi-gigabyte file through itself for ever — a 3.5 GB transfer reported 214 mbps while the wire
+  was sustaining about 280 — and a stall never showed at all.
+- **Every clock measures the data phase.** Waiting on a file-conflict dialogue is a *human* wait,
+  seconds or minutes while somebody types a new filename, and it no longer counts as transfer time.
+- **The desktop clears its progress readout when a transfer is cancelled.** The clearing sat behind
+  the cancel guard in the `enableUi` handler and simply never ran, leaving a bar and a countdown on
+  screen for a transfer that had already stopped.
+- **The VPN warning asks whether *our* traffic is tunnelled**, rather than whether any VPN exists
+  anywhere on the device. An app on the VPN's excluded list was being told, on every single
+  transfer, to turn off something already irrelevant to it.
+
+### Branding
+
+- Every user-visible string names the fork: the welcome line, the About dialogs and their titles,
+  the Bluetooth fallback message, the password prompt, the Bluetooth discovery messages, and the
+  version-mismatch error — which also pointed people at upstream's download page for an update they
+  would never receive, and now points at this repository.
+- Deliberately untouched: `PSK_SALT`, `DISCOVERY_INFO`, the `flyingCarpet_` SSID prefix and the code
+  namespace. Those are wire constants and packaging identity shared with the stock and Apple builds;
+  changing either salt would silently break interoperability with every other implementation.
+  Upstream's copyright stays in About, beneath a line identifying the fork.
+
 ## 10.0.3+049 — 2026-08-10
 
 - **Sharing a file to the app no longer starts the transfer on the spot.** The share sheet hands over
