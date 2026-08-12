@@ -2,10 +2,55 @@
 
 All notable changes this fork makes on top of stock
 [Flying Carpet](https://github.com/spieglt/FlyingCarpet). Versions are
-`<upstream release>+<fork build number>`; the build number resets on each upstream rebase and
-increases with every delivered build. The Android and desktop artifacts share one counter — the
-same code always builds as the same `+N` on both, and since `+22` every delivered `+N` ships both
-artifacts as a pair.
+`<upstream release>+<fork build number>`; the build number increases with every delivered build and
+normally resets on each upstream rebase — except where a reset would build a lower Android
+`versionCode` than the one already installed (see `10.0.4+060`). The Android and desktop artifacts
+share one counter — the same code always builds as the same `+N` on both, and since `+22` every
+delivered `+N` ships both artifacts as a pair.
+
+## 10.0.4+060 — 2026-08-12
+
+Built on upstream release 10.0.4. Two delivered builds (`+059`, `+060`).
+
+### The log says which device is being waited on
+
+- **Choosing what to transfer now prints what to do on the other device.** Picking the files to send,
+  or the directory to receive into, arms this device and then goes quiet until the other one is armed
+  too — indistinguishable from a hang unless you already know the other end is what is holding things
+  up. A send now prints *"Files selected. Now on the OTHER device: choose Receive and pick the
+  destination folder."*, a receive the converse, and both follow it with *"This device will wait until
+  the other device is ready."*
+- It is one insertion per app rather than one per picker, placed where every selection route converges:
+  `beginTransfer()` in the desktop's `main.js`, after the selection block and before the password
+  handling, and `beginTransferWithSelection()` on Android. That covers the file picker, the folder
+  picker, drag-and-drop, the share sheet and the one-tap *Receive in …* button alike. On Android the
+  lines sit *below* the local-network and Location guards — those unwind the transfer and return, so a
+  line above them would promise a wait that never starts.
+- The prompts name the **action** ("choose Receive") rather than quoting a button label: the peer is
+  frequently a different platform with its own wording, and this fork lets those labels be renamed
+  from the *白い熊 魔法絨毯 UI* page, so a quoted label could contradict both screens at once.
+
+### From upstream 10.0.4
+
+- **A hotspot join that failed by a few milliseconds now retries.** `joinHotspot()` starts the
+  transfer from `onLinkPropertiesChanged`, but the network's IPv4 route is not necessarily in the
+  kernel the instant those properties arrive, and `bindProcessToNetwork` is not guaranteed to have
+  taken effect either. The connect got exactly one attempt, so a little skew ended the transfer with
+  `ENETUNREACH` — a local "no route" error, meaning nothing ever reached the host, which sat waiting
+  for a connection it was never sent. The shared-network path already retried for 30 seconds; both now
+  go through the same `connectToPeerWithRetry()`. Upstream's own fix, arriving with this rebase.
+
+### Packaging
+
+- **The build counter did not reset for this upstream bump.** It normally restarts at `+001` on each
+  rebase, which stays monotonic only because Android's `versionCode` is
+  `<upstream's versionCode> × 10000 + <build number>` and upstream's number climbs alongside the
+  release. `10.0.4` left it at `24` — the tag bumps only the Apple apps — so a reset would have built
+  `versionCode 240001` against the `240058` already on the phone, and Android would have refused the
+  APK as a downgrade. The counter carried on from `+058` instead, and `upstreamVersionCode` still
+  mirrors upstream verbatim.
+- The desktop crates remain at `10.0.1` upstream while the tag reads `10.0.4`; as ever the **tag** is
+  taken as the release, so both artifacts carry `10.0.4` and keep sharing one version string.
 
 ## 10.0.3+058 — 2026-08-12
 

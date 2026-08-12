@@ -24,7 +24,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.3+058`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+060`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -101,6 +101,12 @@ every clock measures the data phase, so waiting on a dialogue never counts as tr
 There is also a **second bar for the whole transfer**, so sending a folder no longer means watching
 the bar reset to zero twelve times with no idea how far along you are. The second row appears only
 when there is more than one file.
+
+And the log now **says which device is being waited on**. Choosing the files to send — or the
+directory to receive into — arms this device and then goes quiet until the other one is armed too,
+which is indistinguishable from a hang if you do not already know the other end is what is holding
+things up. So a selection now prints the action to take over there, and says plainly that this
+device is waiting for it.
 
 ---
 
@@ -278,9 +284,16 @@ stay scannable.
 
 ## 📦 Predictable builds
 
-Both artifacts are versioned `<upstream release>+<build number>`: the build number resets on every
-upstream rebase and increases with every delivered build, so no two builds share a filename and every
-install lands as a clean upgrade.
+Both artifacts are versioned `<upstream release>+<build number>`: the build number increases with
+every delivered build and normally resets on each upstream rebase, so no two builds share a filename
+and every install lands as a clean upgrade.
+
+The reset has one condition. Android's `versionCode` is derived as `<upstream's own versionCode> ×
+10000 + <build number>`, so a reset only stays monotonic while upstream's number climbs alongside the
+release. When a release leaves it untouched — as `10.0.4` did, bumping only the Apple apps — the
+counter **carries on instead of resetting**, since resetting would build a lower `versionCode` than
+the one already installed and Android would refuse the APK as a downgrade. Upgrades winning comes
+first; the tidy `+001` does not.
 
 ---
 
