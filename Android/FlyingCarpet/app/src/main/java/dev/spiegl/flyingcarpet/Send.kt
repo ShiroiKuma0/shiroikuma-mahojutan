@@ -40,6 +40,12 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
     // Throttled: at 1 MB a chunk a fast link would redraw this dozens of times a second, and it is
     // a line of text a human is reading.
     var lastDetails = 0L
+    val rateWindow = RateWindow()
+    // The clock for the *rate*, as opposed to `start`, which has been running since this function
+    // was entered. The file-conflict exchange sits between them, and when the peer already has the
+    // file both ends hash it end to end first -- tens of seconds on a multi-gigabyte file with not
+    // a byte moving. Matches transfer_start in core/src/{sending,receiving}.rs.
+    val transferStart = System.currentTimeMillis()
     while (bytesLeft > 0) {
         val bytesRead = withContext(Dispatchers.IO) {
             fileStream.read(buffer)
@@ -57,7 +63,9 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
         if (now - lastDetails >= 250) {
             lastDetails = now
             val done = file.length() - bytesLeft
-            progressDetailsMut.postValue(progressDetails(done, file.length(), (now - start) / 1000.0))
+            val (dataLine, clockLine) = progressDetailsParts(
+                done, file.length(), (now - transferStart) / 1000.0, rateWindow.sample(done))
+            progressDetailsMut.postValue("$dataLine\n$clockLine")
             totals?.snapshot(done, file.length())?.let { (pct, text) ->
                 totalProgressBarMut.postValue(pct)
                 progressTotalDetailsMut.postValue(text)
@@ -84,11 +92,15 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
     // stats
     progressBarMut.postValue(100)
     val end = System.currentTimeMillis()
-    val seconds = (end - start) / 1000.0
+    // Data phase, not the whole call: the wait for a file-conflict answer is a human wait and does
+    // not belong in a transfer time. Matches core/src/{sending,receiving}.rs.
+    val seconds = (end - transferStart) / 1000.0
     outputText("Sending took ${formatTime(seconds)}")
     val megabits = 8 * (file.length() / 1_000_000.0)
-    val mbps = megabits / seconds
-    outputText("Speed: %.2fmbps".format(mbps))
+    val mbps = megabits / ((end - transferStart) / 1000.0)
+    // MB/s first; see the matching line in core/src/receiving.rs.
+    val mbytesPerSec = (file.length() / 1_000_000.0) / ((end - transferStart) / 1000.0)
+    outputText("Speed: %.2fMB/s (%.2fmbps)".format(mbytesPerSec, mbps))
 
     // write double confirmation
     withContext(Dispatchers.IO) {

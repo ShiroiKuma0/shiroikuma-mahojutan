@@ -16,12 +16,14 @@ pub mod utils;
 use bluetooth::negotiate_bluetooth;
 use discovery::{DiscoveryRole, DiscoveryService};
 use error::{fc_error, FCError};
+use socket2::{SockRef, TcpKeepalive};
 use std::{
     net::SocketAddr,
     path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
@@ -242,6 +244,9 @@ pub struct Totals {
     pub bytes_done: u64, // completed files only
     pub total_bytes: Option<u64>,
     pub start: std::time::Instant,
+    // Recent rate for the whole-transfer line, so it agrees with the per-file line rather than
+    // quoting a different (cumulative) number beside it. See utils::RateWindow.
+    rate: utils::RateWindow,
 }
 
 impl Totals {
@@ -252,24 +257,27 @@ impl Totals {
             bytes_done: 0,
             total_bytes,
             start: std::time::Instant::now(),
+            rate: utils::RateWindow::new(),
         }
     }
 
     // (percent, text) for the whole transfer, given how far into the current file we are.
-    pub fn snapshot(&self, current_done: u64, current_size: u64) -> (u8, String) {
+    pub fn snapshot(&mut self, current_done: u64, current_size: u64) -> (u8, String) {
         let files = format!("File {} of {}", self.file_index.max(1), self.num_files);
         match self.total_bytes {
             Some(total) if total > 0 => {
                 let done = (self.bytes_done + current_done).min(total);
                 let percent = (done as f64 / total as f64 * 100.0).round() as u8;
-                (
-                    percent,
-                    format!(
-                        "{}  ·  {}",
-                        files,
-                        utils::progress_details(done, total, self.start.elapsed().as_secs_f64())
-                    ),
-                )
+                // The file counter rides on the data line, so the split stays two rows rather
+                // than becoming three (see progress_details_parts).
+                let recent = self.rate.sample(done);
+                let (data, clock) = utils::progress_details_parts_at(
+                    done,
+                    total,
+                    self.start.elapsed().as_secs_f64(),
+                    recent,
+                );
+                (percent, format!("{}  ·  {}\n{}", files, data, clock))
             }
             _ => {
                 let within = if current_size > 0 {
@@ -364,10 +372,24 @@ pub async fn start_transfer<T: UI>(
     // mode it hands over the hotspot's SSID and password; in shared network mode there is no
     // hotspot, so it carries the transfer password alone and the SSID it returns is ignored —
     // the alternative to the receiver displaying a QR code the sender scans or types.
+    // The SSID the peer told us over Bluetooth, kept rather than discarded.
+    //
+    // Everywhere else the hotspot's name is *derived* from the password -- "flyingCarpet_" plus
+    // two bytes of the key -- so both ends can compute it without exchanging it. That holds only
+    // while every host names its own AP that way, and it stopped being true when Android started
+    // hosting for us: a Wi-Fi Direct group owner's network name must begin with "DIRECT-", so the
+    // phone's group is "DIRECT-fc-<password>" and no amount of deriving will produce it. We read
+    // the real name over BLE and then threw it away, computed "flyingCarpet_4f7d" instead, and
+    // NetworkManager quite rightly reported "Wi-Fi ネットワークが見つかりませんでした" (白い熊,
+    // 2026-08-11, first transfer after the hosting flip).
+    let mut peer_ssid: Option<String> = None;
     if using_bluetooth {
         match negotiate_bluetooth(&mode, ble_ui_rx, ui, connection_mode).await {
-            Ok((p, _ssid, pw)) => {
+            Ok((p, s, pw)) => {
                 peer = Some(p);
+                if !s.is_empty() {
+                    peer_ssid = Some(s);
+                }
                 if password.is_none() {
                     password = Some(pw);
                 }
@@ -444,6 +466,27 @@ pub async fn start_transfer<T: UI>(
                 }
             };
 
+            // Hosting, the SSID is ours to choose and the derived name is the one the peer will
+            // compute too. Joining, it is the peer's to tell us -- and only the peer knows it,
+            // since an Android host's Wi-Fi Direct name is not derivable (see peer_ssid above).
+            // Without Bluetooth there is nothing to be told, and the QR code carries the derived
+            // name as it always did, so the fallback is the old behaviour exactly.
+            let ssid = if network::is_hosting(&peer, &mode) {
+                ssid
+            } else {
+                peer_ssid.unwrap_or(ssid)
+            };
+
+            // Correct the SSID held for teardown. It was stored above from the derived name,
+            // which is what clean_up_transfer passes to stop_hotspot -- and nmcli deletes the
+            // connection profile *by name*, the name being the SSID we joined under. Left at the
+            // derived value it would try to delete "flyingCarpet_4f7d" while the profile actually
+            // sitting there is "DIRECT-fc-...", leaking one dead profile per transfer.
+            {
+                let mut _state_ssid = state_ssid.lock().expect("Couldn't lock state_ssid");
+                *_state_ssid = Some(ssid.clone());
+            }
+
             // start hotspot or connect to peer's (the Noise handshake below uses the
             // already-derived PSK, not the password itself)
             let peer_resource =
@@ -494,6 +537,29 @@ pub async fn start_transfer<T: UI>(
             "Couldn't disable Nagle on the TCP connection: {}",
             e
         ));
+    }
+
+    // Notice a peer that goes away without saying so.
+    //
+    // Cancelling on the sending device drops its Wi-Fi as part of the teardown, so the FIN
+    // frequently never reaches us and the connection is left half-open. Nothing here has a
+    // deadline, so this side sat blocked in read for ever: the transfer stayed "running", the
+    // progress bar kept its last figures, and the only way out was pressing Cancel here too
+    // (白い熊, 2026-08-11 -- the journal shows the transfer ending only at the manual cancel,
+    // three minutes after the phone had gone).
+    //
+    // Keepalive rather than a read timeout, because a stalled transfer is not a dead one: we have
+    // measured this very link go quiet for 12 seconds while both ends were perfectly alive, and a
+    // timeout long enough to survive that is too long to be useful. Probes are answered by a live
+    // peer no matter how badly the transfer is going, so this fires only when nobody is home:
+    // 10s idle, then a probe every 5s, three strikes -- about 25s to notice.
+    let keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(10))
+        .with_interval(Duration::from_secs(5))
+        .with_retries(3);
+    if let Err(e) = SockRef::from(&tcp).set_tcp_keepalive(&keepalive) {
+        // Also not fatal: without it we are back to the old behaviour, not worse than it.
+        ui.output(&format!("Couldn't enable TCP keepalive: {}", e));
     }
 
     // The confirm functions only need to know whether we joined the peer's network (guest
@@ -897,12 +963,12 @@ async fn confirm_version<S: AsyncRead + AsyncWrite + Unpin>(
             stream.write_u64(1).await?; // report that versions are compatible
         } else {
             stream.write_u64(0).await?;
-            fc_error(&format!("The other device is running Flying Carpet version {}, which is not compatible with this version ({}). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.", peer_version, MAJOR_VERSION))?;
+            fc_error(&format!("The other device is running 白い熊 魔法絨毯 version {}, which is not compatible with this version ({}). Please update both devices to the latest version at https://github.com/ShiroiKuma0/shiroikuma-mahojutan.", peer_version, MAJOR_VERSION))?;
         }
     } else if peer_version > WIRE_VERSION {
         // peer makes decision
         if stream.read_u64().await? == 0 {
-            fc_error(&format!("The other device is running Flying Carpet version {}, which is not compatible with this version ({}). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.", peer_version, MAJOR_VERSION))?;
+            fc_error(&format!("The other device is running 白い熊 魔法絨毯 version {}, which is not compatible with this version ({}). Please update both devices to the latest version at https://github.com/ShiroiKuma0/shiroikuma-mahojutan.", peer_version, MAJOR_VERSION))?;
         }
     } // otherwise, versions match, implicitly compatible
     // A peer that announced a fork wire version understands the file-conflict exchange; a stock

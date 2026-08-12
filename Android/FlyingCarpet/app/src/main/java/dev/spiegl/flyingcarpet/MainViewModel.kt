@@ -14,10 +14,12 @@ import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
@@ -83,6 +85,18 @@ sealed class FileConflictChoice {
 val zero = ByteArray(8) // meant to represent a 64-bit unsigned 0
 val one = byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1) // meant to represent a 64-bit unsigned 1
 const val chunkSize = 5_000_000
+
+// Backstop on the transfer WakeLock, not a budget: cleanUpTransfer() releases it on every exit,
+// and this only matters if some path ever fails to reach that. Generous enough that no plausible
+// transfer hits it -- 4 GB at the slowest rate we have measured is minutes, not hours.
+const val TRANSFER_WAKELOCK_TIMEOUT_MS = 4L * 60L * 60L * 1000L
+
+// How long to wait for the peer's hotspot to show up in a scan before opening the system network
+// picker regardless, and how often to look. 20s comfortably covers a desktop `nmcli con up`
+// (measured 3-4s to AP-ENABLED) and an Android LocalOnlyHotspot, without stalling a transfer when
+// scan results are unavailable. See waitForPeerAp().
+const val JOIN_AP_WAIT_MS = 20_000L
+const val JOIN_AP_POLL_MS = 1_500L
 //fun ByteArray.toHex(): String = joinToString(separator = "") { eachByte -> "%02x".format(eachByte) }
 
 /** One line of transfer log, tagged with a monotonically increasing sequence number. */
@@ -259,8 +273,27 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         }
         return peer == Peer.iOS
                 || peer == Peer.macOS
+                || peer == Peer.Linux
                 || (peer == Peer.Android && mode == Mode.Receiving)
     }
+    // Linux is in that list as a fork change (白い熊, 2026-08-11), reversing who hosts against a
+    // desktop peer. Upstream has Linux host for us; we host for it.
+    //
+    // The reason is channel width. Our hotspot is a Wi-Fi Direct group that asks for 5 GHz and
+    // gets a wide channel; the desktop's is a NetworkManager AP profile, and NetworkManager 1.46
+    // exposes `band` and `channel` but nothing for width, so it comes up 20 MHz on every band --
+    // measured at 2437 MHz and again at 5745 MHz after the band fix, both 20 MHz. That ceiling is
+    // real: the same pair of devices did 20 MHz hotspot at 25.8 MB/s peak and a 160 MHz shared
+    // network at 58.8. Hosting from here is the only way to get a wide channel into a
+    // Linux transfer, and it costs nothing -- the credentials still travel over Bluetooth, the
+    // peer still joins exactly as we used to, and the wire protocol is untouched.
+    //
+    // It also removes the system network picker from the desktop case entirely: a host never
+    // calls requestNetwork(), so there is no dialog to expire (see waitForPeerAp).
+    //
+    // Both sides have to agree, and they change together: core/src/linux/network.rs's is_hosting()
+    // drops Peer::Android in the same commit. An old desktop build against a new phone would have
+    // both sides waiting to join -- which is why these two edits must never be split.
 
     // Bluetooth works in both connection modes (fork, 白い熊 2026-08-07). In hotspot mode it
     // negotiates the hotspot's SSID and password; in shared network mode there is no hotspot, so
@@ -287,8 +320,79 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         appendToTranscript(msg)
     }
 
+    // Hold the radio at full power for the length of a transfer.
+    //
+    // Without a WifiLock the driver is free to drop into power-save and to run its periodic
+    // background scans mid-transfer, taking the radio off-channel for hundreds of milliseconds at
+    // a time -- and it does this whether or not the screen is on and the app in front. Measured
+    // from the desktop peer on 2026-08-11: while this phone was *receiving*, its round trip time
+    // swung from a 4.7ms minimum to 541ms. Linux read that as congestion, its delivery-rate
+    // estimate collapsed to 6mbps, and `pacing_rate` throttled the sender to 19.5mbps while 2.7MB
+    // sat queued and our receive window stayed wide open at 1023KB. 31mbps for a link that does
+    // 494mbps in the other direction.
+    //
+    // (An earlier version of this comment also cited `lastrcv:12316` as "12.3 seconds without a
+    // packet back from us". That was a misreading: lastrcv counts time since application *data*
+    // arrived, and the receiving side sends none, so it simply tracks elapsed time. It says
+    // nothing about ACKs and is not evidence of anything. The RTT and pacing figures above are.)
+    //
+    // Confirmed by the fix: with the lock held, the same transfer's RTT stayed between 14 and
+    // 41ms, pacing_rate rose from 19.5mbps to 191-383mbps, and throughput roughly doubled
+    // (11.4 -> 21.4 MB/s over the hotspot).
+    //
+    // The direction is the giveaway, and the reason this went unnoticed: when we *send* we hold
+    // the medium continuously and so stay on-channel by accident. Only the receiving side is idle
+    // enough for the driver to wander off, which is exactly the half that has no reason to be.
+    //
+    // FULL_LOW_LATENCY (API 29, and minSdk is 29 so it always exists) disables power-save and
+    // suppresses scanning while we are the foreground app -- both halves of the problem. The
+    // partial WakeLock beside it keeps the CPU up so a long transfer survives the screen timing
+    // out; its timeout is a backstop against leaking the lock, never a transfer budget.
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+
+    private fun acquireTransferLocks() {
+        try {
+            if (wifiLock == null) {
+                wifiLock = wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "FlyingCarpet:transfer"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+            if (wakeLock == null) {
+                val powerManager =
+                    application.getSystemService(AppCompatActivity.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK, "flyingcarpet:transfer"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(TRANSFER_WAKELOCK_TIMEOUT_MS)
+                }
+            }
+        } catch (e: Exception) {
+            // A missing lock costs speed, never correctness -- never the transfer.
+            Log.i("FlyingCarpet", "Could not acquire transfer locks: $e")
+        }
+    }
+
+    // Idempotent, and safe to call when nothing was ever acquired: cleanUpTransfer() runs on
+    // success, error and cancellation alike, and can be re-entered.
+    fun releaseTransferLocks() {
+        try {
+            wifiLock?.let { if (it.isHeld) it.release() }
+            wakeLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            Log.i("FlyingCarpet", "Could not release transfer locks: $e")
+        }
+        wifiLock = null
+        wakeLock = null
+    }
+
     suspend fun startTransfer() {
         outputText("\nStarting Transfer")
+        acquireTransferLocks()
         // Derive the hotspot PSK up front, while `password` is still known to be the one the
         // peer joined with. Deriving it at handshake time instead left a multi-second window —
         // startTCP() blocks waiting for the peer to associate and connect — during which a
@@ -401,6 +505,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     override fun cleanUpTransfer() {
         transferIsRunning = false
+        // First thing, before any of the teardown below can throw: a WifiLock left held pins the
+        // radio out of power-save for the rest of the process's life.
+        releaseTransferLocks()
         safCache = null
         // Clear the finished latch. LiveData is sticky, so a value left at true is redelivered to
         // every observer that registers afterwards -- and the Activity re-observes on each
@@ -569,12 +676,25 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             startHotspot()
         } else { // joining hotspot
             if (bluetooth.active) {
-                if (mode == Mode.Sending) {
-                    // we're peripheral, and we're joining, and already know peer's OS, so need to
-                    // wait for central to write the hotspot details. so nothing to do here.
-                } else {
+                // Which of us reads and which of us waits is decided by the BLE role, never by
+                // send/receive. Upstream could equate the two because the sender always
+                // advertised; this fork cannot, because Linux now advertises first in *both*
+                // directions so it never has to connect out (core/src/linux/bluetooth.rs, the
+                // dual-transport bond that picks classic BT and carries no GATT). Against a Linux
+                // peer we are therefore always the central -- and a *sending* phone used to match
+                // `mode == Mode.Sending` here, take the do-nothing branch meant for the
+                // peripheral, and never issue the read at all: the PC sat with its hotspot
+                // credentials published waiting to be read, the phone ticked "Setting up WiFi for
+                // the transfer" for ever, and neither side ever said why (白い熊, 2026-08-11,
+                // phone -> PC over hotspot). Receiving worked only because it happened to fall in
+                // the other branch. The shared-network path above has tested weAreCentral since
+                // the roles came apart; this is the same test, for the same reason.
+                if (bluetooth.weAreCentral) {
                     // we're central, so read wifi details
                     bluetooth.bluetoothReceiver.read(SSID_CHARACTERISTIC_UUID)
+                } else {
+                    // we're the peripheral, and we're joining, and already know peer's OS, so need
+                    // to wait for central to write the hotspot details. so nothing to do here.
                 }
             } else {
                 // scan qr code
@@ -682,12 +802,21 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private fun warnIfVpnActive() {
         val connectivityManager = application
             .getSystemService(AppCompatActivity.CONNECTIVITY_SERVICE) as ConnectivityManager
-        @Suppress("DEPRECATION")
-        val vpnActive = connectivityManager.allNetworks.any { network ->
-            connectivityManager.getNetworkCapabilities(network)
-                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-        }
-        if (vpnActive) {
+        // Ask whether *our* traffic is tunnelled, not whether a tunnel exists anywhere on the
+        // device. The old check scanned every network for TRANSPORT_VPN, so it fired whenever a
+        // VPN was up at all -- including when this app is on the VPN's excluded list and its
+        // packets go straight out the Wi-Fi interface, which is exactly 白い熊's configuration
+        // (uid 10977 sits outside every uidrange routed into tun1, verified 2026-08-11). The
+        // warning therefore appeared on every single transfer and told them to turn off a VPN
+        // that was already irrelevant, which is worse than saying nothing.
+        //
+        // activeNetwork is the network *this process* will actually use, so it already accounts
+        // for per-app exclusions: if we are excluded it is the Wi-Fi network, and NOT_VPN holds.
+        val activeCapabilities = connectivityManager.activeNetwork
+            ?.let { connectivityManager.getNetworkCapabilities(it) }
+        val weAreTunnelled = activeCapabilities != null
+                && !activeCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+        if (weAreTunnelled) {
             outputText(
                 "A VPN is active on this device. Flying Carpet needs direct access to the "
                     + "local network, so if the transfer doesn't connect, turn the VPN off and try again."
@@ -824,12 +953,20 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         ssid = ssid.replace("\"", "")
 
         if (bluetooth.active) {
-            if (mode == Mode.Sending) {
-                // we're peripheral, and hosting, so just need to wait for the central to read from our
-                // wifi characteristic. nothing to do here.
-            } else {
+            // The host's half of the same rule, and the same correction: only the central can
+            // push a characteristic to its peer, so "write or wait" is a question about the BLE
+            // role and not about send/receive. Keyed on `mode` this was wrong in both directions
+            // -- a hosting central that was sending would wait to be read by a peer that has no
+            // way to read it, and a hosting peripheral that was receiving would write into a
+            // GATT client. Linux never reaches here (it hosts for us, so we join), which is why
+            // this half stayed latent while the joining branch in connectToPeer() broke in the
+            // field; the iOS/macOS/Android peers that do reach it deserve the fixed version too.
+            if (bluetooth.weAreCentral) {
                 // write the wifi details to peer
                 bluetooth.bluetoothReceiver.write(SSID_CHARACTERISTIC_UUID, ssid.toByteArray())
+            } else {
+                // we're the peripheral, and hosting, so just need to wait for the central to read
+                // from our wifi characteristic. nothing to do here.
             }
         } else {
             // android generates ssid and password for us
@@ -1052,21 +1189,68 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // the last, so a transfer that retried leaked one request per attempt for the life of the
         // process -- and the platform starts throwing once an app has about a hundred outstanding.
         releaseNetwork()
-        val callback = NetworkCallback()
-        networkCallback = callback
         joinAttempts += 1
         outputText("Joining $ssid — this drops your other WiFi until the transfer is done")
-        // The peer's AP was created seconds ago, so it is not in our scan cache and the framework
-        // has to run its own scan cycle before it can match the specifier -- that is the pause
-        // before the network picker settles. Asking for a scan first gives it fresh results to work
-        // from. Deprecated since API 28 and throttled to a few calls a minute, so it is best-effort:
-        // it can shorten the wait, never lengthen it.
-        try {
-            @Suppress("DEPRECATION")
-            wifiManager.startScan()
-        } catch (e: Exception) {
-            Log.i("WiFi", "startScan() before joining was refused: $e")
+        awaitingApSince = System.currentTimeMillis()
+        waitForPeerAp(0)
+    }
+
+    // Don't open the system network picker until the peer's AP is actually on the air.
+    //
+    // requestNetwork() puts up "Devices to use with 白い熊 魔法絨毯" immediately, and that dialog
+    // has its own patience: if the network it is hunting for does not exist yet it eventually
+    // gives up and asks whether to keep trying (白い熊, 2026-08-11, screenshot at 19:17). The peer
+    // publishes its SSID over Bluetooth *before* it raises the AP -- on the desktop side the
+    // credentials are generated at advertise time and `nmcli con up` runs later, and bringing an
+    // AP up takes a few seconds -- so we routinely asked the user to pick a network that did not
+    // exist. Answering "keep trying" always worked, which is the tell: nothing was wrong except
+    // the order.
+    //
+    // So poll for it first and open the picker once it is visible. If it never shows up we ask
+    // anyway rather than stalling: the framework's own matching may still find it, and the old
+    // behaviour is the floor, not the ceiling.
+    private var awaitingApSince = 0L
+
+    @SuppressLint("MissingPermission") // startHotspot()/joinHotspot() run behind the same gate
+    private fun waitForPeerAp(attempt: Int) {
+        if (!transferIsRunning) {
+            return
         }
+        val visible = try {
+            @Suppress("DEPRECATION")
+            wifiManager.scanResults.any { it.SSID == ssid }
+        } catch (e: Exception) {
+            // No scan results without location; fall through to the timeout and ask anyway.
+            Log.i("WiFi", "Could not read scan results: $e")
+            false
+        }
+        val waited = System.currentTimeMillis() - awaitingApSince
+        if (visible || waited >= JOIN_AP_WAIT_MS) {
+            if (!visible) {
+                outputText("Haven't seen \"$ssid\" on the air yet — asking to join anyway.")
+            }
+            requestPeerNetwork()
+            return
+        }
+        if (attempt == 0) {
+            outputText("Waiting for the other device's hotspot to come on the air...")
+        }
+        // startScan() is throttled to a handful of calls a minute, so nudge it occasionally and
+        // let the system's own scan cycle fill in between. Reading results is not throttled.
+        if (attempt % 4 == 0) {
+            try {
+                @Suppress("DEPRECATION")
+                wifiManager.startScan()
+            } catch (e: Exception) {
+                Log.i("WiFi", "startScan() while waiting for the peer's AP was refused: $e")
+            }
+        }
+        handler.postDelayed({ waitForPeerAp(attempt + 1) }, JOIN_AP_POLL_MS)
+    }
+
+    private fun requestPeerNetwork() {
+        val callback = NetworkCallback()
+        networkCallback = callback
         val specifier = WifiNetworkSpecifier.Builder()
             .setSsid(ssid)
             .setWpa2Passphrase(password)
@@ -1216,8 +1400,32 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             // machines at ~600mbps. Nothing here benefits from Nagle's coalescing.
             client.tcpNoDelay = true
             outputText("Connected")
+            // The RECEIVE buffer is deliberately not set; the SEND buffer deliberately is. They
+            // look symmetrical and do entirely different jobs.
+            //
+            // SO_RCVBUF, set by hand, switches off Linux's receive-window autotuning for the life
+            // of the socket: the window stops growing with the bandwidth-delay product and freezes
+            // at whatever that one request resolved to. On 白い熊's Huawei that was 1023KB, which
+            // the desktop peer saw advertised unchanged for an entire transfer -- ample at a 20ms
+            // round trip, a hard ceiling of ~3MB/s once latency reached 300ms. Leaving it alone
+            // took that direction from 5.77MB/s to 76MB/s (2026-08-12).
+            //
+            // SO_SNDBUF is not a window, it is how far this app may run ahead of the wire. The
+            // send loop reads a 5MB chunk off storage, encrypts it and writes it; with a buffer
+            // that size the write returns at once and the next read overlaps the transmission of
+            // the last. Autotuned, the buffer settles near the bandwidth-delay product -- about
+            // 400KB at the 6ms round trip we measure -- so each write blocks until the wire has
+            // drained it and storage and network stop overlapping. Removing this halved sending,
+            // 51.5MB/s to 25.6, at a flat rate with 6ms RTT, no loss and the peer's window wide
+            // open: nothing pushing back, just a sender no longer able to run ahead (2026-08-12).
             client.sendBufferSize = chunkSize * 2
-            client.receiveBufferSize = chunkSize * 2
+            //
+            // Keepalive, on the other hand, is worth asking for: a peer that vanishes without
+            // closing (cancel on the far side drops its Wi-Fi before the FIN gets out) otherwise
+            // leaves this socket blocked in read for ever. Java exposes only the on/off switch,
+            // whose idle timer is two hours, so the desktop side carries the real timings -- see
+            // the keepalive block in core/src/lib.rs.
+            client.keepAlive = true
             inputStream = client.getInputStream()
             outputStream = client.getOutputStream()
         }
@@ -1253,13 +1461,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                     outputStream.write(one)
                 } else {
                     outputStream.write(zero)
-                    throw Exception("The other device is running Flying Carpet version $peerVersion, which is not compatible with this version ($MAJOR_VERSION). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.")
+                    throw Exception("The other device is running 白い熊 魔法絨毯 version $peerVersion, which is not compatible with this version ($MAJOR_VERSION). Please update both devices to the latest version at https://github.com/ShiroiKuma0/shiroikuma-mahojutan.")
                 }
             } else if (peerVersion > WIRE_VERSION) {
                 // peer's version is higher, so they make the decision
                 val isCompatibleBytes = readNBytes(8, inputStream)
                 if (ByteBuffer.wrap(isCompatibleBytes).long != 1L) {
-                    throw Exception("The other device is running Flying Carpet version $peerVersion, which is not compatible with this version ($MAJOR_VERSION). Please update both devices to the latest version at https://flyingcarpet.spiegl.dev.")
+                    throw Exception("The other device is running 白い熊 魔法絨毯 version $peerVersion, which is not compatible with this version ($MAJOR_VERSION). Please update both devices to the latest version at https://github.com/ShiroiKuma0/shiroikuma-mahojutan.")
                 }
             } // otherwise versions match, implicitly compatible
             // A peer that announced a fork wire version understands the file-conflict exchange.
@@ -1363,6 +1571,53 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             i++
         }
         return newFileName
+    }
+
+    // Receive into "<name>.part", and put it under its real name only once the file is whole.
+    // Writing straight to the final name left a cancelled transfer's half-file wearing that name,
+    // indistinguishable from a complete one (白い熊, 2026-08-11). Mirrors the desktop receiver in
+    // core/src/receiving.rs; the difference is only that SAF renames a document rather than a path.
+    //
+    // Nothing is written to safCache here. The cache answers "is this name taken" for the
+    // collision loop, and until the rename lands the answer for the *final* name is still no --
+    // files are received one at a time, so promotePartFile() notes it in time for the next one.
+    fun createPartFile(
+        destinationDir: DocumentFile,
+        finalName: String,
+    ): Pair<DocumentFile, OutputStream> {
+        val part = destinationDir.createFile("*/*", "$finalName.part")
+            ?: throw Exception("Could not create .part file URI")
+        val stream = getApplication<Application>().contentResolver.openOutputStream(part.uri)
+            ?: throw Exception("Could not open output stream to .part file")
+        return Pair(part, stream)
+    }
+
+    // The counterpart: drop whatever we are replacing, then rename the finished .part onto the
+    // real name. `replacing` is set only when the sending device chose Overwrite, and the delete
+    // has to come first -- SAF will not rename onto an occupied name, it silently de-duplicates
+    // to "name (1)", which would leave both copies behind.
+    fun promotePartFile(
+        part: DocumentFile,
+        finalName: String,
+        replacing: Uri?,
+        destinationDir: DocumentFile,
+    ) {
+        replacing?.let { uri ->
+            try {
+                DocumentsContract.deleteDocument(
+                    getApplication<Application>().contentResolver, uri
+                )
+            } catch (e: Exception) {
+                Log.i("FlyingCarpet", "Could not delete the file being replaced: $e")
+            }
+        }
+        if (!part.renameTo(finalName)) {
+            throw Exception("Could not rename \"${part.name}\" to \"$finalName\"")
+        }
+        safCache?.note(
+            destinationDir.treeDocumentId(),
+            SafDirectoryCache.Entry(part.treeDocumentId(), finalName, part.length(), false),
+        )
     }
 
     fun getOutputStreamForFile(destinationDir: DocumentFile, filename: String): OutputStream {

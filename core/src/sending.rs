@@ -22,7 +22,6 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     peer_is_fork: bool,
     conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictChoice>,
 ) -> Result<(), FCError> {
-    let start = Instant::now();
     let mut handle = File::open(file)?;
     let metadata = metadata(file)?;
     let size = metadata.len();
@@ -63,6 +62,15 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     ui.update_total_progress_bar(total_pct);
     ui.update_progress_details(&utils::progress_details(0, size, 0.0), &total_text);
     let mut last_details = Instant::now();
+    // Recent-rate window; see utils::RateWindow.
+    let mut rate = utils::RateWindow::new();
+    // The clock for the *rate*, as opposed to `start`, which has been running since this function
+    // was entered. Between the two sits the file-conflict exchange, and when the peer already has
+    // the file that means both ends hash it end to end first -- tens of seconds on a multi-
+    // gigabyte file, with not a byte of it moving. Dividing the file size by that whole span
+    // reported a 3.5GB transfer at 214mbps while the wire had sustained about 280 (白い熊,
+    // 2026-08-11). "How long did this take" and "how fast did it go" are different questions.
+    let transfer_start = Instant::now();
 
     let mut buffer = vec![0u8; CHUNKSIZE];
 
@@ -86,10 +94,14 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
                     let done = size - bytes_left;
                     let (total_pct, total_text) = totals.snapshot(done, size);
                     ui.update_total_progress_bar(total_pct);
-                    ui.update_progress_details(
-                        &utils::progress_details(done, size, start.elapsed().as_secs_f64()),
-                        &total_text,
+                    let recent = rate.sample(done);
+                    let (data, clock) = utils::progress_details_parts_at(
+                        done,
+                        size,
+                        transfer_start.elapsed().as_secs_f64(),
+                        recent,
                     );
+                    ui.update_progress_details(&format!("{}\n{}", data, clock), &total_text);
                 }
             }
             Err(e) => Err(e)?,
@@ -104,14 +116,20 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     totals.bytes_done += size;
     let (total_pct, total_text) = totals.snapshot(0, 0);
     ui.update_total_progress_bar(total_pct);
-    ui.update_progress_details(&utils::progress_details(size, size, start.elapsed().as_secs_f64()), &total_text);
+    ui.update_progress_details(&utils::progress_details(size, size, transfer_start.elapsed().as_secs_f64()), &total_text);
     let finish = Instant::now();
-    let elapsed = (finish - start).as_secs_f64();
+    // Every figure below measures the data phase, not the whole call. The wait for a file-conflict
+    // answer sits in between -- and it is a *human* wait, seconds or minutes while somebody types a
+    // new filename (白い熊, 2026-08-11). Counting that as transfer time made the elapsed line climb
+    // while nothing moved, and left size/elapsed disagreeing with the quoted speed.
+    let elapsed = (finish - transfer_start).as_secs_f64();
     ui.output(&format!("Sending took {}", utils::format_time(elapsed)));
 
     let megabits = 8.0 * (size as f64 / 1_000_000.0);
-    let mbps = megabits / elapsed;
-    ui.output(&format!("Speed: {:.2}mbps", mbps));
+    let mbps = megabits / (finish - transfer_start).as_secs_f64();
+    // MB/s first; see the matching line in receiving.rs.
+    let mbytes_per_sec = (size as f64 / 1_000_000.0) / (finish - transfer_start).as_secs_f64();
+    ui.output(&format!("Speed: {:.2}MB/s ({:.2}mbps)", mbytes_per_sec, mbps));
 
     // listen for receiving end to tell us they have everything
     stream.read_u64().await?;

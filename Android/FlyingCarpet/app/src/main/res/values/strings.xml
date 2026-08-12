@@ -15,13 +15,13 @@
     <string name="scanQrCode">Scan QR Code</string>
     <string name="ok">OK</string>
     <string name="cancelSmall">Cancel</string>
-    <string name="welcome">Welcome to Flying Carpet!</string>
+    <string name="welcome">Welcome to 白い熊 魔法絨毯!</string>
     <string name="selectFiles">Files to send</string>
     <string name="cancel">Cancel Transfer</string>
     <string name="selectFolder">Select directory</string>
     <string name="receiveIn">Receive in “%1$s”</string>
     <string name="step2">Select OS of the other device</string>
-    <string name="qrCodeDescription">Flying Carpet logo / QR code</string>
+    <string name="qrCodeDescription">白い熊 魔法絨毯 logo / QR code</string>
     <string name="programTitle">白い熊 魔法絨毯</string>
     <string name="about">About</string>
     <string name="versionNumber">Version 10</string>
