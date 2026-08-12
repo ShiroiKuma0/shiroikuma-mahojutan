@@ -24,7 +24,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.3+049`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.3+058`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -46,6 +46,11 @@ changes. Measured between those two phones: **17 MB/s → 55 MB/s.**
 The band is a request rather than an instruction, so the log names the band actually obtained, and
 every way it can fail — refused, unreadable, or simply never arriving — falls back to the old
 hotspot automatically.
+
+**Desktop transfers ride the same group.** Stock has the Linux side host for a phone, and its access
+point is a NetworkManager profile — which exposes a band and a channel but nothing for width, so it
+comes up **20 MHz whatever band you ask for**. The phone hosts instead, and its group negotiates
+**80 MHz**: measured between this phone and the desktop, **20.3 MB/s → 47.5 MB/s peak**.
 
 ---
 
@@ -83,13 +88,19 @@ shape on the phone and on the desktop.
 Stock gives you a bar filling up and nothing else. Both apps now show, above it:
 
 ```
-12.4 MB / 340 MB  ·  8.7 MB/s  ·  38s left
-File 3 of 12  ·  512 MB / 2.10 GB  ·  8.7 MB/s  ·  3m 04s left
+12.4 MB / 340 MB  ·  8.7 MB/s
+1m 26s elapsed  ·  38s left
 ```
 
-— and a **second bar for the whole transfer**, so sending a folder no longer means watching the bar
-reset to zero twelve times with no idea how far along you are. The second row appears only when there
-is more than one file.
+Two lines, because one wrapped anyway and broke wherever the glyphs happened to land. **Elapsed sits
+beside remaining** — remaining answers "how much longer", elapsed answers "has this been going long
+enough that something is wrong". The speed is a **rolling five-second rate**, not an average from the
+first byte, so it reflects what is happening now and a stall is visible instead of averaged away;
+every clock measures the data phase, so waiting on a dialogue never counts as transfer time.
+
+There is also a **second bar for the whole transfer**, so sending a folder no longer means watching
+the bar reset to zero twelve times with no idea how far along you are. The second row appears only
+when there is more than one file.
 
 ---
 
