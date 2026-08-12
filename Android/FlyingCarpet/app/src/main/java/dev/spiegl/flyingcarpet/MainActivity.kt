@@ -216,6 +216,23 @@ class MainActivity : AppCompatActivity() {
             && !locationEnabledForScanning()) {
             return
         }
+        // Say out loud which device is now being waited on. Past this point nothing visible happens
+        // on this phone until the OTHER device is armed too, and with no line to that effect the
+        // wait reads as a hang -- so name the action to take over there, and say plainly that we
+        // are waiting for it. Mirrored in the desktop app's main.js, after its own selection block.
+        if (viewModel.mode == Mode.Sending) {
+            viewModel.outputText(
+                "\nFiles selected. Now on the OTHER device: choose Receive and pick the " +
+                        "destination folder."
+            )
+        } else {
+            viewModel.outputText(
+                "\nDestination folder selected. Now on the OTHER device: choose Send and pick " +
+                        "the files to send."
+            )
+        }
+        viewModel.outputText("This device will wait until the other device is ready.")
+
         if (viewModel.bluetooth.active) {
             if (viewModel.bluetooth.bluetoothGattServer.getService(SERVICE_UUID) == null) {
                 viewModel.bluetooth.bluetoothGattServer.addService(viewModel.bluetooth.service)

@@ -589,7 +589,19 @@ async function beginTransfer(filesSelected) {
       return;
     }
   }
-  
+
+  // Say out loud which device is now being waited on. Past this point nothing visible happens
+  // here until the OTHER device is armed too, and with no line to that effect the wait reads as
+  // a hang -- so name the action to take over there, and say plainly that we are waiting for it.
+  // Mirrored in the Android app's beginTransferWithSelection().
+  if (selectedMode == 'send' && selectedFiles && selectedFiles.length) {
+    output('\nFiles selected. Now on the OTHER device: choose Receive and pick the destination folder.');
+    output('This device will wait until the other device is ready.');
+  } else if (selectedMode == 'receive' && selectedFolder) {
+    output('\nDestination folder selected. Now on the OTHER device: choose Send and pick the files to send.');
+    output('This device will wait until the other device is ready.');
+  }
+
   // shared network sender: files are chosen, now get the password from the receiving device.
   // with Bluetooth on there is nothing to ask for -- the receiver writes the password over BLE.
   if (connectionMode === 'shared_network' && selectedMode === 'send' && !usingBluetooth) {
