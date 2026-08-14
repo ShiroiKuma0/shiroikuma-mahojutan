@@ -102,6 +102,58 @@ pub enum FileConflictChoice {
     Overwrite,
     Rename(String),
 }
+
+/// A conflict answer, plus whether it should stand for every remaining file instead of just this
+/// one. A ten-file folder the peer already has asked ten identical questions before this existed
+/// (白い熊, 2026-08-14).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileConflictAnswer {
+    pub choice: FileConflictChoice,
+    pub apply_to_all: bool,
+}
+
+/// What "apply to all" remembers: the *rule*, never the answer verbatim.
+///
+/// A rename carries a name, and a name cannot be reused -- sending every remaining file as
+/// "photo (copy).jpg" would pile them all onto one another at the other end. So a sticky rename
+/// stores only the intent, and each file gets its own name from `utils::suggest_rename`, which is
+/// the "keep both" of every file manager.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ConflictRule {
+    Skip,
+    Overwrite,
+    Rename,
+}
+
+impl ConflictRule {
+    /// The rule behind an answer, so that the answer can be repeated for later files.
+    pub fn of(choice: &FileConflictChoice) -> Self {
+        match choice {
+            FileConflictChoice::Skip => ConflictRule::Skip,
+            FileConflictChoice::Overwrite => ConflictRule::Overwrite,
+            FileConflictChoice::Rename(_) => ConflictRule::Rename,
+        }
+    }
+
+    /// The rule applied to one file: the only place a sticky rename's name is decided.
+    pub fn apply(&self, relative_name: &str) -> FileConflictChoice {
+        match self {
+            ConflictRule::Skip => FileConflictChoice::Skip,
+            ConflictRule::Overwrite => FileConflictChoice::Overwrite,
+            ConflictRule::Rename => {
+                FileConflictChoice::Rename(utils::suggest_rename(relative_name))
+            }
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ConflictRule::Skip => "skip",
+            ConflictRule::Overwrite => "overwrite",
+            ConflictRule::Rename => "rename",
+        }
+    }
+}
 // Sanity bound on the peer-supplied file count (companion to the header bounds in
 // receiving.rs): no legitimate transfer approaches it, and a corrupt or hostile
 // stream shouldn't be able to put us into a near-endless receive loop.
@@ -146,7 +198,16 @@ pub trait UI: Clone + Send + 'static {
     fn show_pin(&self, pin: &str);
     /// The receiving device already has a file by this name. Ask which way to go; the answer
     /// arrives on the channel passed to start_transfer, exactly as the pairing PIN's does.
-    fn ask_file_conflict(&self, name: &str, local_size: u64, incoming_size: u64, identical: bool);
+    /// `more_files` is false on the last file of the transfer, where "apply to all" has nothing
+    /// left to apply to and the toggle should not be offered.
+    fn ask_file_conflict(
+        &self,
+        name: &str,
+        local_size: u64,
+        incoming_size: u64,
+        identical: bool,
+        more_files: bool,
+    );
 }
 
 #[derive(Clone)]
@@ -305,7 +366,7 @@ pub struct Transfer {
     pub ble_ui_tx: Mutex<Option<mpsc::Sender<bool>>>, // used by javascript to report user's choice about whether to pair with bluetooth device to windows custom pairing callback.
     // The same arrangement for "the other device already has this file": the frontend asks, the
     // answer comes back here, and the sending half of the transfer is waiting on it.
-    pub conflict_tx: Mutex<Option<mpsc::Sender<FileConflictChoice>>>,
+    pub conflict_tx: Mutex<Option<mpsc::Sender<FileConflictAnswer>>>,
 }
 
 impl Transfer {
@@ -334,7 +395,7 @@ pub async fn start_transfer<T: UI>(
     ble_ui_rx: mpsc::Receiver<bool>,
     connection_mode: ConnectionMode,
     // The sending side's answers to "the other device already has this file" (fork-only).
-    mut conflict_rx: mpsc::Receiver<FileConflictChoice>,
+    mut conflict_rx: mpsc::Receiver<FileConflictAnswer>,
 ) -> Option<TransferStream> {
     // get files or receive directory
     // don't panic on bad input: a panic here kills the transfer task without running
@@ -642,6 +703,9 @@ pub async fn start_transfer<T: UI>(
                 .map(|f| std::fs::metadata(&f.path).map(|m| m.len()).unwrap_or(0))
                 .sum();
             let mut totals = Totals::new(files.len() as u64, Some(total_bytes));
+            // "Apply to all", once ticked, for the rest of THIS transfer -- a local, so it cannot
+            // outlive the loop and answer for a later one.
+            let mut conflict_rule: Option<ConflictRule> = None;
             // send files. each file already carries the relative name the peer will store
             // it under, resolved at selection time by utils::expand_selection
             for (i, file) in files.iter().enumerate() {
@@ -661,6 +725,8 @@ pub async fn start_transfer<T: UI>(
                     ui,
                     peer_is_fork,
                     &mut conflict_rx,
+                    &mut conflict_rule,
+                    i + 1 < files.len(),
                 )
                 .await
                 {
@@ -1021,11 +1087,19 @@ mod transfer_tests {
     #[derive(Clone)]
     struct AnsweringUi {
         answer: FileConflictChoice,
-        tx: mpsc::Sender<FileConflictChoice>,
+        apply_to_all: bool,
+        tx: mpsc::Sender<FileConflictAnswer>,
+        // How many times the question was actually put. "Apply to all" is only worth anything if
+        // this stops climbing.
+        asked: Arc<Mutex<u32>>,
     }
     impl UI for AnsweringUi {
-        fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {
-            let _ = self.tx.try_send(self.answer.clone());
+        fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool, _more: bool) {
+            *self.asked.lock().expect("lock") += 1;
+            let _ = self.tx.try_send(FileConflictAnswer {
+                choice: self.answer.clone(),
+                apply_to_all: self.apply_to_all,
+            });
         }
         fn output(&self, _msg: &str) {}
         fn show_progress_bar(&self) {}
@@ -1039,7 +1113,7 @@ mod transfer_tests {
     #[derive(Clone)]
     struct TestUi;
     impl UI for TestUi {
-        fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {}
+        fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool, _more: bool) {}
         fn output(&self, _msg: &str) {}
         fn show_progress_bar(&self) {}
         fn update_progress_bar(&self, _percent: u8) {}
@@ -1088,7 +1162,9 @@ mod transfer_tests {
             // cannot be mistaken for this one's.
             let answering_ui = AnsweringUi {
                 answer: answer.clone(),
+                apply_to_all: false,
                 tx: conflict_tx,
+                asked: Arc::new(Mutex::new(0)),
             };
 
             let src2 = src.clone();
@@ -1103,6 +1179,8 @@ mod transfer_tests {
                     &answering_ui,
                     true,
                     &mut conflict_rx,
+                    &mut None,
+                    false,
                 )
                 .await
                 .unwrap();
@@ -1141,6 +1219,121 @@ mod transfer_tests {
                     "renamed copy after {:?}",
                     answer
                 );
+            }
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
+    /// "Apply to all", over the same real duplex: three files the receiver already has, one
+    /// question, and the answer standing for the other two. Two things are asserted that nothing
+    /// else would catch -- that the question is put exactly once, and that a sticky *rename* gives
+    /// each file its own name instead of stacking all three onto the first one's.
+    #[tokio::test]
+    async fn apply_to_all_answers_the_rest() {
+        for (answer, rule_name) in [
+            (FileConflictChoice::Skip, "skip"),
+            (FileConflictChoice::Overwrite, "overwrite"),
+            // The name in the answer is deliberately not one of the three files': a sticky rename
+            // must ignore it and derive a name per file.
+            (FileConflictChoice::Rename("ignored.bin".to_string()), "rename"),
+        ] {
+            let base = std::env::temp_dir().join(format!(
+                "fc_apply_all_{}_{:?}_{}",
+                std::process::id(),
+                std::thread::current().id(),
+                rule_name,
+            ));
+            let send_dir = base.join("send");
+            let recv_dir = base.join("recv");
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&send_dir).unwrap();
+            std::fs::create_dir_all(&recv_dir).unwrap();
+            let names = ["one.bin", "two.bin", "three.bin"];
+            for name in names {
+                std::fs::write(send_dir.join(name), b"new").unwrap();
+                // every one of them is already there, with different contents
+                std::fs::write(recv_dir.join(name), b"old").unwrap();
+            }
+
+            let (client, server) = tokio::io::duplex(64 * 1024);
+            let (conflict_tx, mut conflict_rx) = mpsc::channel(1);
+            let asked = Arc::new(Mutex::new(0));
+            let answering_ui = AnsweringUi {
+                answer: answer.clone(),
+                apply_to_all: true,
+                tx: conflict_tx,
+                asked: asked.clone(),
+            };
+
+            let send_dir2 = send_dir.clone();
+            let sender = tokio::spawn(async move {
+                let mut stream = client;
+                let mut totals = Totals::new(names.len() as u64, Some(9));
+                let mut rule = None;
+                for (i, name) in names.iter().enumerate() {
+                    sending::send_file(
+                        &send_dir2.join(name),
+                        name,
+                        &mut stream,
+                        &mut totals,
+                        &answering_ui,
+                        true,
+                        &mut conflict_rx,
+                        &mut rule,
+                        i + 1 < names.len(),
+                    )
+                    .await
+                    .unwrap();
+                }
+            });
+
+            let recv_dir2 = recv_dir.clone();
+            let receiver = tokio::spawn(async move {
+                let mut stream = server;
+                let mut totals = Totals::new(names.len() as u64, None);
+                for i in 0..names.len() {
+                    receiving::receive_file(
+                        &recv_dir2,
+                        &mut stream,
+                        &mut totals,
+                        &TestUi,
+                        i + 1 == names.len(),
+                        true,
+                    )
+                    .await
+                    .unwrap();
+                }
+            });
+
+            tokio::time::timeout(std::time::Duration::from_secs(10), sender)
+                .await
+                .expect("sender deadlocked")
+                .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+                .await
+                .expect("receiver deadlocked")
+                .unwrap();
+
+            assert_eq!(*asked.lock().unwrap(), 1, "questions put for {}", rule_name);
+            for name in names {
+                let original = std::fs::read_to_string(recv_dir.join(name)).unwrap();
+                match rule_name {
+                    // replaced in place
+                    "overwrite" => assert_eq!(original, "new", "{} after overwrite all", name),
+                    // untouched, and nothing new beside it
+                    _ => assert_eq!(original, "old", "{} after {} all", name, rule_name),
+                }
+                let copy = recv_dir.join(utils::suggest_rename(name));
+                if rule_name == "rename" {
+                    assert_eq!(
+                        std::fs::read_to_string(&copy).unwrap(),
+                        "new",
+                        "copy of {} after rename all",
+                        name
+                    );
+                } else {
+                    assert!(!copy.exists(), "unexpected copy of {} after {} all", name, rule_name);
+                }
             }
             let _ = std::fs::remove_dir_all(&base);
         }
@@ -1191,6 +1384,8 @@ mod transfer_tests {
                 &TestUi,
                 false,
                 &mut conflict_rx,
+                &mut None,
+                false,
             )
                 .await
                 .unwrap();

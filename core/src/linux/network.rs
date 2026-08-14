@@ -545,7 +545,7 @@ mod test {
         #[derive(Clone)]
         struct TestUI {}
         impl UI for TestUI {
-            fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {}
+            fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool, _more: bool) {}
             fn output(&self, _msg: &str) {}
             fn show_progress_bar(&self) {}
             fn update_progress_bar(&self, _percent: u8) {}

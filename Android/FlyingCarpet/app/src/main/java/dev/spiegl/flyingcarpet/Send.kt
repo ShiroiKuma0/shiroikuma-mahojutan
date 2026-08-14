@@ -8,7 +8,12 @@ import java.nio.ByteBuffer
 
 // v10+: file contents are protected by the Noise transport (see Noise.kt), which wraps the
 // whole connection, so chunks are sent as raw bytes here — no application-level encryption.
-suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, filePath: String) {
+suspend fun MainViewModel.sendFile(
+    file: DocumentFile,
+    fileStream: InputStream,
+    filePath: String,
+    moreFiles: Boolean,
+) {
     val start = System.currentTimeMillis()
     outputText("File size: ${makeSizeReadable(file.length())}")
     val wireName = sendFileDetails(file, filePath)
@@ -16,7 +21,7 @@ suspend fun MainViewModel.sendFile(file: DocumentFile, fileStream: InputStream, 
         // Fork-only (version-guarded in confirmVersion): the other device says what it has, and
         // the choice is made HERE, where the user who picked the files is. Upstream skips an
         // identical file silently and renames a differing one without asking.
-        val sendAs = resolveConflictSending(file, wireName) ?: run {
+        val sendAs = resolveConflictSending(file, wireName, moreFiles) ?: run {
             outputText("Skipping this file: the other device already has it.")
             return
         }
@@ -142,10 +147,15 @@ private fun MainViewModel.sendFileDetails(file: DocumentFile, path: String): Str
  * core/src/sending.rs (resolve_conflict); the two must stay in step.
  *
  * Returns the name to send the file under, or null to skip it.
+ *
+ * The wire is the same whether the answer came from a dialog or from a standing "apply to all":
+ * the sticky rule is remembered on this side only, so a peer running an older build of the fork
+ * still understands every file of the transfer.
  */
 private suspend fun MainViewModel.resolveConflictSending(
     file: DocumentFile,
     filePath: String,
+    moreFiles: Boolean,
 ): String? {
     val status = withContext(Dispatchers.IO) {
         ByteBuffer.wrap(readNBytes(8, inputStream)).long
@@ -165,7 +175,24 @@ private suspend fun MainViewModel.resolveConflictSending(
         "The other device already has \"$filePath\"" +
                 if (identical) " (identical)." else " (a different file)."
     )
-    return when (val choice = askAboutExistingFile(filePath, identical)) {
+    val choice = conflictRule?.let { rule ->
+        // Already answered for the whole transfer: don't ask again, just say what is being done.
+        outputText("Applying \"${rule.label}\" to this one too.")
+        rule.apply(filePath)
+    } ?: run {
+        val answer = askAboutExistingFile(filePath, identical, moreFiles)
+        if (answer.applyToAll) {
+            val rule = ConflictRule.of(answer.choice)
+            conflictRule = rule
+            outputText("Applying \"${rule.label}\" to every remaining file the other device already has.")
+            // Through the rule even for this first file: a rename that is to be repeated takes its
+            // name from suggestRename(), not from a box the dialog never showed.
+            rule.apply(filePath)
+        } else {
+            answer.choice
+        }
+    }
+    return when (choice) {
         is FileConflictChoice.Skip -> {
             withContext(Dispatchers.IO) { outputStream.write(zero) }
             null

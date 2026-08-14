@@ -14,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -68,6 +69,15 @@ object ForkDialog {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
         setTextColor(color ?: accent(context))
         if (bold) typeface = Typeface.DEFAULT_BOLD
+    }
+
+    /** An accent-tinted tick box, the same one the Export/Import panel uses for its categories. */
+    fun checkbox(context: Context, s: String, sizeSp: Float = 15f): CheckBox = CheckBox(context).apply {
+        text = s
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+        setTextColor(accent(context))
+        buttonTintList = ColorStateList.valueOf(accent(context))
+        setPadding(dp(context, 8), dp(context, 7), 0, dp(context, 7))
     }
 
     /** A thin, dim rule — the same hairline the UI page uses between its sections. */

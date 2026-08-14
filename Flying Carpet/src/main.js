@@ -143,19 +143,21 @@ window.addEventListener('DOMContentLoaded', async () => {
   // fork-only (the exchange behind it is version-guarded in core), and the question belongs
   // here, on the device whose user picked the files.
   await appWindow.listen('fileConflict', async (event) => {
-    let { name, identical } = event.payload;
-    let choice = await showConflict(name, identical);
-    if (choice === 'rename') {
+    let { name, identical, more_files } = event.payload;
+    let { choice, applyToAll } = await showConflict(name, identical, more_files);
+    // Renaming one file asks what to call it. Renaming every remaining one cannot -- a name is
+    // used once -- so it means "keep both" and core names each file itself (utils::suggest_rename).
+    if (choice === 'rename' && !applyToAll) {
       let suggestion = suggestRename(name);
       let newName = await showPrompt(`Send \u201c${name}\u201d as:`, suggestion);
       if (newName === null || !newName.trim()) {
         choice = 'skip';
       } else {
-        await core.invoke('user_file_conflict', { choice: 'rename', newName: newName.trim() });
+        await core.invoke('user_file_conflict', { choice: 'rename', newName: newName.trim(), applyToAll: false });
         return;
       }
     }
-    await core.invoke('user_file_conflict', { choice: choice, newName: null });
+    await core.invoke('user_file_conflict', { choice: choice, newName: null, applyToAll: applyToAll });
   });
 
   // show bluetooth PIN and allow user to choose whether to pair on windows
@@ -411,9 +413,12 @@ function suggestRename(name) {
   return name + ' (copy)';
 }
 
-// Skip / Overwrite / Rename, wearing the fork's dialog dress. Resolves to one of those three
-// strings; dismissing it counts as skipping, which is the only harmless default.
-let showConflict = (name, identical) => {
+// Skip / Overwrite / Rename, wearing the fork's dialog dress. Resolves to {choice, applyToAll};
+// dismissing it counts as skipping this one file, which is the only harmless default.
+//
+// The "apply to all" tick is offered only while files remain (moreFiles): on the last one it would
+// be a control that does nothing.
+let showConflict = (name, identical, moreFiles) => {
   return new Promise((resolve) => {
     let overlay = document.createElement('div');
     overlay.className = 'fork-overlay';
@@ -426,11 +431,38 @@ let showConflict = (name, identical) => {
     body.className = 'fork-info-body';
     body.innerText = `\u201c${name}\u201d is already there`
       + (identical ? ', and it is identical to the one being sent.' : ', with different contents.');
+    box.appendChild(title);
+    box.appendChild(body);
+
+    let applyAll = null;
+    if (moreFiles) {
+      let row = document.createElement('label');
+      row.className = 'fork-check-row';
+      row.style.cursor = 'pointer';
+      applyAll = document.createElement('input');
+      applyAll.type = 'checkbox';
+      let text = document.createElement('span');
+      text.innerText = 'Apply to every remaining file';
+      row.appendChild(applyAll);
+      row.appendChild(text);
+      // Said only when it is ticked, because it only matters then: a repeated rename has no box to
+      // type in, so it becomes "keep both" with an automatic name.
+      let hint = document.createElement('div');
+      hint.className = 'fork-info-hint';
+      hint.innerText = 'Rename will add \u201c (copy)\u201d to each name.';
+      hint.style.display = 'none';
+      applyAll.addEventListener('change', () => {
+        hint.style.display = applyAll.checked ? '' : 'none';
+      });
+      box.appendChild(row);
+      box.appendChild(hint);
+    }
+
     let actions = document.createElement('div');
     actions.className = 'fork-info-actions';
     let finish = (choice) => {
       overlay.remove();
-      resolve(choice);
+      resolve({ choice: choice, applyToAll: !!(applyAll && applyAll.checked) });
     };
     for (let [label, choice] of [['Skip', 'skip'], ['Rename', 'rename'], ['Overwrite', 'overwrite']]) {
       let button = document.createElement('button');
@@ -440,11 +472,16 @@ let showConflict = (name, identical) => {
       button.onclick = () => finish(choice);
       actions.appendChild(button);
     }
-    box.appendChild(title);
-    box.appendChild(body);
     box.appendChild(actions);
     overlay.appendChild(box);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish('skip'); });
+    // Clicking away is "skip this one", never "skip all": a stray click must not decide the
+    // rest of the transfer.
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+        resolve({ choice: 'skip', applyToAll: false });
+      }
+    });
     document.body.appendChild(overlay);
   });
 }

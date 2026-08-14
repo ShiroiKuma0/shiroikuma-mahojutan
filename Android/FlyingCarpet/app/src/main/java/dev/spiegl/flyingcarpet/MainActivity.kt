@@ -934,7 +934,8 @@ class MainActivity : AppCompatActivity() {
     private fun askFileConflict(
         name: String,
         identical: Boolean,
-        answer: (FileConflictChoice) -> Unit,
+        moreFiles: Boolean,
+        answer: (FileConflictAnswer) -> Unit,
     ) {
         val box = ForkDialog.box(this)
         box.addView(ForkDialog.heading(this, "The other device already has this file"))
@@ -960,13 +961,37 @@ class MainActivity : AppCompatActivity() {
         box.addView(ForkDialog.spacer(this, 10))
         box.addView(input)
 
+        // Offered only while files remain: on the last one it would be a control that does nothing.
+        // Said only when it is ticked, because it only matters then -- a repeated rename has no box
+        // to type in, so it becomes "keep both" with an automatic name.
+        val hint = ForkDialog.label(this, "Rename will add \u201c (copy)\u201d to each name.", 13f).apply {
+            alpha = 0.7f
+            visibility = View.GONE
+            setPadding(ForkDialog.dp(this@MainActivity, 34), 0, 0, 0)
+        }
+        val applyToAll = if (moreFiles) {
+            ForkDialog.checkbox(this, "Apply to every remaining file").also {
+                it.setOnCheckedChangeListener { _, checked ->
+                    hint.visibility = if (checked) View.VISIBLE else View.GONE
+                    // A rename that stands for every file names them itself, so there is nothing
+                    // to type; the box goes away again if the tick is taken back.
+                    if (checked) input.visibility = View.GONE
+                }
+                box.addView(ForkDialog.spacer(this, 4))
+                box.addView(it)
+                box.addView(hint)
+            }
+        } else {
+            null
+        }
+
         val dialog = ForkDialog.wrap(this, box, cancelable = false)
         var answered = false
         val finish = { choice: FileConflictChoice ->
             if (!answered) {
                 answered = true
                 dialog.dismiss()
-                answer(choice)
+                answer(FileConflictAnswer(choice, applyToAll?.isChecked == true))
             }
         }
 
@@ -985,9 +1010,12 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(gap(ForkDialog.pill(this, "Skip") { finish(FileConflictChoice.Skip) }))
         // First tap reveals the name field, second tap sends it -- one dialog, no second window.
+        // Under "apply to all" there is no field: the name is derived per file, so one tap is all.
         val renameButton = ForkDialog.pill(this, "Rename") {}
         renameButton.setOnClickListener {
-            if (input.visibility == View.GONE) {
+            if (applyToAll?.isChecked == true) {
+                finish(FileConflictChoice.Rename(""))
+            } else if (input.visibility == View.GONE) {
                 input.visibility = View.VISIBLE
                 input.requestFocus()
             } else {
@@ -999,17 +1027,6 @@ class MainActivity : AppCompatActivity() {
         box.addView(row)
 
         dialog.show()
-    }
-
-    // "example.jpg (copy).jpg" reads worse than "example (copy).jpg": keep the extension last.
-    private fun suggestRename(name: String): String {
-        val dot = name.lastIndexOf('.')
-        val slash = name.lastIndexOf('/')
-        return if (dot > slash + 1) {
-            name.substring(0, dot) + " (copy)" + name.substring(dot)
-        } else {
-            "$name (copy)"
-        }
     }
 
     // shared network mode, sending: ask for the password displayed on the receiving device

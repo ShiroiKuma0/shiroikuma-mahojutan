@@ -205,6 +205,26 @@ fun formatTime(seconds: Double): String {
 // be able to escape the receive directory: reject ".." components and collapse
 // empty/"." ones. Mirrors the desktop and Apple implementations — we don't rely on the
 // SAF provider rejecting ".." display names.
+/**
+ * The "keep both" name for a file the other device already has: "example.jpg" ->
+ * "example (copy).jpg".
+ *
+ * The extension stays last -- "example.jpg (copy).jpg" reads worse and opens worse. Lives here
+ * rather than in the dialog because two callers need it: the rename box pre-fills with it, and a
+ * sticky "rename everything" (ConflictRule.Rename) runs on it with no box to pre-fill. Twinned
+ * with suggest_rename() in core/src/utils.rs and suggestRename() in Flying Carpet/src/main.js.
+ */
+fun suggestRename(name: String): String {
+    val dot = name.lastIndexOf('.')
+    val slash = name.lastIndexOf('/')
+    // A leading dot is a dotfile, not an extension: ".bashrc" keeps its whole name.
+    return if (dot > slash + 1) {
+        name.substring(0, dot) + " (copy)" + name.substring(dot)
+    } else {
+        "$name (copy)"
+    }
+}
+
 fun sanitizeRelativeFilename(filename: String): String {
     val components = filename.split('/').filter { it.isNotEmpty() && it != "." }
     if (components.isEmpty() || components.contains("..")) {

@@ -359,6 +359,13 @@ input[type='color'] {
   padding-top: 10px;
 }
 
+/* The aside under a ticked "apply to all": present, but not competing with the question. */
+.fork-info-hint {
+  font-size: 13px;
+  opacity: 0.7;
+  padding-left: 24px;
+}
+
 .fork-info-actions {
   display: flex;
   flex-direction: row;
