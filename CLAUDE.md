@@ -36,11 +36,24 @@ OS machine — this host). Each upstream release yields both artifacts — see t
 
 ### Versioning
 
+- **Upstream tracking: `release`** — `custom` is rebased onto each upstream **release tag**, never onto
+  upstream's branch tip. The versionName therefore already pins the base exactly (`10.0.4` *is*
+  `v10.0.4`, i.e. `8df022a3`), so the global **`git-versioning`** skill **does NOT apply here** — its
+  own hard gate excludes release-tracking forks, because a date-and-sha pin would restate what
+  `<release>` already says and only ever move when `<release>` moves. Asked and declined 2026-08-12;
+  this line exists so it need not be re-litigated. Applying it would first require switching the fork
+  to rebase onto every upstream commit, which is a change to the branch model, not to the version
+  string.
+
 **Both artifacts** — APK and `.deb` — are versioned `"<release>+<buildNumber>"`, where `<release>` is the
 FlyingCarpet **release** version (the latest `v*` tag / desktop `Cargo.toml`), **not** the stale value
 upstream leaves in Android's `build.gradle` (e.g. Android said `9.0.8` at the `v9.0.10` release).
-`buildNumber` resets to `1` on each upstream rebase and goes **+1 for every delivered build** — never
-reuse a number, never overwrite an older artifact in `~/tmp`.
+`buildNumber` goes **+1 for every delivered build** — never reuse a number, never overwrite an older
+artifact in `~/tmp`. It resets to `1` on an upstream rebase **only when upstream's own Android
+`versionCode` climbs with the release**; when that number stands still (as at `v10.0.4`, which bumped
+only the Apple apps) the counter **carries on instead**, since `versionCode` is
+`<upstream code> * 10000 + buildNumber` and a reset would then build a lower code than the one already
+installed — an uninstallable downgrade. See `NB2` in `Android/FlyingCarpet/app/build.gradle`.
 
 - **The `+N` is ALWAYS zero-padded to three digits** (hard rule, 白い熊 2026-08-01): write `+026`,
   never `+26`. Unpadded counters sort lexicographically wrong — `+10` lands before `+3` — burying the
