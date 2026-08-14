@@ -82,6 +82,47 @@ sealed class FileConflictChoice {
     data object Overwrite : FileConflictChoice()
     data class Rename(val newName: String) : FileConflictChoice()
 }
+
+/**
+ * A conflict answer, plus whether it should stand for every remaining file instead of just this
+ * one. A ten-file folder the peer already has asked ten identical questions before this existed
+ * (白い熊, 2026-08-14). Mirrors FileConflictAnswer in core/src/lib.rs.
+ */
+data class FileConflictAnswer(val choice: FileConflictChoice, val applyToAll: Boolean)
+
+/**
+ * What "apply to all" remembers: the *rule*, never the answer verbatim.
+ *
+ * A rename carries a name, and a name cannot be reused -- sending every remaining file as
+ * "photo (copy).jpg" would pile them all onto one another at the other end. So a sticky rename
+ * stores only the intent, and each file gets its own name from suggestRename(). Mirrors
+ * ConflictRule in core/src/lib.rs.
+ */
+enum class ConflictRule {
+    Skip, Overwrite, Rename;
+
+    /** The rule applied to one file: the only place a sticky rename's name is decided. */
+    fun apply(relativeName: String): FileConflictChoice = when (this) {
+        Skip -> FileConflictChoice.Skip
+        Overwrite -> FileConflictChoice.Overwrite
+        Rename -> FileConflictChoice.Rename(suggestRename(relativeName))
+    }
+
+    val label: String get() = when (this) {
+        Skip -> "skip"
+        Overwrite -> "overwrite"
+        Rename -> "rename"
+    }
+
+    companion object {
+        /** The rule behind an answer, so that the answer can be repeated for later files. */
+        fun of(choice: FileConflictChoice): ConflictRule = when (choice) {
+            is FileConflictChoice.Skip -> Skip
+            is FileConflictChoice.Overwrite -> Overwrite
+            is FileConflictChoice.Rename -> Rename
+        }
+    }
+}
 val zero = ByteArray(8) // meant to represent a 64-bit unsigned 0
 val one = byteArrayOf(0, 0, 0, 0, 0, 0, 0, 1) // meant to represent a 64-bit unsigned 1
 const val chunkSize = 5_000_000
@@ -147,8 +188,12 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     lateinit var enableBluetoothUi: (Boolean) -> Unit
     lateinit var promptForPassword: () -> Unit // shared network mode: sender asks user for the receiver's password
     // "The other device already has this file" -- asked on the SENDING device, which is where the
-    // user who picked the files is. Set by MainActivity; answered through the callback.
-    lateinit var askFileConflict: (String, Boolean, (FileConflictChoice) -> Unit) -> Unit
+    // user who picked the files is. Set by MainActivity; answered through the callback. The third
+    // argument is false on the last file, where "apply to all" has nothing left to apply to.
+    lateinit var askFileConflict: (String, Boolean, Boolean, (FileConflictAnswer) -> Unit) -> Unit
+    // "Apply to all", once ticked, for the rest of THIS transfer. The viewmodel outlives a
+    // transfer, so it is cleared at the start of every send loop as well as in cleanUpTransfer().
+    var conflictRule: ConflictRule? = null
     // True when the peer announced this fork's wire version, i.e. it understands the conflict
     // exchange. A stock peer is spoken to exactly as upstream does.
     var peerIsFork = false
@@ -470,13 +515,15 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
             // sizes are all known here, so the overall bar can be byte-accurate when sending
             totals = Totals(fileStreams.size, files.sumOf { it.length() })
+            // No "apply to all" carried in from a previous transfer.
+            conflictRule = null
             // send files
             for (i in 0 until fileStreams.size) {
                 totals?.fileIndex = i + 1
                 outputText("=========================")
                 outputText("Sending file ${i + 1} of ${fileStreams.size}. Filename: ${files[i].name}.")
                 val path = if (i < filePaths.size) { filePaths[i] } else { "" }
-                sendFile(files[i], fileStreams[i], path)
+                sendFile(files[i], fileStreams[i], path, i + 1 < fileStreams.size)
             }
 
         } else if (mode == Mode.Receiving) {
@@ -509,6 +556,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // radio out of power-save for the rest of the process's life.
         releaseTransferLocks()
         safCache = null
+        conflictRule = null
         // Clear the finished latch. LiveData is sticky, so a value left at true is redelivered to
         // every observer that registers afterwards -- and the Activity re-observes on each
         // recreation, which a fold or a permission dialog is enough to cause. That redelivery
@@ -1499,12 +1547,16 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     }
 
     /** Ask on this device what to do about a file the other device already has. */
-    suspend fun askAboutExistingFile(name: String, identical: Boolean): FileConflictChoice =
+    suspend fun askAboutExistingFile(
+        name: String,
+        identical: Boolean,
+        moreFiles: Boolean,
+    ): FileConflictAnswer =
         kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
             handler.post {
-                askFileConflict(name, identical) { choice ->
+                askFileConflict(name, identical, moreFiles) { answer ->
                     if (continuation.isActive) {
-                        continuation.resumeWith(Result.success(choice))
+                        continuation.resumeWith(Result.success(answer))
                     }
                 }
             }

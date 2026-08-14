@@ -484,6 +484,25 @@ pub fn progress_details(done: u64, total: u64, elapsed_secs: f64) -> String {
     format!("{}\n{}", data, clock)
 }
 
+/// The "keep both" name for a file the other device already has: "example.jpg" -> "example (copy).jpg".
+///
+/// The extension stays last -- "example.jpg (copy).jpg" reads worse and opens worse. Twinned with
+/// suggestRename() in Flying Carpet/src/main.js and in Android's Utilities.kt, which pre-fill the
+/// rename box with the same thing; this copy is the one a sticky "rename everything" runs on, where
+/// there is no box to pre-fill.
+pub fn suggest_rename(name: &str) -> String {
+    let dot = name.rfind('.');
+    // rfind gives a byte index; both are compared as such, and both sit on ASCII delimiters.
+    let slash = name.rfind('/');
+    match dot {
+        // A leading dot is a dotfile, not an extension: ".bashrc" keeps its whole name.
+        Some(dot) if dot > slash.map_or(0, |s| s + 1) => {
+            format!("{} (copy){}", &name[..dot], &name[dot..])
+        }
+        _ => format!("{} (copy)", name),
+    }
+}
+
 pub fn is_compatible(peer_version: u64) -> bool {
     // v10 (shared network mode and the new protocol) is a clean break from earlier
     // versions. If transferring with a higher version, that version decides compatibility.
@@ -503,7 +522,7 @@ mod tests {
         #[derive(Clone)]
         struct RecordingUI(Arc<Mutex<Vec<String>>>);
         impl crate::UI for RecordingUI {
-            fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool) {}
+            fn ask_file_conflict(&self, _n: &str, _l: u64, _i: u64, _same: bool, _more: bool) {}
             fn output(&self, msg: &str) {
                 self.0.lock().expect("lock").push(msg.to_string());
             }
@@ -558,6 +577,24 @@ mod tests {
         assert_eq!(&make_size_readable(198_213), "198.21KB");
         assert_eq!(&make_size_readable(48_732_394), "48.73MB");
         assert_eq!(&make_size_readable(8_273_591_032), "8.27GB");
+    }
+
+    // The name a sticky "rename everything" gives each file. Twinned with suggestRename() in
+    // main.js and Utilities.kt: all three must answer the same, or the same transfer would name
+    // its files differently depending on which app is sending.
+    #[test]
+    fn rename_suggestion_keeps_the_extension_last() {
+        use crate::utils::suggest_rename;
+        assert_eq!(suggest_rename("photo.jpg"), "photo (copy).jpg");
+        assert_eq!(suggest_rename("album/photo.jpg"), "album/photo (copy).jpg");
+        // no extension to keep
+        assert_eq!(suggest_rename("notes"), "notes (copy)");
+        assert_eq!(suggest_rename("album/notes"), "album/notes (copy)");
+        // a leading dot is a dotfile, not an extension
+        assert_eq!(suggest_rename(".bashrc"), ".bashrc (copy)");
+        assert_eq!(suggest_rename("home/.bashrc"), "home/.bashrc (copy)");
+        // only the last dot counts
+        assert_eq!(suggest_rename("archive.tar.gz"), "archive.tar (copy).gz");
     }
 
     #[test]
