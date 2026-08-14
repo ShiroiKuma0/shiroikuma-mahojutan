@@ -8,6 +8,45 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+061 — 2026-08-14
+
+Built on upstream release 10.0.4. One delivered build (`+061`).
+
+### One answer for the whole transfer
+
+- **The file-conflict dialog now carries “Apply to every remaining file”.** Sending a folder the
+  other device already has asked the same question once per file — ten files, ten identical dialogs,
+  each one a stop to walk back to. A ticked answer now stands for the rest of the transfer.
+- **Nothing on the wire changed.** The answer is remembered on the *sending* device, where it is
+  given: a local in the send loop on the desktop, a field cleared at the start of every send loop on
+  the phone (and again in `cleanUpTransfer()`, since the viewmodel outlives a transfer). Each file
+  still sends the same `0`/`1`/`2` it always did, so a device still running `+060` understands every
+  file of the transfer and no new version guard was needed.
+- **A repeated *rename* means “keep both”, not “reuse that name”.** A name is used once; reapplying
+  the one that was typed would send every remaining file under it and pile them all onto the first at
+  the far end. So what is remembered is the *rule*, and each file takes its own `name (copy).ext`.
+  That settles the dialog too: with the box ticked there is nothing to type, so **Rename** is a
+  single click, the name field stays away, and a hint line says where the names will come from. The
+  first file goes through the rule as well, so the answer cannot depend on which file happened to
+  collide first.
+- **The toggle appears only while files remain** — on the last file it would be a control that does
+  nothing. And clicking away from the desktop dialog is still *skip this one*, never *skip all*: a
+  stray click must not decide the rest of the transfer.
+- Left alone deliberately: a file with the same name **and** size is still hashed before the sender
+  can answer, even under a standing *skip all*. Skipping that needs a wire change, which would break
+  conflict handling against the `+060` build already installed on both devices.
+
+### Under it
+
+- `suggest_rename()` now exists in all three places that need it and is tested in all three:
+  `core/src/utils.rs`, Android's `Utilities.kt` (moved out of `MainActivity`, which the sticky path
+  could not reach), and `main.js`. All three must answer the same, or a transfer would name its
+  files differently depending on which app is sending.
+- A protocol test (`transfer_tests::apply_to_all_answers_the_rest`) runs three already-present files
+  through both halves of the exchange over a duplex, for each of the three answers, and asserts the
+  two things nothing else would catch: that the question is put **exactly once**, and that a sticky
+  rename lands three separately named copies rather than three writes to one.
+
 ## 10.0.4+060 — 2026-08-12
 
 Built on upstream release 10.0.4. Two delivered builds (`+059`, `+060`).
