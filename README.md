@@ -24,7 +24,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+060`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+061`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -203,6 +203,11 @@ skipped, a differing one is quietly saved as `(1) name`. Both are decisions made
 whose user is not the one watching the transfer. This fork stops and asks on the **sending** side —
 **skip**, **overwrite**, or **rename** with a pre-filled `name (copy).ext` — and overwriting really
 replaces the file that is there rather than leaving a `(1)` copy beside it.
+
+Asked once, not once per file: tick **Apply to every remaining file** and the answer stands for the
+rest of the transfer, so a folder the other device already has is one dialog rather than ten. A
+repeated *rename* means “keep both” — each file is named for itself, `name (copy).ext`, since a name
+that was typed once cannot be reused.
 
 It needs fields stock does not know, so it is version-guarded: the fork announces itself on the
 wire and only switches the exchange on when both ends are running it. A stock or Apple peer
