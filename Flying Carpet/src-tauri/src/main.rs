@@ -5,7 +5,7 @@
 
 use flying_carpet_core::{
     bluetooth, clean_up_transfer, network, start_transfer, utils, ConnectionMode,
-    FileConflictChoice, InterfaceInfo, SendFile, Transfer, WiFiInterface, UI,
+    FileConflictAnswer, FileConflictChoice, InterfaceInfo, SendFile, Transfer, WiFiInterface, UI,
 };
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -20,6 +20,8 @@ struct FileConflictPayload {
     local_size: u64,
     incoming_size: u64,
     identical: bool,
+    // false on the last file: nothing left for "apply to all" to apply to, so it isn't offered
+    more_files: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -46,7 +48,14 @@ struct GUI {
 impl UI for GUI {
     // The sending side has hit a file the other device already has. Ask, and let
     // user_file_conflict() below carry the answer back to the transfer.
-    fn ask_file_conflict(&self, name: &str, local_size: u64, incoming_size: u64, identical: bool) {
+    fn ask_file_conflict(
+        &self,
+        name: &str,
+        local_size: u64,
+        incoming_size: u64,
+        identical: bool,
+        more_files: bool,
+    ) {
         let window = self.window.lock().expect("Could not lock window mutex");
         window
             .emit(
@@ -56,6 +65,7 @@ impl UI for GUI {
                     local_size,
                     incoming_size,
                     identical,
+                    more_files,
                 },
             )
             .expect("Could not emit fileConflict event");
@@ -290,13 +300,22 @@ fn start_async(
 }
 
 /// The frontend's answer to a file the receiving device already has: "skip", "overwrite" or
-/// "rename" with the new name. Mirrors user_bluetooth_pair.
+/// "rename" with the new name, and whether it stands for every remaining file. Mirrors
+/// user_bluetooth_pair.
 #[tauri::command]
-fn user_file_conflict(choice: String, new_name: Option<String>, state: State<Transfer>) {
-    let answer = match choice.as_str() {
-        "overwrite" => FileConflictChoice::Overwrite,
-        "rename" => FileConflictChoice::Rename(new_name.unwrap_or_default()),
-        _ => FileConflictChoice::Skip,
+fn user_file_conflict(
+    choice: String,
+    new_name: Option<String>,
+    apply_to_all: bool,
+    state: State<Transfer>,
+) {
+    let answer = FileConflictAnswer {
+        choice: match choice.as_str() {
+            "overwrite" => FileConflictChoice::Overwrite,
+            "rename" => FileConflictChoice::Rename(new_name.unwrap_or_default()),
+            _ => FileConflictChoice::Skip,
+        },
+        apply_to_all,
     };
     println!("file conflict: user chose {:?}", answer);
     let conflict_tx = state.conflict_tx.lock().expect("Could not lock conflict_tx");

@@ -20,7 +20,10 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     totals: &mut crate::Totals,
     ui: &T,
     peer_is_fork: bool,
-    conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictChoice>,
+    conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictAnswer>,
+    // "Apply to all", once the user has ticked it: set here, read on every later file.
+    conflict_rule: &mut Option<crate::ConflictRule>,
+    more_files: bool,
 ) -> Result<(), FCError> {
     let mut handle = File::open(file)?;
     let metadata = metadata(file)?;
@@ -37,7 +40,18 @@ pub async fn send_file<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
         // and *this* side decides what happens to it, because this is the side with the user who
         // chose the files. Upstream skips an identical file silently and renames a differing one
         // without asking, which is a decision made on the wrong device.
-        match resolve_conflict(&file, relative_name, size, stream, ui, conflict_rx).await? {
+        match resolve_conflict(
+            &file,
+            relative_name,
+            size,
+            stream,
+            ui,
+            conflict_rx,
+            conflict_rule,
+            more_files,
+        )
+        .await?
+        {
             Some(name) => {
                 if name != relative_name {
                     ui.output(&format!("Sending it as \"{}\".", name));
@@ -174,13 +188,19 @@ async fn send_file_details<S: AsyncWrite + Unpin>(
 ///     when choice == 2: sender -> u64 length + that many bytes of the new relative name
 ///
 /// Returns the name to send the file under, or None to skip it.
+///
+/// The wire is the same whether the answer came from a dialog or from a standing "apply to all":
+/// the sticky rule is remembered on this side only, so a peer running an older build of the fork
+/// still understands every file of the transfer.
 async fn resolve_conflict<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
     file: &Path,
     relative_name: &str,
     size: u64,
     stream: &mut S,
     ui: &T,
-    conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictChoice>,
+    conflict_rx: &mut tokio::sync::mpsc::Receiver<crate::FileConflictAnswer>,
+    conflict_rule: &mut Option<crate::ConflictRule>,
+    more_files: bool,
 ) -> Result<Option<String>, FCError> {
     let status = stream.read_u64().await?;
     if status == 0 {
@@ -201,13 +221,40 @@ async fn resolve_conflict<S: AsyncRead + AsyncWrite + Unpin, T: UI>(
         relative_name,
         if identical { " (identical)" } else { " (a different file)" }
     ));
-    // Drop any answer left over from a question the user was too slow to answer.
-    while conflict_rx.try_recv().is_ok() {}
-    ui.ask_file_conflict(relative_name, size, size, identical);
-    let choice = match conflict_rx.recv().await {
-        Some(choice) => choice,
-        // The channel is gone: the transfer was cancelled while the dialog was up.
-        None => crate::FileConflictChoice::Skip,
+
+    let choice = match *conflict_rule {
+        // Already answered for the whole transfer: don't ask again, just say what is being done.
+        Some(rule) => {
+            let choice = rule.apply(relative_name);
+            ui.output(&format!("Applying \"{}\" to this one too.", rule.label()));
+            choice
+        }
+        None => {
+            // Drop any answer left over from a question the user was too slow to answer.
+            while conflict_rx.try_recv().is_ok() {}
+            ui.ask_file_conflict(relative_name, size, size, identical, more_files);
+            let answer = match conflict_rx.recv().await {
+                Some(answer) => answer,
+                // The channel is gone: the transfer was cancelled while the dialog was up.
+                None => crate::FileConflictAnswer {
+                    choice: crate::FileConflictChoice::Skip,
+                    apply_to_all: false,
+                },
+            };
+            if answer.apply_to_all {
+                let rule = crate::ConflictRule::of(&answer.choice);
+                *conflict_rule = Some(rule);
+                ui.output(&format!(
+                    "Applying \"{}\" to every remaining file the other device already has.",
+                    rule.label()
+                ));
+                // Through the rule even for this first file: a rename that is to be repeated takes
+                // its name from suggest_rename, not from a box the dialog never showed.
+                rule.apply(relative_name)
+            } else {
+                answer.choice
+            }
+        }
     };
 
     match choice {
