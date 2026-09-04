@@ -548,9 +548,13 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
-     * The Export/Import section's three rows. The automation switch and token sit **inside** this
-     * section, directly below the panel entry — the sister-app convention: this is a backup feature,
-     * so 白い熊 finds it where backup lives, and every app looks the same.
+     * The Export/Import section's rows. The automation controls sit **inside** this section,
+     * directly below the panel entry — the sister-app convention: this is a backup feature, so
+     * 白い熊 finds it where backup lives, and every app looks the same.
+     *
+     * Four rows in contract order: the panel, the master switch (default ON),
+     * 「Use authorization token?」 (default OFF), and the token itself — which is shown only while
+     * the switch above it is on.
      */
     private fun addExportImportRows(parent: LinearLayout) {
         val (summary, warn) = ExportImportStatus.summary(this)
@@ -564,7 +568,9 @@ class SettingsActivity : AppCompatActivity() {
             },
         )
 
-        // Master switch — default OFF. Nothing on the automation surface answers until it is on.
+        // Master switch — default ON since v2 of the contract. It stays a switch rather than being
+        // removed because it is the only way to close this app off, and a feature that can be
+        // turned on but never off is one 白い熊 cannot retreat from.
         val switch = SwitchCompat(this).apply {
             isChecked = AutomationAuth.enabled(this@SettingsActivity)
             thumbTintList = ColorStateList.valueOf(accent)
@@ -574,12 +580,13 @@ class SettingsActivity : AppCompatActivity() {
         parent.addView(
             settingRow(
                 "Automation export",
-                rowSummary("Let 白い熊 自由作業盤's 保存復元 run trigger this app's export over the token-gated intent.", null),
+                rowSummary("Let sister apps trigger this app's export, and let 白い熊 応用管理 back its data up and put it back.", null),
                 widget = switch,
             ) { switch.toggle() },
         )
 
-        // Token row — tap copies the WHOLE token, "Regenerate" replaces it.
+        // Token row — tap copies the WHOLE token, "Regenerate" replaces it. Built before the switch
+        // that governs it so the switch's listener has a row to show and hide.
         val tokenSummary = rowSummary(AutomationAuth.abbreviate(AutomationAuth.token(this)), null)
         val regenerate = TextView(this).apply {
             text = "Regenerate"
@@ -593,15 +600,42 @@ class SettingsActivity : AppCompatActivity() {
                 toast("New token — update anywhere you pasted the old one.")
             }
         }
+        val tokenRow = settingRow("Automation token", tokenSummary, widget = regenerate) {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboard?.setPrimaryClip(
+                ClipData.newPlainText("mahojutan automation token", AutomationAuth.token(this)),
+            )
+            toast("Token copied to the clipboard.")
+        }
+
+        // 「Use authorization token?」 — default OFF (v2). A pasted secret cannot survive a wipe, and
+        // the case this contract now serves is 応用管理 restoring apps onto a clean phone where
+        // nothing has been configured and nobody has pasted anything.
+        val requireToken = SwitchCompat(this).apply {
+            isChecked = AutomationAuth.requireToken(this@SettingsActivity)
+            thumbTintList = ColorStateList.valueOf(accent)
+            trackTintList = ColorStateList.valueOf(accent)
+            setOnCheckedChangeListener { _, checked ->
+                AutomationAuth.setRequireToken(this@SettingsActivity, checked)
+                // Hidden when the token is not being asked for: a 48-character secret sitting under
+                // an off switch invites 白い熊 to paste it somewhere it will do nothing.
+                tokenRow.visibility = if (checked) View.VISIBLE else View.GONE
+            }
+        }
         parent.addView(
-            settingRow("Automation token", tokenSummary, widget = regenerate) {
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                clipboard?.setPrimaryClip(
-                    ClipData.newPlainText("mahojutan automation token", AutomationAuth.token(this)),
-                )
-                toast("Token copied to the clipboard.")
-            },
+            settingRow(
+                "Use authorization token?",
+                rowSummary(
+                    "Off: any sister app may drive this app's automation. On: a caller must also present the token below. " +
+                        "Either way the data door checks the caller's package, uid and signing certificate.",
+                    null,
+                ),
+                widget = requireToken,
+            ) { requireToken.toggle() },
         )
+
+        tokenRow.visibility = if (AutomationAuth.requireToken(this)) View.VISIBLE else View.GONE
+        parent.addView(tokenRow)
     }
 
     /** kxkb's settings-row shape: title over summary at the control indent, optional widget right. */
