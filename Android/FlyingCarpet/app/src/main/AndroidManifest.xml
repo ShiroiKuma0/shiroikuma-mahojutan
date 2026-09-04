@@ -60,6 +60,22 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- Fork: the automation data door (AutomationDataService) writes into a descriptor the caller
+         opened, and a backgrounded app writing for any length of time is frozen mid-stream on this
+         phone — which would truncate an archive underneath a success reply. specialUse because none
+         of the platform's own categories describes "hand this app's own backup to 応用管理";
+         FOREGROUND_SERVICE_SPECIAL_USE is the API 34+ permission that goes with it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Fork: without this, setPackage() on our reply and progress broadcasts fails SILENTLY on
+         Android 11+ — the export runs, writes correctly, and is never heard of. Both automation
+         callers are named: 白い熊 応用管理 drives the data door, 白い熊 自由作業盤 the 保存復元 batch. -->
+    <queries>
+        <package android:name="shiroikuma.oyokanri" />
+        <package android:name="shiroikuma.jiyusagyoban" />
+    </queries>
+
     <application
 
         android:allowBackup="true"
@@ -101,17 +117,52 @@
             android:exported="false"
             android:label="@string/uiSettingsTitle"
             android:theme="@style/Theme.FlyingCarpet.Settings" />
-        <!-- Fork: the sister-app state-export automation contract. No android:permission — the
-             caller (白い熊 自由作業盤) cannot hold one; the token in AutomationAuth is the gate, and
-             the master switch on the UI page defaults to OFF. -->
+        <!-- Fork: the sister-app state-export automation contract (v2). No android:permission —
+             this is the UNAUTHENTICATED half of the surface, and deliberately so: everything here
+             only writes where it was told to and reports what it did. The switch in AutomationAuth
+             now defaults ON and the token is opt-in, because a pasted secret cannot survive the
+             wipe this whole feature exists to recover from. CANCEL_EXPORT must live on this
+             exported receiver rather than on a service, so 自由作業盤's 中止 button can actually
+             reach the export it started. -->
         <receiver
             android:name="dev.spiegl.flyingcarpet.StateExportReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="${applicationId}.action.EXPORT_STATE" />
                 <action android:name="${applicationId}.action.LIST_CATEGORIES" />
+                <action android:name="${applicationId}.action.CANCEL_EXPORT" />
             </intent-filter>
         </receiver>
+
+        <!-- Fork: the v2 data door. A broadcast cannot tell you who sent it; a provider can, so
+             this is where anything that moves data through a caller-supplied descriptor lives —
+             and the only place `import` exists at all. No android:permission: a custom one would
+             have to be `normal` (any app may hold it) or `signature` (impossible — every app in
+             this family has its own keystore), and neither buys anything the caller check in
+             AutomationCallers does not already give. -->
+        <provider
+            android:name="dev.spiegl.flyingcarpet.automation.AutomationProvider"
+            android:authorities="${applicationId}.automation"
+            android:exported="true" />
+
+        <service
+            android:name="dev.spiegl.flyingcarpet.automation.AutomationDataService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Automation data export/import"
+                tools:targetApi="s" />
+        </service>
+
+        <!-- Fork: capability discovery. Manifest meta-data rather than a query intent, because a
+             frozen app cannot be asked anything and 白い熊 freezes aggressively — 応用管理 reads
+             these across every installed package at once, with MATCH_UNINSTALLED_PACKAGES |
+             MATCH_DISABLED_COMPONENTS, to answer "can this app be backed up" for an app that is
+             currently disabled. An app without them is simply not offered for data backup. -->
+        <meta-data android:name="shiroikuma.automation.contract" android:value="2" />
+        <meta-data android:name="shiroikuma.automation.format" android:value="1" />
+        <meta-data android:name="shiroikuma.automation.min_format" android:value="1" />
 
         <activity
             android:name="com.journeyapps.barcodescanner.CaptureActivity"
