@@ -8,6 +8,94 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+062 — 2026-09-04
+
+Built on upstream release 10.0.4. One delivered build (`+062`), shipping both artifacts: the signed
+Android APK and the amd64 `.deb`. Nothing in the transfer engine, the wire protocol or the desktop
+app changed — a `+061` device and a `+062` device transfer with each other exactly as before.
+
+This release is the fork's half of the sister-app **automation contract v2**: the backup surface that
+lets 白い熊's other apps trigger this one's export, and now take its data and give it back.
+
+### The token stops being the gate
+
+- **Automation ships on.** The master switch now defaults to **on**, and a new 「Use authorization
+  token?」 switch defaults to **off**. A pasted secret cannot survive a wipe, and the case this
+  contract now serves is a companion app restoring apps *and their data* onto a clean phone, where
+  nothing has been configured and nobody has pasted anything.
+- **A token sent to us while the switch is off is ignored, never refused.** Tokens sit in task
+  arguments and workspace variables that outlive the setting they were pasted for; refusing one
+  would turn a switch nobody flipped into half a backup batch mysteriously failing.
+- **Turn it on and it works exactly as before** — the 24-byte token is generated on the phone,
+  compared in constant time, and kept in a preferences file the backup itself never reads, so it can
+  never travel inside an archive.
+- **The token row is hidden while no token is being asked for.** A 48-character secret sitting under
+  an off switch only invites pasting it somewhere it will do nothing.
+- Both checks now live in **one** function, so “automation disabled” and “bad token” cannot drift
+  apart into two different answers.
+
+### A second, stricter door — data out, and data back
+
+- **A `ContentProvider` at `<app id>.automation`** answers `describe`, `export`, `import` and
+  `cancel`. It exists because a broadcast cannot tell you who sent it, and because a companion app
+  drawing a row per installed app needs a synchronous answer rather than a round trip.
+- **The caller is checked three ways**: an exact package name — never a prefix, since any sideloaded
+  app may call itself `shiroikuma.something` — then the uid the kernel reports, then a **pinned
+  signing certificate**. Every app in this family has its own key, so each permitted caller is
+  pinned by name.
+- **Payload moves through a file descriptor the caller opens**, never a path and never a URI. The
+  caller assembles a backup in a temporary place and renames it on commit, and encrypts and
+  checksums per file it knows about — a file this app dropped in itself would be renamed out from
+  under it, sit in plaintext inside an encrypted backup, and go unverified. The descriptor is
+  duplicated before it leaves the call and closed on every path out.
+- **Restoring is possible only here.** It never gets a broadcast action: the open door is exported
+  without a permission, so an import there would let any app on the phone flatten this one.
+- **`describe` answers a header without exporting anything** — app id, version, archive format and
+  the oldest format this build can still read — so a restore can be refused before megabytes are
+  streamed into an app that would reject them.
+- **The work runs in a foreground service**, because a backgrounded app writing for any length of
+  time is frozen mid-stream on this phone, and a truncated archive under a success reply is the
+  worst possible failure: indistinguishable from a good backup until the day it is restored.
+- **An import is spooled to the cache and validated there** rather than read whole into memory, and
+  nothing is written until the entire archive has arrived and been checked.
+- **The app can be listed while it is frozen.** Three manifest entries advertise the contract, so a
+  companion app can answer “can this be backed up” for a disabled package without waking it.
+
+### Stopping an export, and never leaving half a backup behind
+
+- **`CANCEL_EXPORT` is new** — this fork had no way to stop a running export from outside. It is
+  declared on the exported receiver, because a stop button living on a private service cannot be
+  reached by the app that started the export.
+- **The export unwinds at a category boundary**, never mid-write, so a cancelled archive is never
+  half a file.
+- **The archive is now written to `<name>.part` and renamed into place only once it is complete.**
+  It used to be written straight to its final name, so a cancelled or killed export left a truncated
+  file behind — and since every app's backups share one folder sorted by date, that file silently
+  became “the latest backup” of this app. A cancelled run now leaves the folder exactly as it found
+  it.
+- **The cancelled run still reports that it was cancelled**, through the same single-fire guard that
+  makes a success and a failure mutually exclusive, so a stopped export can never be confused with
+  one still running unseen.
+- **A cancel that arrives when nothing is running does nothing at all** — not an error, not a crash.
+- **Only one export at a time**, guarded in memory and released on every exit path. The flag is
+  deliberately never persisted: one crash would otherwise wedge backups for good.
+
+### Progress that says which row is running
+
+- Every progress message now carries **the category being written**, so a caller's panel highlights
+  the right row instead of guessing from a count.
+- Real counts, never a percentage, at most one message every 500 ms with the final one always sent —
+  and one implementation shared by both doors, rather than two copies to drift apart.
+
+### Fixes found while porting
+
+- **`<queries>` was missing from the manifest entirely.** Without it, `setPackage` on this app's
+  reply and progress broadcasts fails **silently** on Android 11+, and the package lookups behind
+  the identity check are visibility-filtered too. Both automation callers are now named.
+- **A refused foreground-service start no longer strands the caller's open file.** The descriptor is
+  taken into single ownership the moment it arrives and closed if the start is refused — a real leak
+  on a path that only appears when the system declines a background start.
+
 ## 10.0.4+061 — 2026-08-14
 
 Built on upstream release 10.0.4. One delivered build (`+061`).
