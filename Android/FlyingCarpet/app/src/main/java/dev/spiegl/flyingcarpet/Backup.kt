@@ -105,14 +105,22 @@ object Backup {
 
     /**
      * Write [cats] to [out] as one backup ZIP. [onProgress] fires after each category with
-     * `(done, total, label)` — the automation receiver turns those into real-count broadcasts.
-     * A failing category is reported but never aborts the others.
+     * `(done, total, cat)` — the automation surface turns those into real-count broadcasts, and
+     * needs the category itself because the contract's progress carries the id (which row is
+     * running) alongside the label (what 白い熊 reads). A failing category is reported but never
+     * aborts the others.
+     *
+     * [isCancelled] is polled **between categories only** — at a write boundary, never mid-write —
+     * so a cancelled export unwinds without a half-written entry. It stops early and says nothing
+     * about why: the caller knows it asked, and it is the caller that deletes the partial file and
+     * sends `ERROR:cancelled`.
      */
     fun export(
         context: Context,
         cats: Set<Cat>,
         out: OutputStream,
-        onProgress: ((done: Int, total: Int, label: String) -> Unit)? = null,
+        onProgress: ((done: Int, total: Int, cat: Cat) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null,
     ): BackupResult {
         val lines = mutableListOf<String>()
         val errors = mutableListOf<String>()
@@ -123,6 +131,7 @@ object Backup {
         ZipOutputStream(out).use { zip ->
             for (cat in Cat.values()) {
                 if (cat !in cats) continue
+                if (isCancelled?.invoke() == true) break
                 try {
                     val count = when (cat) {
                         Cat.APPEARANCE -> writeJson(zip, "${cat.id}.json", dumpPrefs(context) { isAppearanceKey(it) })
@@ -135,7 +144,7 @@ object Backup {
                     errors.add(cat.label)
                 }
                 done++
-                onProgress?.invoke(done, total, cat.label)
+                onProgress?.invoke(done, total, cat)
             }
 
             val manifest = JSONObject()
@@ -188,8 +197,16 @@ object Backup {
     // ── Import ───────────────────────────────────────────────────────────────────────────────
 
     /** The categories a ZIP actually holds, per its manifest (falling back to the entries present). */
-    fun categoriesIn(zip: ByteArray): Set<Cat> {
-        val files = readZip(zip)
+    fun categoriesIn(zip: ByteArray): Set<Cat> = categoriesIn(readZip(zip))
+
+    /**
+     * The same, from a spooled file. The automation data door streams a caller's descriptor to disk
+     * and reads it from there rather than growing a byte array of the whole archive — the contract's
+     * rule for large imports, and free here because the ZIP plumbing already works from a stream.
+     */
+    fun categoriesIn(zip: File): Set<Cat> = categoriesIn(readZip(zip))
+
+    private fun categoriesIn(files: Map<String, ByteArray>): Set<Cat> {
         val manifest = files[MANIFEST]?.let { runCatching { JSONObject(String(it, Charsets.UTF_8)) }.getOrNull() }
         val ids = manifest?.optJSONArray("categories")
         if (ids != null) {
@@ -201,8 +218,14 @@ object Backup {
     }
 
     /** Apply the selected [cats] that [zip] contains. Absent categories are skipped, never an error. */
-    fun import(context: Context, zip: ByteArray, cats: Set<Cat>): BackupResult {
-        val files = readZip(zip)
+    fun import(context: Context, zip: ByteArray, cats: Set<Cat>): BackupResult =
+        import(context, readZip(zip), cats)
+
+    /** The same, from a spooled file — see [categoriesIn] for why the data door hands us one. */
+    fun import(context: Context, zip: File, cats: Set<Cat>): BackupResult =
+        import(context, readZip(zip), cats)
+
+    private fun import(context: Context, files: Map<String, ByteArray>, cats: Set<Cat>): BackupResult {
         val manifest = files[MANIFEST]?.let { runCatching { JSONObject(String(it, Charsets.UTF_8)) }.getOrNull() }
         val platform = manifest?.optString("platform").orEmpty()
         require(platform.isEmpty() || platform == PLATFORM) {
@@ -334,9 +357,13 @@ object Backup {
 
     // ── ZIP plumbing ─────────────────────────────────────────────────────────────────────────
 
-    private fun readZip(bytes: ByteArray): Map<String, ByteArray> {
+    private fun readZip(bytes: ByteArray): Map<String, ByteArray> = readZip(bytes.inputStream())
+
+    private fun readZip(file: File): Map<String, ByteArray> = file.inputStream().use { readZip(it) }
+
+    private fun readZip(source: InputStream): Map<String, ByteArray> {
         val out = LinkedHashMap<String, ByteArray>()
-        ZipInputStream(bytes.inputStream()).use { zip ->
+        ZipInputStream(source).use { zip ->
             while (true) {
                 val entry: ZipEntry = zip.nextEntry ?: break
                 if (!entry.isDirectory) out[entry.name] = zip.readBytesFully()
