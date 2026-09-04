@@ -9,7 +9,8 @@
 A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**: a full
 yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles every single surface, a live
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
-Export/Import of everything you have set, a token-gated hook for headless backups, external font
+Export/Import of everything you have set, a headless backup surface that lets a sister app back
+this one up — and put it back on a wiped phone — external font
 support, a custom icon, a share-sheet target, and a rebranded Linux desktop build shipped as an
 amd64 `.deb` — plus a **5 GHz Wi-Fi Direct hotspot** that transfers three times faster than stock,
 Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog when the other
@@ -24,7 +25,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+061`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+062`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -250,14 +251,28 @@ timestamped archive — `shiroikuma-mahojutan_2026-07-25_23-44-06.zip`.
 
 ---
 
-## 🤖 Backed up without lifting a finger
+## 🤖 Backed up without lifting a finger — and restored onto a wiped phone
 
-The Android app answers a token-gated intent, so an automation app can trigger its export headlessly
-— no screen, no tapping — and get back the path, the byte count and a human-readable size. Progress
-comes back as real counts, never a percentage. It stays completely closed until you turn the switch
-on: the master switch defaults to **off**, the 24-byte token is generated on the phone, compared in
-constant time, and lives in a file the backup itself never touches, so it can never leak into an
-archive.
+The Android app answers a headless export request, so an automation app can trigger its backup with
+no screen and no tapping, and get back the path, the byte count and a human-readable size. Progress
+comes back as **real counts, never a percentage**, naming the category being written so the caller
+can light up the right row. A long export can be **stopped from where it was started**, and a
+cancelled run leaves the backup folder exactly as it found it — the archive is written to a `.part`
+file and renamed into place only once it is complete, so a half-finished backup can never be mistaken
+for the newest one.
+
+It also answers a second, stricter door: a companion app can take this app's data **and give it
+back**, which is what makes a clean phone recoverable. That door never takes a path — the caller
+opens the destination and passes a file descriptor, so the backup stays encrypted and checksummed by
+the app that owns it — and it never trusts a name: the caller is checked by exact package, by the uid
+the kernel reports, and against a **pinned signing certificate**. Restoring is only possible there,
+never over the open door.
+
+**No secret to paste.** The switch ships **on** and 「Use authorization token?」 ships **off**, because
+a pasted token cannot survive the wipe this feature exists to recover from. Turn it on and a caller
+must present the 24-byte token as well — generated on the phone, compared in constant time, and kept
+in a file the backup itself never touches, so it can never leak into an archive. A token sent while
+the switch is off is quietly ignored rather than refused, so nothing breaks when you change your mind.
 
 ---
 
