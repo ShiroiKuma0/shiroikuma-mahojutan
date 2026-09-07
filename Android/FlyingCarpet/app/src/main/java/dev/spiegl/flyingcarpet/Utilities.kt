@@ -1,12 +1,20 @@
 package dev.spiegl.flyingcarpet
 
 import android.app.Application
+import android.content.ContentResolver
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.system.Os
+import android.system.OsConstants
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -290,6 +298,187 @@ fun getFilesInDir(dir: DocumentFile, pathSoFar: String): Array<Pair<DocumentFile
             val name = file.name ?: continue
             val newDirectoryPath = if (pathSoFar.isEmpty()) name else "$pathSoFar/$name"
             allFiles += getFilesInDir(file, newDirectoryPath)
+        }
+    }
+    return allFiles
+}
+
+// ── Shared folders ────────────────────────────────────────────────────────────
+// The share sheet hands over URIs; it does not say what they are, and a folder shared from a
+// file manager arrives looking exactly like a file. It cannot even be caught by opening it: on
+// Linux open(2) on a directory with O_RDONLY succeeds, so ContentResolver.openInputStream()
+// returns a perfectly healthy-looking stream and the first read() fails with EISDIR, halfway
+// into a transfer that has already announced a size (白い熊, 2026-09-06: "in transfer it
+// complains it's a dir"). So the check has to happen at selection time, before anything is
+// opened, and the folder has to be flattened into files the way the folder picker does.
+
+/** Whether a shared URI names a directory. Covers the three shapes senders actually use: a
+ *  `file://` path, a SAF tree URI, and a plain SAF document URI of the directory mime type. */
+fun sharedUriIsDirectory(context: Context, uri: Uri): Boolean {
+    if (uri.scheme == ContentResolver.SCHEME_FILE) {
+        return uri.path?.let { File(it).isDirectory } ?: false
+    }
+    if (DocumentsContract.isTreeUri(uri)) {
+        return true
+    }
+    val mimeType = try {
+        context.contentResolver.getType(uri)
+    } catch (e: Exception) {
+        null
+    }
+    if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+        return true
+    }
+    if (rawDirectoryFor(uri) != null) {
+        return true
+    }
+    // The definitive test, and the only one that holds for every sender. A file manager sharing
+    // through a plain FileProvider answers none of the questions above usefully: its getType()
+    // guesses a mime from the name and returns something ordinary (白い熊, 2026-09-07: Total
+    // Commander offered a folder called "... 1080p.10bit" as a 3.44KB file), its URI is not a
+    // document URI so it carries no document id to resolve, and its openFile() hands over a real
+    // directory descriptor without complaint. So ask the kernel what the descriptor actually is,
+    // which no provider can misreport.
+    return probeDescriptor(context, uri)?.isDirectory == true
+}
+
+/** What the descriptor behind a shared URI turns out to be: whether it is a directory, and the
+ *  path it lives at when the kernel will name it. Null if it could not be opened at all. */
+private class DescriptorProbe(val isDirectory: Boolean, val path: File?)
+
+private fun probeDescriptor(context: Context, uri: Uri): DescriptorProbe? = try {
+    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+        val isDirectory = OsConstants.S_ISDIR(Os.fstat(pfd.fileDescriptor).st_mode)
+        // An open descriptor names itself in /proc, whoever opened it and whatever the URI looked
+        // like. This is what recovers a path from a FileProvider URI, which has none to parse.
+        val path = if (isDirectory) {
+            try {
+                File(Os.readlink("/proc/self/fd/${pfd.fd}")).takeIf { it.isDirectory }
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        DescriptorProbe(isDirectory, path)
+    }
+} catch (e: Exception) {
+    null
+}
+
+/** Flattens a shared directory into the same `(file, relative path)` pairs the folder picker
+ *  produces, seeded with the folder's own name so the peer recreates it (see
+ *  docs/send-folder-behavior.md). Returns null when the folder cannot be read at all — an empty
+ *  array means the folder really is empty, which is a different thing to say to the user. */
+fun expandSharedDirectory(context: Context, uri: Uri): Array<Pair<DocumentFile, String>>? {
+    val treeUri = when {
+        uri.scheme == ContentResolver.SCHEME_FILE -> null
+        // A tree URI carries a grant over its children, so SAF can list it outright.
+        DocumentsContract.isTreeUri(uri) -> uri
+        // A plain document URI grants us that one document and nothing below it, so listing its
+        // children over SAF is not ours to do. Some providers answer anyway once the id is
+        // rebuilt as a tree URI, which costs one query to find out.
+        else -> rebuildAsTreeUri(uri)
+    }
+    // Empty is not taken as an answer here: androidx swallows the SecurityException a refused
+    // query throws and hands back an empty listing, which is indistinguishable from an empty
+    // folder. Fall through and let the filesystem settle it.
+    treeUri?.let { DocumentFile.fromTreeUri(context, it) }
+        // Never seeded with "": that would send the folder's contents loose instead of recreating
+        // the folder, and DISPLAY_NAME is one more query that can come back empty on a URI we were
+        // only half granted. The document id always carries the name as its last path component.
+        ?.let { dir -> getFilesInDir(dir, dir.name?.takeIf { it.isNotBlank() } ?: nameFromUri(uri)) }
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { return it }
+    // Everything else goes through the real filesystem, which this app can read because it holds
+    // MANAGE_EXTERNAL_STORAGE for the Export / Import page. That covers `file://` shares and the
+    // document URIs whose provider refused the tree query above; it cannot cover a folder living
+    // in a cloud app, which has no path to walk and is reported as unreadable instead.
+    val dir = rawDirectoryFor(uri) ?: probeDescriptor(context, uri)?.path
+    if (dir != null && hasAllFilesAccess()) {
+        return getFilesInRawDir(dir, dir.name, 0)
+    }
+    Log.i("Share", "No way in to shared folder $uri (all-files access: ${hasAllFilesAccess()})")
+    // Neither route found anything. A tree URI we could open is trusted to mean an empty folder;
+    // anything else we simply could not read.
+    return if (treeUri != null && treeUri == uri) arrayOf() else null
+}
+
+/** The folder's own name recovered from the URI itself, for when DISPLAY_NAME cannot be read. */
+private fun nameFromUri(uri: Uri): String =
+    uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':').orEmpty()
+
+private fun rebuildAsTreeUri(uri: Uri): Uri? {
+    val authority = uri.authority ?: return null
+    val docId = try {
+        DocumentsContract.getDocumentId(uri)
+    } catch (e: Exception) {
+        null
+    } ?: return null
+    return try {
+        DocumentsContract.buildTreeDocumentUri(authority, docId)
+    } catch (e: Exception) {
+        null
+    }
+}
+
+fun hasAllFilesAccess(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+
+/** The on-disk directory a shared URI points at, or null if it does not point at one. Document
+ *  ids are `<volume>:<relative path>` for the platform's storage provider, and some file managers
+ *  use an absolute path as the id outright. */
+private fun rawDirectoryFor(uri: Uri): File? {
+    if (uri.scheme == ContentResolver.SCHEME_FILE) {
+        return uri.path?.let { File(it) }?.takeIf { it.isDirectory }
+    }
+    val docId = try {
+        if (DocumentsContract.isTreeUri(uri)) {
+            DocumentsContract.getTreeDocumentId(uri)
+        } else {
+            DocumentsContract.getDocumentId(uri)
+        }
+    } catch (e: Exception) {
+        null
+    } ?: return null
+    val candidates = mutableListOf<String>()
+    if (docId.startsWith("/")) {
+        candidates += docId
+    }
+    val parts = docId.split(':', limit = 2)
+    if (parts.size == 2 && parts[1].isNotEmpty()) {
+        val (volume, relative) = parts
+        if (volume.equals("primary", ignoreCase = true)) {
+            candidates += "${Environment.getExternalStorageDirectory()}/$relative"
+        }
+        candidates += "/storage/$volume/$relative"
+    }
+    return candidates.map { File(it) }.firstOrNull { it.isDirectory }
+}
+
+// The java.io twin of getFilesInDir, wrapping each file so the rest of the send path cannot tell
+// the difference: DocumentFile.fromFile() gives a file:// uri, which openInputStream() and
+// hashFile() both accept. Depth-limited because this one walks a real filesystem, where a
+// symlink pointing at its own ancestor would otherwise recurse for ever.
+private const val MAX_RAW_DIR_DEPTH = 64
+
+private fun getFilesInRawDir(
+    dir: File,
+    pathSoFar: String,
+    depth: Int,
+): Array<Pair<DocumentFile, String>> {
+    var allFiles: Array<Pair<DocumentFile, String>> = arrayOf()
+    if (depth > MAX_RAW_DIR_DEPTH) {
+        return allFiles
+    }
+    val children = dir.listFiles() ?: return allFiles
+    for (child in children.sortedBy { it.name }) {
+        if (child.isFile) {
+            allFiles += DocumentFile.fromFile(child) to pathSoFar
+        } else if (child.isDirectory) {
+            val name = child.name
+            val newDirectoryPath = if (pathSoFar.isEmpty()) name else "$pathSoFar/$name"
+            allFiles += getFilesInRawDir(child, newDirectoryPath, depth + 1)
         }
     }
     return allFiles
