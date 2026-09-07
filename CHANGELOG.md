@@ -8,6 +8,68 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+064 — 2026-09-07
+
+Built on upstream release 10.0.4. Two delivered builds (`+063`, `+064`), each shipping both
+artifacts: the signed Android APK and the amd64 `.deb`. Android only — nothing in the transfer
+engine, the wire protocol or the desktop app changed, so a `+062` device and a `+064` device
+transfer with each other exactly as before.
+
+One thing: **a folder shared to the app is now sent as a folder.**
+
+### The bug
+
+Sharing a folder to 魔法絨毯 from a file manager armed it as though it were a file, and then killed
+the transfer partway through. `open(2)` on a directory with `O_RDONLY` succeeds on Linux, so
+`ContentResolver.openInputStream()` handed back a perfectly healthy stream; the header went out
+carrying the directory's own 3.44 KB "size"; and the first `read()` in `Send.kt` failed with
+`EISDIR (Is a directory)` — after the transfer had connected, negotiated and announced the file.
+The only way to send a folder was to open the app and pick it again through 「Directory to send」.
+
+### Detection, done properly
+
+Whether a shared URI is a folder cannot be settled by asking politely. A file manager sharing
+through a plain `FileProvider` answers every cheap question wrongly:
+
+- **its mime type is a guess from the name** — Total Commander offered a folder called
+  `Unfamiliar -- [7][107] (2026) 1080p.10bit` as an ordinary 3.44 KB file, because the name looks
+  like it ends in an extension;
+- **its URI is not a document URI**, so there is no document id to resolve into a path or a tree;
+- **`openFile()` hands over a real directory descriptor** without a word of complaint.
+
+So the app asks the kernel, which no provider can misreport: `S_ISDIR` on the `fstat` of the
+descriptor the sender itself opened. The cheaper checks — tree URI, directory mime type, `file://`
+path — still run first and cover the other senders; the descriptor probe is the backstop that
+catches everything else.
+
+### Expansion, by whichever route the URI allows
+
+- A **tree URI** carries a grant over its children and is listed directly.
+- A **document URI** grants only itself, so its id is rebuilt as a tree URI and tried.
+- Everything else is walked on the filesystem — the path recovered by `readlink`-ing
+  `/proc/self/fd/<n>`, which is the only way a `FileProvider` URI will give one up. Depth-limited,
+  because a symlink pointing at its own ancestor would otherwise recurse for ever.
+
+The folder's own name seeds the relative paths, so the receiving device recreates the folder and its
+subdirectories rather than dumping the contents loose — the same rule 「Directory to send」 already
+followed.
+
+### Failing out loud
+
+- A folder held by a **cloud app** has no path to walk and cannot be expanded by either route. It is
+  now skipped with a line saying so, and the rest of the share still goes — instead of arming a
+  transfer that would die at the first read.
+- An **empty** folder says it is empty, which is a different sentence from "could not read it".
+
+### Mixed shares
+
+Files *and* folders in one share now work as a single selection. The share path never wrote the
+relative-path list at all, and the three lists — files, streams, paths — are paired by position, so
+loose files would otherwise have inherited the folder's path.
+
+「Directory to send」 still opens the picker unconditionally, so there is always a way to choose a
+different folder than the one that was shared.
+
 ## 10.0.4+062 — 2026-09-04
 
 Built on upstream release 10.0.4. One delivered build (`+062`), shipping both artifacts: the signed

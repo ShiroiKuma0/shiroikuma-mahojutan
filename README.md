@@ -11,7 +11,8 @@ yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles 
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a headless backup surface that lets a sister app back
 this one up — and put it back on a wiped phone — external font
-support, a custom icon, a share-sheet target, and a rebranded Linux desktop build shipped as an
+support, a custom icon, a share-sheet target that accepts whole folders, and a rebranded Linux
+desktop build shipped as an
 amd64 `.deb` — plus a **5 GHz Wi-Fi Direct hotspot** that transfers three times faster than stock,
 Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog when the other
 device already has a file, and the Bluetooth work an EMUI phone needs to pair at all.
@@ -25,7 +26,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+062`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+064`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -126,6 +127,14 @@ The Android app answers `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for any type, s
 anywhere — a file manager, a gallery, another app — can be sent by choosing 白い熊 魔法絨毯 from the
 share sheet. The selection arrives preloaded and the search for the receiving device starts on its
 own, so a share is one tap rather than a launch, a mode, and a picker.
+
+**Folders too**, which is harder than it sounds. A shared folder is indistinguishable from a file
+by every cheap test: a file manager sharing through an ordinary `FileProvider` guesses a mime type
+from the name and reports something perfectly normal, its URI carries no document id to resolve,
+and opening the folder *succeeds* — `open(2)` on a directory returns a healthy descriptor, and only
+the first `read()` fails. So the app asks the kernel instead, `fstat`s the descriptor the sender
+itself opened, and expands the folder into its contents before a byte moves. Share a folder and the
+whole tree is recreated on the other device, exactly as if you had picked it in the app.
 
 ---
 
