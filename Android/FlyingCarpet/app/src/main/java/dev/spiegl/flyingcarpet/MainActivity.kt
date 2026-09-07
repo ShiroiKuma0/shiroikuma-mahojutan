@@ -3,6 +3,7 @@ package dev.spiegl.flyingcarpet
 import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
+import android.content.ContentResolver
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
@@ -255,7 +256,9 @@ class MainActivity : AppCompatActivity() {
     // ── Share target ──────────────────────────────────────────────────────────
     // Files shared from a file manager (or anywhere else) arrive here. We preselect them for
     // sending and start looking for the receiving device, so sharing is one action rather than
-    // opening the app and picking the same files again.
+    // opening the app and picking the same files again. Folders count as files here: one shared
+    // straight from the file manager is expanded into its contents, so it never has to be picked
+    // again through "Directory to send" (白い熊, 2026-09-06).
     private fun handleShareIntent(intent: Intent?): Boolean {
         val action = intent?.action ?: return false
         val uris: List<Uri> = when (action) {
@@ -289,19 +292,46 @@ class MainActivity : AppCompatActivity() {
         viewModel.files = mutableListOf()
         viewModel.fileStreams = mutableListOf()
         viewModel.filePaths = mutableListOf()
+        // Names of the folders among the share, for the summary line at the end.
+        val folderNames = mutableListOf<String>()
         for (uri in uris) {
-            val file = DocumentFile.fromSingleUri(applicationContext, uri)
-            val stream = try {
-                contentResolver.openInputStream(uri)
-            } catch (e: Exception) {
-                null
+            // A shared folder is expanded here, exactly as "Directory to send" expands a picked
+            // one, so the peer receives the folder and its contents instead of the transfer dying
+            // on the directory itself. See sharedUriIsDirectory() in Utilities.kt for why this
+            // cannot be left to openInputStream() to discover.
+            if (sharedUriIsDirectory(applicationContext, uri)) {
+                val name = sharedFolderName(uri)
+                val contents = expandSharedDirectory(applicationContext, uri)
+                if (contents == null) {
+                    viewModel.outputText(
+                        "Could not read $name, ignoring it." +
+                                if (!hasAllFilesAccess()) {
+                                    " Give this app All-Files-Access in Android's settings, or" +
+                                            " send the folder with \"Directory to send\"."
+                                } else {
+                                    " Only a folder on this device's own storage can be sent;" +
+                                            " one held by a cloud app cannot."
+                                }
+                    )
+                    continue
+                }
+                if (contents.isEmpty()) {
+                    viewModel.outputText("$name is empty, ignoring it.")
+                    continue
+                }
+                folderNames.add(name)
+                for ((file, path) in contents) {
+                    if (!addSharedFile(file, file.uri, path)) {
+                        viewModel.outputText("Could not open \"${file.name}\" in $name, ignoring it.")
+                    }
+                }
+                continue
             }
-            if (file == null || stream == null) {
+            val file = DocumentFile.fromSingleUri(applicationContext, uri)
+            if (file == null || !addSharedFile(file, uri, "")) {
                 viewModel.outputText("Could not open a shared file, ignoring it.")
                 continue
             }
-            viewModel.files.add(file)
-            viewModel.fileStreams.add(stream)
         }
         if (viewModel.files.isEmpty()) {
             viewModel.outputText("Could not open any of the shared files.")
@@ -311,10 +341,46 @@ class MainActivity : AppCompatActivity() {
         findViewById<MaterialButtonToggleGroup>(id.modeGroup).check(id.sendButton)
         viewModel.mode = Mode.Sending
         sharedSelectionPending = true
+        val count = viewModel.files.size
+        val from = when (folderNames.size) {
+            0 -> "another app"
+            1 -> folderNames[0]
+            else -> "${folderNames.size} folders"
+        }
         viewModel.outputText(
-            "Sharing ${viewModel.files.size} file${if (viewModel.files.size == 1) "" else "s"} from another app."
+            "Sharing $count file${if (count == 1) "" else "s"} from $from."
         )
         return true
+    }
+
+    // Appends one file to the pending selection, keeping files, fileStreams and filePaths index
+    // aligned -- MainViewModel pairs them by position, so a file added without its path entry
+    // would silently take the next file's folder. Returns false if the stream would not open.
+    private fun addSharedFile(file: DocumentFile, uri: Uri, path: String): Boolean {
+        val stream = try {
+            contentResolver.openInputStream(uri)
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        viewModel.files.add(file)
+        viewModel.fileStreams.add(stream)
+        viewModel.filePaths.add(path)
+        return true
+    }
+
+    // For the log lines only: the folder's own name in quotes, however it was shared, falling back
+    // to a phrase that still reads as a sentence when no name can be got at.
+    private fun sharedFolderName(uri: Uri): String {
+        val name = if (uri.scheme == ContentResolver.SCHEME_FILE) {
+            uri.lastPathSegment
+        } else {
+            try {
+                DocumentFile.fromSingleUri(applicationContext, uri)?.name
+            } catch (e: Exception) {
+                null
+            } ?: uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
+        }
+        return name?.takeIf { it.isNotBlank() }?.let { "\"$it\"" } ?: "the shared folder"
     }
 
     // The share sheet hands us files; it does not hand us a decision. This used to call
@@ -864,7 +930,10 @@ class MainActivity : AppCompatActivity() {
         when (viewModel.mode) {
             Mode.Sending -> {
                 if (viewModel.sendFolder) {
-                    // Picking a directory replaces whatever the share sheet handed us.
+                    // Picking a directory replaces whatever the share sheet handed us -- including
+                    // a shared folder, which is armed like any other selection and confirmed with
+                    // the files button. This button stays the way to choose a different one
+                    // (白い熊, 2026-09-06).
                     sharedSelectionPending = false
                     folderPicker.launch(Uri.EMPTY)
                 } else if (sharedSelectionPending) {

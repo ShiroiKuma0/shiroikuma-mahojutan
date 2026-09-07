@@ -25,11 +25,11 @@ plugins {
 // still, the counter continues instead. upstreamVersionCode always mirrors upstream verbatim.
 def releaseVersionName = "10.0.4"   // = latest upstream `v*` tag
 def upstreamVersionCode = 24        // = upstream Android defaultConfig.versionCode
-def buildNumber = 62                // fork build; reset to 1 each upstream bump (see NB2)
+def buildNumber = 64                // fork build; reset to 1 each upstream bump (see NB2)
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
-def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240062
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240064
 
 // Release signing: read from a gitignored keystore.properties at the Gradle
 // project root, falling back to SIGNING_* env vars. Without either, the release
