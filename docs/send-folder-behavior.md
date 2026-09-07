@@ -141,3 +141,49 @@ The iOS/macOS half of this lives in `Apple/` (`shared/Transfer.swift`,
 No wire-format bytes changed, so this is not a protocol break and needs no version bump —
 but shipping one repo without the other would restore exactly the user-visible inconsistency
 this removes.
+
+## Fork addition: folders arriving through the share sheet (2026-09-06)
+
+Android only. A folder shared to the app from a file manager used to be armed as if it were a
+file and then killed the transfer partway through — `open(2)` on a directory with `O_RDONLY`
+succeeds on Linux, so `ContentResolver.openInputStream()` returned a healthy-looking stream
+and the first `read()` in `Send.kt` failed with `EISDIR`, after the size had already been
+announced. 白い熊 had to fall back to picking the same folder again through "Directory to
+send".
+
+`handleShareIntent()` now classifies each shared URI before opening anything
+(`sharedUriIsDirectory()`, `Utilities.kt`) and expands the folders
+(`expandSharedDirectory()`), seeding `filePaths` with the folder's own name — so a shared
+folder produces exactly the selection the folder picker would have produced, and the rule at
+the top of this document holds for it unchanged.
+
+Three URI shapes have to be handled, because senders do not agree on one:
+
+| Shape | How it is expanded |
+|---|---|
+| SAF **tree** URI | the grant covers the children — `DocumentFile.fromTreeUri()` + `getFilesInDir()` |
+| SAF **document** URI of `MIME_TYPE_DIR` | the grant covers that one document only; the id is rebuilt with `buildTreeDocumentUri()` and tried, then the filesystem fallback below |
+| `file://` | walked with `java.io.File` via `getFilesInRawDir()`, each file wrapped in `DocumentFile.fromFile()` |
+| a plain **FileProvider** URI | neither of the above: settled by `fstat`-ing the descriptor, and the path recovered by `readlink`-ing `/proc/self/fd/<n>` |
+
+That last row is why detection cannot rest on the mime type. A file manager sharing through an
+ordinary `FileProvider` answers every cheap question wrongly: `getType()` guesses a mime from
+the name and returns something perfectly ordinary (白い熊, 2026-09-07: Total Commander offered a
+folder named `... 1080p.10bit` as a 3.44KB file), the URI is not a document URI so it carries no
+document id to resolve, and `openFile()` hands over a real directory descriptor without
+complaint. `probeDescriptor()` therefore asks the kernel — `S_ISDIR` on the `fstat` of the
+descriptor the provider itself opened — which no provider can misreport, and recovers the path
+from `/proc/self/fd`, which a FileProvider URI has no other way to give up.
+
+The filesystem fallback maps a document id (`primary:Download/foo`) to a real path and is
+legitimate here only because the fork already holds `MANAGE_EXTERNAL_STORAGE` for the
+Export / Import page. It is depth-limited against symlink loops. A folder held by a cloud app
+has no path to walk and cannot be expanded by either route; that case says so plainly instead
+of arming a transfer that would die at the first read.
+
+Mixed shares (files *and* folders in one share) work as a single selection — `addSharedFile()`
+appends to `files`, `fileStreams` and `filePaths` together, because `MainViewModel` pairs the
+three by position.
+
+"Directory to send" still opens the picker unconditionally (白い熊, 2026-09-06), so there is
+always a way to choose a different folder than the one that was shared.
