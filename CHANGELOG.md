@@ -8,6 +8,67 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+067 — 2026-09-10
+
+Built on upstream release 10.0.4. Three delivered builds (`+065`, `+066`, `+067`), each shipping
+both artifacts. **This one changes the desktop as well as Android**, so update both ends: the GATT
+characteristics' security flags are part of the contract between them.
+
+One thing, and it is a retraction as much as a fix: **the app no longer pairs over Bluetooth at
+all.**
+
+### The symptom
+
+A pairing dialog on every transfer, on both screens. Then, worse, a direction that stopped working
+outright — one phone sat on 「Advertising…」 while the other counted to ninety seconds and gave up
+with `status 133`, Android's catch-all GATT failure. Clearing the pairings fixed it for a while and
+it always came back. Sending to and from the Linux desktop asked for a PIN every time too.
+
+### The cause
+
+The three characteristics carrying the OS, the SSID and the password were declared
+`ENCRYPTED_MITM`, which can only be read over a bonded, MITM-authenticated link. So the app called
+`createBond()`.
+
+Android has no public API to advertise at a stable address. Every pairing therefore landed on
+whatever resolvable private address the peer was wearing at that moment, and Android filed a **new**
+bond record instead of refreshing the existing one. From there it compounds: a controller's
+resolving list holds only a handful of identity keys, so once it fills the peer stops resolving,
+`bondState` reads `BOND_NONE` on a device that is demonstrably bonded, the app pairs again — and in
+goes another record.
+
+Counted on the two test phones: **fifteen bond records for one peer**, thirty-seven bonds in total,
+against the other phone's five. The phone with thirty-seven was the one that failed as GATT central,
+every time, in exactly the direction that made it connect out. The desktop was never really the same
+fault — it advertises at its permanent public address, so nothing about it needs resolving.
+
+### The fix
+
+The characteristics become plain on all three platforms, and both `createBond()` call sites go with
+the helper that held one. Nothing pairs, so nothing accumulates. The central reads the OS
+characteristic immediately instead of bonding first and waiting for `BOND_BONDED` to re-issue the
+read. Android, Linux (`secure_read`/`secure_write`) and Windows (`GattProtectionLevel::Plain`) move
+in one commit — a peer still demanding encryption would force the bonding the others no longer do.
+
+### The trade
+
+The credential exchange is no longer encrypted at the link layer. For the few hundred milliseconds
+of the handshake, someone within Bluetooth range could read the transfer password off the air. That
+is a deliberate choice, taken knowingly, and the reasoning sits in the code comment beside the
+permissions so it is not quietly reverted later. Everything after the handshake is unaffected: the
+transfer itself is still Noise-encrypted with a key derived from that password, exactly as before.
+
+### A wrong turn, recorded
+
+Build `+065` shipped a "duplicate bond" pruner and made things materially worse before this was
+understood. A dual-mode bond is **one** bond that Android exposes as **two** `BluetoothDevice`
+entries — one at the classic address, one at the LE address, carrying the same name — and the
+pruner read that as a duplicate and removed one. Removing either entry destroys the whole bond on
+that side, leaving the peer holding keys this device had forgotten: a one-sided removal, the exact
+thing `docs/bluetooth-field-guide.md` says never to do. That is what turned the repeated PIN prompts
+into failed reads. `+066` reverted it wholesale and added the diagnostics that made the fifteen
+records countable; `+067` removes the reason to bond in the first place.
+
 ## 10.0.4+064 — 2026-09-07
 
 Built on upstream release 10.0.4. Two delivered builds (`+063`, `+064`), each shipping both

@@ -15,7 +15,7 @@ support, a custom icon, a share-sheet target that accepts whole folders, and a r
 desktop build shipped as an
 amd64 `.deb` — plus a **5 GHz Wi-Fi Direct hotspot** that transfers three times faster than stock,
 Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog when the other
-device already has a file, and the Bluetooth work an EMUI phone needs to pair at all.
+device already has a file, and a Bluetooth credential exchange that needs no pairing at all.
 
 Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.mahojutan`, dpkg package
 `shiroikuma-mahojutan`).
@@ -26,7 +26,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+064`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+067`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -225,7 +225,22 @@ transfers exactly as before and never sees the extra fields.
 
 ---
 
-## 📶 Bluetooth that actually pairs
+## 📶 Bluetooth that needs no pairing
+
+**Nothing pairs any more.** The three characteristics carrying the OS, the SSID and the password
+used to require an encrypted, MITM-authenticated link — which means a bond. Android has no public
+API to advertise at a stable address, so every pairing landed on whatever random address the peer
+happened to be wearing, and Android filed a *new* bond record rather than refreshing the old one.
+It compounds: a controller's resolving list holds only a handful of keys, so once it fills the peer
+stops resolving, the app pairs again, and in goes another record. One of the two test phones
+reached **fifteen bond records for the other phone** — thirty-seven in total, against the other
+phone's five — a pairing dialog on every transfer, and finally a direction that would not connect
+at all, because the address it dialled was one nothing answered on any more.
+
+The characteristics are plain on all three platforms now, so there is no pairing, no dialog, and
+nothing accumulates in your Bluetooth settings. The cost is worth stating plainly: the few hundred
+milliseconds of the credential handshake are no longer encrypted at the link layer, so someone in
+Bluetooth range at that moment could read the transfer password off the air.
 
 Everything between a Linux desktop and an EMUI phone that stood between “advertising” and a
 transfer, found with an HCI trace and both devices' own logs: an advertisement over the 31-byte
