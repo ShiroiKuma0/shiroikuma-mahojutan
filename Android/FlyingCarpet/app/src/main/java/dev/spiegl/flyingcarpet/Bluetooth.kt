@@ -74,6 +74,50 @@ val OS_CHARACTERISTIC_UUID: UUID = UUID.fromString("BEE14848-CC55-4FDE-8E9D-2E0F
 val SSID_CHARACTERISTIC_UUID: UUID = UUID.fromString("0D820768-A329-4ED4-8F53-BDF364EDAC75")
 val PASSWORD_CHARACTERISTIC_UUID: UUID = UUID.fromString("E1FA8F66-CF88-4572-9527-D5125A2E0762")
 
+// ── Bond diagnostics (logging only, no behaviour) ─────────────────────────────
+// +065 tried to stop the repeated pairing dialog and made things worse. It removed what it took to
+// be a duplicate bond record -- but a dual-mode bond is ONE bond that Android exposes as TWO
+// BluetoothDevice entries, one at the classic/public address and one at the LE address, carrying
+// the same name. Removing either entry destroys the whole bond on this side while the peer keeps
+// its keys: the one-sided removal law 4 of docs/bluetooth-field-guide.md forbids, and the direct
+// cause of the status-18 read failures and the pairing churn that followed it. Measured on
+// 白い熊's skhmx, 2026-09-09: bonded 21:11:10.573, btif_dm_remove_bond 21:11:33.078, and the
+// classic half at BOND_STATE_NONE 19ms later.
+//
+// Three mechanisms have now been guessed at and all three were wrong, so this build guesses at
+// nothing at all. It only records what each createBond() decision actually saw. It goes through
+// outputText so it lands in the on-device transcript: skhmxt's app logs never reach logcat, and
+// the transcript is the only way to read that phone.
+@SuppressLint("MissingPermission")
+fun bondDiagnostics(context: Context, device: BluetoothDevice, role: String): String {
+    fun describe(d: BluetoothDevice): String {
+        val name = try { d.name } catch (e: Exception) { null }
+        val type = try {
+            when (d.type) {
+                BluetoothDevice.DEVICE_TYPE_CLASSIC -> "CLASSIC"
+                BluetoothDevice.DEVICE_TYPE_LE -> "LE"
+                BluetoothDevice.DEVICE_TYPE_DUAL -> "DUAL"
+                else -> "UNKNOWN"
+            }
+        } catch (e: Exception) { "?" }
+        val bond = try {
+            when (d.bondState) {
+                BluetoothDevice.BOND_BONDED -> "BONDED"
+                BluetoothDevice.BOND_BONDING -> "BONDING"
+                else -> "NONE"
+            }
+        } catch (e: Exception) { "?" }
+        return "${d.address} $type $bond name=${name ?: "null"}"
+    }
+    val bonded = try {
+        val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        manager?.adapter?.bondedDevices?.joinToString("; ") { describe(it) } ?: "unavailable"
+    } catch (e: Exception) {
+        "unreadable (${e.javaClass.simpleName})"
+    }
+    return "BOND-DIAG [$role] peer ${describe(device)} || bonded set: $bonded"
+}
+
 // How many times to re-ask for a characteristic that comes back "not encrypted" while a bond
 // already exists, before calling the bond stale and saying so.
 private const val MAX_ENCRYPTED_READ_RETRIES = 3
@@ -237,21 +281,6 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
         }
     }
 
-    @SuppressLint("MissingPermission")
-    private fun startPairingWith(device: BluetoothDevice) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-            && ActivityCompat.checkSelfPermission(application, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
-        {
-            return
-        }
-        if (device.bondState == BluetoothDevice.BOND_BONDED) {
-            return
-        }
-        outputText("Pairing has to start on this side — asking to pair, accept it on both screens")
-        if (!device.createBond()) {
-            outputText("Could not start pairing with the other device")
-        }
-    }
 
     // stop advertising once the peer has actually engaged with our service. never call this from
     // onConnectionStateChange -- see the comment there.
@@ -370,7 +399,25 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             val characteristic = BluetoothGattCharacteristic(
                 characteristicUuid,
                 BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
-                BluetoothGattCharacteristic.PERMISSION_READ_ENCRYPTED_MITM or BluetoothGattCharacteristic.PERMISSION_WRITE_ENCRYPTED_MITM,
+                // Plain permissions, deliberately. An ENCRYPTED_MITM characteristic can only be
+                // read over a bonded, MITM-authenticated link, and requiring one is what made this
+                // app pair at all. Android has no public API to advertise at a stable address, so
+                // every pairing lands on whatever random address the peer wore at that moment and
+                // Android files a NEW bond record instead of refreshing the old one. Worse, it
+                // accelerates: the controller's resolving list holds only a handful of IRKs, so once
+                // it fills the peer stops resolving, bondState reads NONE, we pair again, and in
+                // goes another record. 白い熊's 白い熊二代目 reached FIFTEEN bond records for one
+                // phone that way (2026-09-10; 37 bonds in total, against the other phone's 5), and
+                // once a peer could no longer be resolved its transfers died on 30-second connect
+                // timeouts with GATT status 133.
+                //
+                // The trade, chosen by 白い熊 on 2026-09-10: the BLE exchange is no longer
+                // link-encrypted, so someone in Bluetooth range during the few hundred milliseconds
+                // of the handshake could read the transfer password off the air. In return there is
+                // no pairing, no dialog, and nothing accumulates. The desktop must agree --
+                // core/src/{linux,windows}/peripheral.rs drop their secure flags in the SAME commit,
+                // exactly as with is_hosting(); split them and the two sides stop talking.
+                BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE,
             )
             service.addCharacteristic(characteristic)
         }
@@ -409,10 +456,10 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // agent shows the matching passkey, and both confirm.
                 // Only while we are advertising for a transfer, so an unrelated LE connection
                 // (a watch, earbuds) is never dragged into a pairing.
-                if (weAreAdvertiser && !bluetoothReceiver.exchangeComplete
-                    && !bluetoothReceiver.tearingDown && device != null) {
-                    startPairingWith(device)
-                }
+                // Nothing to do here any more. This used to start the pairing from this side,
+                // because the characteristics needed a bonded link and EMUI can only present the
+                // numeric comparison when it is the side that asks for it. They are plain now, so
+                // there is nothing to bond for -- and not bonding is the entire point.
                 // deliberately NOT stopping the advertiser here. this callback fires for LE links
                 // that have nothing to do with us -- on EMUI/Kirin a watch, earbuds or a system
                 // service connecting is enough -- and stopping here took us silently off the air
@@ -1320,20 +1367,10 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // agent shows the matching passkey, and the read goes out afterwards. The bond
                 // receiver re-issues pendingRead when BOND_BONDED arrives.
                 val peer = gatt.device
-                val bonded = try {
-                    peer?.bondState == BluetoothDevice.BOND_BONDED
-                } catch (e: SecurityException) {
-                    false
-                }
-                if (!bonded && peer != null) {
-                    pendingRead = OS_CHARACTERISTIC_UUID
-                    outputText("Pairing first — accept it on both screens")
-                    if (!peer.createBond()) {
-                        outputText("Could not start pairing; asking for the details anyway")
-                        read(OS_CHARACTERISTIC_UUID)
-                    }
-                    return
-                }
+                peer?.let { outputText(bondDiagnostics(application, it, "central")) }
+                // Straight to the read. This used to bond first and wait for BOND_BONDED to
+                // re-issue it, because the characteristic was ENCRYPTED_MITM. It is plain now, so
+                // the read needs no bond, and asking for one only littered the bond store.
                 read(OS_CHARACTERISTIC_UUID)
             }
 

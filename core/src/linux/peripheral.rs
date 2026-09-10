@@ -74,7 +74,8 @@ fn get_os_characteristic(
         uuid: Uuid::parse_str(OS_CHARACTERISTIC_UUID).unwrap(),
         read: Some(CharacteristicRead {
             read: true,
-            secure_read: true,
+            // Plain, matching Android -- see the permissions comment in Bluetooth.kt.
+            secure_read: false,
             // so this is a pub type CharacteristicReadFun = Box<dyn Fn(CharacteristicReadRequest) -> Pin<Box<dyn Future<Output = ReqResult<Vec<u8>>> + Send>> + Send + Sync>;
             // a box containing function, that takes a characteristicreadrequest, and returns a pin box containing an async future, that returns a byte vec
             fun: Box::new(move |req| {
@@ -93,7 +94,8 @@ fn get_os_characteristic(
         write: Some(CharacteristicWrite {
             write: true,
             write_without_response: false, // TODO: remove?
-            secure_write: true,
+            // Plain, matching Android -- see the permissions comment in Bluetooth.kt.
+            secure_write: false,
             method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, req| {
                 // let value = value_write.clone();
                 let thread_tx = write_tx.clone();
@@ -127,7 +129,8 @@ fn get_ssid_characteristic(tx: mpsc::Sender<BluetoothMessage>, ssid: String) -> 
         uuid: Uuid::parse_str(SSID_CHARACTERISTIC_UUID).unwrap(),
         read: Some(CharacteristicRead {
             read: true,
-            secure_read: true,
+            // Plain, matching Android -- see the permissions comment in Bluetooth.kt.
+            secure_read: false,
             fun: Box::new(move |req| {
                 let ssid = ssid.clone();
                 let thread_tx = read_tx.clone();
@@ -150,7 +153,8 @@ fn get_ssid_characteristic(tx: mpsc::Sender<BluetoothMessage>, ssid: String) -> 
         write: Some(CharacteristicWrite {
             write: true,
             write_without_response: false,
-            secure_write: true,
+            // Plain, matching Android -- see the permissions comment in Bluetooth.kt.
+            secure_write: false,
             method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, req| {
                 let thread_tx = write_tx.clone();
                 async move {
@@ -183,7 +187,8 @@ fn get_password_characteristic(
         uuid: Uuid::parse_str(PASSWORD_CHARACTERISTIC_UUID).unwrap(),
         read: Some(CharacteristicRead {
             read: true,
-            secure_read: true,
+            // Plain, matching Android -- see the permissions comment in Bluetooth.kt.
+            secure_read: false,
             fun: Box::new(move |req| {
                 let password = password.clone();
                 let thread_tx = read_tx.clone();
@@ -206,7 +211,8 @@ fn get_password_characteristic(
         write: Some(CharacteristicWrite {
             write: true,
             write_without_response: false,
-            secure_write: true,
+            // Plain, matching Android -- see the permissions comment in Bluetooth.kt.
+            secure_write: false,
             method: CharacteristicWriteMethod::Fun(Box::new(move |new_value, req| {
                 let thread_tx = write_tx.clone();
                 async move {
