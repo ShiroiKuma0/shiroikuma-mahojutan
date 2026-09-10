@@ -90,10 +90,10 @@ impl BluetoothPeripheral {
         gatt_operand_parameters.SetCharacteristicProperties(
             GattCharacteristicProperties::Read | GattCharacteristicProperties::Write,
         )?;
-        gatt_operand_parameters
-            .SetReadProtectionLevel(GattProtectionLevel::EncryptionAndAuthenticationRequired)?;
-        gatt_operand_parameters
-            .SetWriteProtectionLevel(GattProtectionLevel::EncryptionAndAuthenticationRequired)?;
+        // Plain, matching Android and Linux. All three declare the same characteristics, and a
+        // peer still demanding encryption would force the bonding the other two no longer do.
+        gatt_operand_parameters.SetReadProtectionLevel(GattProtectionLevel::Plain)?;
+        gatt_operand_parameters.SetWriteProtectionLevel(GattProtectionLevel::Plain)?;
         gatt_operand_parameters.SetUserDescription(&HSTRING::from("Flying Carpet"))?; // TODO: set this for each characteristic?
 
         // let local_service = self.service_provider.Service()?;
