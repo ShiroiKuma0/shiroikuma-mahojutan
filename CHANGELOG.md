@@ -8,6 +8,121 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+075 — 2026-09-11
+
+Built on upstream release 10.0.4. Eight delivered builds (`+068` … `+075`), each shipping both
+artifacts. **Both ends must be on `+075`** — the paired offer's wire format changed.
+
+**Paired devices**: send to a device you already know, in one tap, with nothing to do on the
+device receiving.
+
+### Why this exists
+
+Upstream's Shared Network mode already had the hard parts — the Noise transport, HMAC-authenticated
+LAN discovery, the whole file protocol. What it did not have was **identity** or **standing
+presence**, so every transfer still meant arming both devices within the same minute and agreeing a
+ten-character password by QR or Bluetooth. That choreography, not the transport, was what made
+sending a file a ceremony.
+
+### Major features
+
+- **A device group.** One 32-byte random key, carried once by QR — scanned, or read off the grouped
+  base32 printed under it. From it everything else derives with a labelled HMAC: the presence key,
+  the Noise pre-shared key, and the Wi-Fi credential a paired hotspot uses.
+- **It is stronger than what it replaces.** There is no PBKDF2 on this path and there must not be:
+  stretching exists to slow a dictionary attack on a low-entropy password, and a 256-bit random key
+  has no dictionary. The residual gap named in `docs/shared-network-crypto.md` §2 — an in-path
+  attacker's offline crack of the ~58-bit generated password — simply does not exist here.
+- **Presence** on a new record (`FCPR`, port 3291), deliberately *not* an extension of `FCAP`: that
+  layout is pinned by a known-answer vector shared with Apple, is keyed on the transfer password,
+  and answers a different question.
+- **A standing receiver.** A paired device serves transfers while its app is open, so the sending
+  side needs no arming on the far end at all.
+- **The hotspot needs no password either.** Both ends derive it, and an Android host's Wi-Fi Direct
+  group name is `DIRECT-fc-` plus that password — so the one SSID a *generated* password could never
+  produce is exactly the one a *derived* password can.
+- **And it needs nothing tapped over there.** A paired device advertises over BLE while it is open,
+  so a sender reaches it over the LAN where the network passes traffic between clients, and over
+  Bluetooth where it does not — which is the case the hotspot route exists for. The offer carries a
+  `request` field for this; version 2, in Rust and Kotlin together.
+
+### Built for this network, not a textbook one
+
+- **The receiver does not beacon; it answers.** The sender shouts, and only while a device list is
+  on screen — which puts the cost on the device whose screen is already lit.
+- **Broadcast, not just multicast.** On 2026-08-10 a transfer died on a `/21` that dropped multicast
+  between clients. The subnet broadcast address needs no group join and is what arrives there.
+- **Each peer's last address is remembered and tried first.** A unicast packet reaches a phone whose
+  Wi-Fi driver is filtering multicast and broadcast, which is its state nearly all of the time — so
+  an idle receiver needs no `MulticastLock` in the ordinary case.
+- **Wi-Fi, never cellular.** Presence asks `ConnectivityManager` for a Wi-Fi or Ethernet network,
+  the same rule the shared-network transfer already applied. Walking `NetworkInterface` instead
+  returns `rmnet_data0` before `wlan0` on a phone with mobile data on, which sent every probe out
+  over the carrier's interface to a broadcast address computed from a carrier-assigned `/30`.
+
+### Interface
+
+- **Two rows of device pills** under the settings pill: this network on top, hotspot below. One
+  `HorizontalScrollView` holding a column per device, so the rows align by construction and scroll
+  together. **Hold** a pill to rename, set its folder, or forget it; **drag** it to reorder.
+- **A share into the app asks which device**, rather than asking to press a button labelled “Files to
+  send” — which at that moment was untrue, since pressing it sent the share rather than picking
+  files. The pause itself stays: it exists so Hotspot and Shared Network can be chosen, and now they
+  are — by a **remembered toggle**, not two more buttons.
+- **The send button stops lying**: with a share armed it reads 「共有された N 件を送る」, themeable as
+  `start.sharedText`.
+- **Per-device receive folders**, seeded from the main screen's folder when a device is paired, and
+  **red when unset** — a device with no folder refuses every transfer, which should be visible
+  rather than discovered when something fails to arrive.
+- **A local alias** per device, which survives every announcement — the announced name is refreshed
+  constantly, so a rename stored there would be undone by the next scan.
+- **A Wi-Fi icon** on the network pills: a tinted vector, because the `📶` emoji renders in full
+  colour and would be the one coloured thing on a strictly yellow-on-black page.
+- **The Devices pill** is a pill, styled from the UI page like its neighbour, rather than the stock
+  filled Material button it inflated as.
+
+### Stay reachable (opt-in, off by default)
+
+- A foreground service, `specialUse` — the app already holds that permission for the automation
+  door, and Android 15+ caps a `dataSync` service at six hours in any twenty-four, which an
+  always-on receiver would hit daily.
+- **What it costs is written on the switch**, including that these phones freeze background apps and
+  that EMUI's protected-app list matters as much as the battery exemption.
+- Per-device auto-accept, an optional size ceiling, and a notification naming what arrived — without
+  which an unattended transfer is indistinguishable from nothing having happened.
+- **BLE wake** for the hotspot route, off by default and only meaningful while the above is on: an
+  8-byte manufacturer-data payload tagged with a rolling HMAC of the group key. No GATT, no bonding,
+  no device name in the advertisement — none of the things that have cost this fork dearly.
+
+### Fixes
+
+- **A paired receive refused itself, every time.** The busy guard read `transferIsRunning` live, and
+  both callers set it immediately before running the transfer whose offer exchange calls the guard —
+  so it was always looking at the very transfer it was being asked about. It now takes the answer as
+  a parameter, sampled before arming, which makes the wrong version hard to write again.
+- **Pairing was one-way.** The device that *showed* the code only ever answers probes, and both
+  apps discarded any peer they had not already heard of — so it never listed the device that had
+  just joined it. Fixed on Android and on the desktop.
+- **Every Wi-Fi Direct and `LocalOnlyHotspot` failure now says what it means** instead of printing a
+  number: `reason 2` reads as “the Wi-Fi framework is busy; a Wi-Fi Direct group may already exist”.
+- **The fallback hotspot asks for what it needs.** `createGroup` can return `BUSY` before the
+  framework checks anything, so the transfer could arrive at `startLocalOnlyHotspot` with the
+  permission question unanswered; it threw, and the raw framework message was printed with no
+  context. It now checks below API 33 for itself, checks the master Location switch separately, and
+  resumes *the fallback* rather than restarting Wi-Fi Direct.
+- **And waits for the removed group to let go of the radio** before asking for it, since
+  `removeGroup()` is asynchronous and reports nothing.
+- **`onFailed` no longer leaves the transfer hanging** on a hotspot that will never exist.
+- **The UI page's four “白い熊 魔法絨毯 UI” button settings finally generate CSS.** Background, border
+  colour, border width and corner radius have been in the catalog since the page was written and
+  never did anything; the button was taking its box from the static stylesheet instead. Its text
+  settings were in the same position.
+
+### Testing
+
+Cross-platform known-answer vectors for all three key derivations and for the presence record are
+asserted on both sides, so Rust and Kotlin cannot drift. **57 Rust and 65 Kotlin tests.**
+
 ## 10.0.4+067 — 2026-09-10
 
 Built on upstream release 10.0.4. Three delivered builds (`+065`, `+066`, `+067`), each shipping
