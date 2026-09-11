@@ -35,4 +35,10 @@
     <string name="bluetoothHintHotspot">No Bluetooth: one device shows a QR code and password when the transfer starts, and the other scans or types it.</string>
     <string name="uiSettingsTitle">白い熊 魔法絨毯 UI</string>
     <string name="uiSettingsLink">白い熊 魔法絨毯 UI</string>
+    <!-- Fork: the send button's label while a shared selection is armed. It normally means
+         "pick files"; with a share already in hand it means "send these", and the old label
+         read as though tapping it would throw the share away. -->
+    <string name="sendShared">共有された %1$d 件を送る</string>
+    <!-- Fork: paired devices. -->
+    <string name="devicesLink">Devices ＋</string>
 </resources>

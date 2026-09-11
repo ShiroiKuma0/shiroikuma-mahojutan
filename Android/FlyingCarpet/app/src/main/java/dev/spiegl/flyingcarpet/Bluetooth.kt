@@ -283,6 +283,13 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
 
 
     // stop advertising once the peer has actually engaged with our service. never call this from
+    /**
+     * Fork: takes the advertisement down from outside the transfer flow, for the standing
+     * paired beacon. Delegates rather than duplicating, so the permission guard and the
+     * `advertising` bookkeeping stay in one place.
+     */
+    fun stopAdvertising() = stopAdvertisingForPeer()
+
     // onConnectionStateChange -- see the comment there.
     @SuppressLint("MissingPermission")
     private fun stopAdvertisingForPeer() {

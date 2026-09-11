@@ -14,6 +14,10 @@ use std::{fs, sync::Mutex};
 use tauri::{Emitter, State, Window};
 use tokio::sync::mpsc;
 
+// Fork: paired devices. Everything the feature needs lives in this module; only the
+// registrations below reach into upstream's file.
+mod fork_paired;
+
 #[derive(Clone, serde::Serialize)]
 struct FileConflictPayload {
     name: String,
@@ -238,6 +242,10 @@ fn start_async(
     receive_dir: Option<String>,
     using_bluetooth: bool,
     connection_mode: Option<String>,
+    // Fork: true for a hotspot transfer between paired devices. The group key itself never
+    // crosses into the page — only this flag does, and the key is read from the store here.
+    paired_hotspot: Option<bool>,
+    paired_state: State<fork_paired::PairedState>,
     window: Window,
 ) -> Option<String> {
     let thread_window = window.clone();
@@ -258,6 +266,18 @@ fn start_async(
     let conn_mode = match connection_mode.as_deref() {
         Some("shared_network") => ConnectionMode::SharedNetwork,
         _ => ConnectionMode::Hotspot,
+    };
+
+    // Fork: resolved before the task is spawned, so a transfer asked to be paired but
+    // started on an unpaired device is refused outright rather than quietly falling back to
+    // a credential exchange the other device is not expecting.
+    let paired_key = if paired_hotspot.unwrap_or(false) {
+        match paired_state.group_key() {
+            Some(key) => Some(key),
+            None => return Some("This device is not paired with anything yet.".to_string()),
+        }
+    } else {
+        None
     };
 
     // hold the lock across the check and the spawn so two starts can't both pass the check
@@ -285,6 +305,7 @@ fn start_async(
             ble_ui_rx,
             conn_mode,
             conflict_rx,
+            paired_key,
         )
         .await;
         clean_up_transfer(stream, transfer_hotspot, transfer_ssid, &gui).await;
@@ -349,6 +370,7 @@ async fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .manage(Transfer::new())
+        .manage(fork_paired::PairedState::load())
         .setup(|_app| {
             // Tauri's default window icon is the first PNG listed in bundle.icon, i.e. the
             // 32x32 one, and that's all it publishes as _NET_WM_ICON. Window managers scale
@@ -364,6 +386,9 @@ async fn main() {
                     window.set_icon(icon)?;
                 }
             }
+            // Fork: serve paired devices for as long as the app runs. No-op until this
+            // device has been paired with something.
+            fork_paired::restart_serving(&_app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -403,6 +428,17 @@ async fn main() {
             fork_write_file,
             fork_list_dir,
             fork_restart,
+            fork_paired::paired_status,
+            fork_paired::paired_create_group,
+            fork_paired::paired_pair_code,
+            fork_paired::paired_join,
+            fork_paired::paired_leave,
+            fork_paired::paired_set_name,
+            fork_paired::paired_set_receive_dir,
+            fork_paired::paired_forget,
+            fork_paired::paired_set_auto_accept,
+            fork_paired::paired_scan,
+            fork_paired::paired_send,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

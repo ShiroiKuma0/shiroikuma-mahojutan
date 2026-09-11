@@ -68,6 +68,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- Fork: "Stay reachable" runs a foreground service, and a foreground service must post a
+         notification. Also carries the "X sent you Y" line, without which an unattended
+         transfer is indistinguishable from nothing having happened — which is exactly what
+         makes an unattended receiver feel unsafe. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Fork: without this, setPackage() on our reply and progress broadcasts fails SILENTLY on
          Android 11+ — the export runs, writes correctly, and is never heard of. Both automation
          callers are named: 白い熊 応用管理 drives the data door, 白い熊 自由作業盤 the 保存復元 batch. -->
@@ -144,6 +150,29 @@
             android:name="dev.spiegl.flyingcarpet.automation.AutomationProvider"
             android:authorities="${applicationId}.automation"
             android:exported="true" />
+
+        <!-- Fork: paired devices, "Stay reachable". specialUse rather than dataSync: the app
+             already holds FOREGROUND_SERVICE_SPECIAL_USE for the automation door above, so
+             this asks for no new permission, and Android 15+ caps a dataSync service at six
+             hours in any twenty-four — which a receiver meant to be always reachable would
+             hit every single day. Not exported: only this app starts it, from its own switch. -->
+        <!-- Fork: the Bluetooth doorbell's far end. Not exported — the only thing that ever
+             sends it an intent is the platform's own scan machinery, through a PendingIntent
+             this app registered. It is the PendingIntent scan rather than a callback that
+             lets it arrive with the app not running, which is the entire point. -->
+        <receiver
+            android:name="dev.spiegl.flyingcarpet.WakeReceiver"
+            android:exported="false" />
+
+        <service
+            android:name="dev.spiegl.flyingcarpet.PresenceService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="LAN receiver for paired devices"
+                tools:targetApi="s" />
+        </service>
 
         <service
             android:name="dev.spiegl.flyingcarpet.automation.AutomationDataService"

@@ -16,8 +16,10 @@ import android.app.AlertDialog
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.view.DragEvent
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.util.Log
 import android.view.View
@@ -64,6 +66,32 @@ class MainActivity : AppCompatActivity() {
     private lateinit var totalProgressBar: ProgressBar
     private lateinit var bluetoothRequestPermissionLauncher: ActivityResultLauncher<Array<String>>
     private lateinit var filePicker: ActivityResultLauncher<Array<String>>
+
+    companion object {
+        /** Fork: the UI page's "Devices" row returns here rather than duplicating the sheet. */
+        const val ACTION_OPEN_DEVICES = "dev.spiegl.flyingcarpet.action.OPEN_DEVICES"
+    }
+
+    // Fork: paired devices. Owns presence, the standing listener and the one-tap send.
+    lateinit var pairedController: PairedController
+
+    // Fork: set for the moment between tapping a device in the Devices sheet and the file
+    // picker coming back, so the picker knows to hand its selection to that device rather
+    // than to the ordinary send flow. Cleared as soon as it is used.
+    private var filePickerForPeer: PairedPeer? = null
+
+    // Fork: the same, for the hotspot route — set between tapping "Send over hotspot" and the
+    // picker returning.
+    private var hotspotPeerForPicker: PairedPeer? = null
+
+    // Fork: which device the folder picker is choosing a receive directory for.
+    private var folderPickerForPeer: PairedPeer? = null
+
+    // Fork: whether the column being dragged actually changed place, which is what tells a
+    // reorder apart from a hold-and-release meaning "open the menu".
+    private var draggedColumnMoved = false
+    private lateinit var peerFolderPicker: ActivityResultLauncher<Uri?>
+    private lateinit var pairingScanLauncher: ActivityResultLauncher<ScanOptions>
     private lateinit var folderPicker: ActivityResultLauncher<Uri?>
     private lateinit var localNetworkPermissionLauncher: ActivityResultLauncher<String>
     // true when the local network prompt was raised by the start button rather than at
@@ -105,6 +133,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun getFilePicker(): ActivityResultLauncher<Array<String>> {
         return registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            // Fork: claimed up front, so an empty or unreadable selection cannot leave it set
+            // for the next, unrelated, use of this picker.
+            val peer = filePickerForPeer
+            filePickerForPeer = null
+            val hotspotPeer = hotspotPeerForPicker
+            hotspotPeerForPicker = null
             viewModel.files = mutableListOf()
             viewModel.fileStreams = mutableListOf()
             viewModel.filePaths = mutableListOf()
@@ -130,6 +164,21 @@ class MainActivity : AppCompatActivity() {
                     viewModel.cleanUpTransfer()
                     return@registerForActivityResult
                 }
+            }
+
+            // Fork: a device was tapped in the Devices sheet, so these files go straight to
+            // it — no mode, no password, and nothing to do on the far device.
+            if (hotspotPeer != null) {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                toggleUI(false)
+                pairedController.overHotspot(hotspotPeer, sending = true, receiveDir = null) { }
+                return@registerForActivityResult
+            }
+            if (peer != null) {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                toggleUI(false)
+                pairedController.sendTo(peer) { }
+                return@registerForActivityResult
             }
 
             beginTransferWithSelection()
@@ -393,24 +442,88 @@ class MainActivity : AppCompatActivity() {
     // initialized from their result, so the permission check below would otherwise race both.
     private fun promptForSharedSelection() {
         window.decorView.post {
-            // Name the button as it is actually labelled: the label is one of the things the UI
-            // page can change, so a hardcoded "Files to send" could name a button that is not there.
-            val label = findViewById<Button>(id.startButton)?.text?.toString().orEmpty()
-            val press = if (label.isBlank()) "the send button" else "“$label”"
+            // The send button now says what it will actually do (see refreshStartLabel), so the
+            // fallback line below is no longer a riddle even when the sheet cannot open.
+            refreshStartLabel()
             if (!checkForBluetoothPermissions()) {
-                // Permissions are still being asked for. The files stay selected either way.
+                // Permissions are still being asked for, and a sheet put up now would be
+                // fighting the permission dialog. The files stay selected either way.
                 viewModel.outputText(
-                    "Grant the permissions, then choose Hotspot or Shared Network and press $press to send."
+                    "Grant the permissions, then press the send button to choose where these go."
                 )
                 return@post
             }
-            viewModel.outputText("Choose Hotspot or Shared Network, then press $press to send.")
+            showSendSheet()
+        }
+    }
+
+    /**
+     * Fork: what a share into this app asks. The two classic modes are on the sheet as pills,
+     * so 白い熊's 2026-08-10 requirement — that a share must offer the choice between Hotspot
+     * and Shared Network rather than silently using whichever was set last — is not merely
+     * kept but made visible: it is now two of the things on the list rather than a
+     * precondition to be set before pressing a button.
+     */
+    private fun showSendSheet() {
+        if (!sharedSelectionPending || viewModel.files.isEmpty()) return
+        SendSheet.show(
+            activity = this,
+            controller = pairedController,
+            fileNames = viewModel.files.map { it.name ?: "(unnamed)" },
+            totalBytes = viewModel.files.sumOf { it.length() },
+            onSendTo = { peer, overHotspot ->
+                sharedSelectionPending = false
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                toggleUI(false)
+                // The files are already in hand, so neither route needs a picker: this is the
+                // one tap the whole sheet exists for.
+                if (overHotspot) {
+                    pairedController.overHotspot(peer, sending = true, receiveDir = null) { }
+                } else {
+                    pairedController.sendTo(peer) { }
+                }
+            },
+            onClassic = { mode ->
+                // Exactly what pressing the send button used to do, with the mode chosen here
+                // rather than left over from last time.
+                findViewById<MaterialButtonToggleGroup>(id.connectionGroup)?.check(
+                    if (mode == ConnectionMode.Hotspot) id.hotspotButton else id.sharedNetworkButton
+                )
+                viewModel.connectionMode = mode
+                startPressed(sendFolder = false)
+            },
+            onPair = { openDevicesSheet() },
+        )
+    }
+
+    /**
+     * Fork: the send button stops lying after a share. It normally means "pick files"; with a
+     * shared selection already armed it means "send these", and reading "Files to send" at
+     * that moment made the tap feel like it would throw the share away and open a picker.
+     * Renameable like every other label in this fork.
+     */
+    private fun refreshStartLabel() {
+        val startButton = findViewById<Button>(id.startButton) ?: return
+        val receiving = findViewById<MaterialButtonToggleGroup>(id.modeGroup)?.checkedButtonId ==
+            id.receiveButton
+        startButton.text = when {
+            receiving -> settings.textOr("start.folderText", getString(R.string.selectFolder))
+            sharedSelectionPending -> settings.textOr(
+                "start.sharedText",
+                getString(R.string.sendShared, viewModel.files.size),
+            )
+            else -> settings.textOr("start.filesText", getString(R.string.selectFiles))
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == ACTION_OPEN_DEVICES) {
+            intent.action = null
+            window.decorView.post { openDevicesSheet() }
+            return
+        }
         if (handleShareIntent(intent)) {
             promptForSharedSelection()
         }
@@ -472,14 +585,22 @@ class MainActivity : AppCompatActivity() {
             if (isGranted) {
                 // Permission is granted. Continue the action or workflow in your app.
                 viewModel.outputText("Permission granted.")
-                // start hotspot here
-                viewModel.startHotspot()
+                // Fork: resume whichever path asked. Restarting Wi-Fi Direct after the
+                // *fallback* asked would only be refused again for whatever sent us to the
+                // fallback to begin with, and the transfer would go round the same loop.
+                if (viewModel.awaitingLocationForFallback) {
+                    viewModel.awaitingLocationForFallback = false
+                    viewModel.resumeFallbackHotspot()
+                } else {
+                    viewModel.startHotspot()
+                }
             } else {
                 val permission = if (Build.VERSION.SDK_INT < 33) {
                     "fine location"
                 } else {
                     "nearby device"
                 }
+                viewModel.awaitingLocationForFallback = false
                 viewModel.outputText(
                     "The Android WifiManager requires $permission permission to start hotspot. "
                             + "This data is not collected. "
@@ -560,6 +681,278 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Fork: a scanner for pairing codes only. Deliberately NOT the transfer's barcodeLauncher,
+     * whose callback feeds whatever it reads into the running transfer as a password — a
+     * pairing code scanned there would be treated as one, and the failure would be baffling.
+     */
+    private fun getPairingScanLauncher(): ActivityResultLauncher<ScanOptions> {
+        return registerForActivityResult(ScanContract()) { result ->
+            val contents = result.contents
+            if (contents == null) {
+                viewModel.outputText("Pairing cancelled.")
+                return@registerForActivityResult
+            }
+            val parsed = parsePairUri(contents)
+            if (parsed == null) {
+                ForkDialog.alert(
+                    this,
+                    "That is not a pairing key",
+                    "Scan the code shown by Devices \u2192 Pair on the other device.",
+                )
+                return@registerForActivityResult
+            }
+            pairedController.pairing.joinGroup(parsed.first)
+            pairedController.start()
+            viewModel.outputText(
+                "Paired. Looking for " + (parsed.second ?: "the other device") + "..."
+            )
+            openDevicesSheet()
+        }
+    }
+
+    /**
+     * Fork: picks the folder that one paired device's transfers land in. Separate from the
+     * app's own folder picker, whose result arms a receive transfer — this one only stores a
+     * setting, and must not start anything.
+     */
+    private fun getPeerFolderPicker(): ActivityResultLauncher<Uri?> =
+        registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            val peer = folderPickerForPeer
+            folderPickerForPeer = null
+            if (peer == null || uri == null) return@registerForActivityResult
+            // Without a persistable grant the folder stops working at the next restart, and
+            // the failure would look like the setting not having been saved.
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            } catch (e: Exception) {
+                Log.i("Paired", "Could not persist the folder grant: $e")
+            }
+            pairedController.pairing.setReceiveDir(peer.deviceId, uri.toString())
+            viewModel.outputText("Files from ${peer.displayName} will land in ${uri.lastPathSegment}.")
+            openDevicesSheet()
+        }
+
+    /** Fork: opens the camera for a pairing code. Called from the Devices sheet. */
+    fun scanPairingCode() {
+        val options = ScanOptions()
+        options.setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+        options.setPrompt("Scan the pairing code on the other device")
+        options.setBeepEnabled(false)
+        pairingScanLauncher.launch(options)
+    }
+
+    /**
+     * Fork: the device list. A tap on a device arms the selection the same way the file
+     * picker does, then hands it to the controller — there is nothing to choose and nothing
+     * to do on the far device.
+     */
+    fun openDevicesSheet() {
+        val sheet = DevicesSheet.show(
+            this,
+            pairedController,
+            "Devices",
+            "Tap a device to send it files over this network. Hold one for the hotspot route, "
+                + "which needs no network at all.",
+            onSend = { peer ->
+                filePickerForPeer = peer
+                filePicker.launch(arrayOf("*/*"))
+            },
+            onHotspot = { peer, sending -> pairedOverHotspot(peer, sending) },
+            onPickFolder = { peer ->
+                folderPickerForPeer = peer
+                peerFolderPicker.launch(lastReceiveDir())
+            },
+        )
+        // A dialog closing does not run onResume, so pairing or renaming inside the sheet
+        // would otherwise leave the strip showing the old list until the screen had been left
+        // and come back to.
+        sheet.setOnDismissListener { refreshDevicePills() }
+    }
+
+    /**
+     * Fork: the paired devices as two rows of pills under the settings pill — the top pill of
+     * each column sends over this network, the bottom one over a hotspot.
+     *
+     * One HorizontalScrollView holding a column per device rather than two scroll views: the
+     * two rows then line up by construction and scroll together, which two independent scroll
+     * views cannot be made to do without fighting each other's fling.
+     */
+    private fun refreshDevicePills() {
+        val scroll = findViewById<HorizontalScrollView>(id.devicePills) ?: return
+        val rows = findViewById<LinearLayout>(id.devicePillRows) ?: return
+        rows.removeAllViews()
+        val peers = if (pairedController.isPaired) pairedController.pairing.peers() else emptyList()
+        scroll.isVisible = peers.isNotEmpty()
+        if (peers.isEmpty()) return
+
+        val fresh = System.currentTimeMillis() / 1000
+        for (peer in peers) {
+            val column = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { rightMargin = ForkDialog.dp(this@MainActivity, 8) }
+                // The column is what moves, so the column is what carries the identity.
+                tag = peer.deviceId
+            }
+            val name = peer.displayName
+            val here = fresh - peer.lastSeen < 60 && peer.lastIp != null
+            column.addView(
+                ForkDialog.pill(this, name) {
+                    filePickerForPeer = peer
+                    filePicker.launch(arrayOf("*/*"))
+                }.also {
+                    // The Wi-Fi mark says which route this pill takes; its weight says whether
+                    // the device has actually been heard from, which the dot used to carry.
+                    ForkDialog.icon(it, R.drawable.ic_wifi)
+                    stretch(it)
+                    holdToMoveOrEdit(it, column, rows, peer)
+                }
+            )
+            column.addView(
+                ForkDialog.pill(this, "⚡ $name") {
+                    pairedOverHotspot(peer, sending = true)
+                }.also {
+                    stretch(it)
+                    (it.layoutParams as LinearLayout.LayoutParams).topMargin =
+                        ForkDialog.dp(this, 6)
+                    holdToMoveOrEdit(it, column, rows, peer)
+                }
+            )
+            rows.addView(column)
+            column.setOnDragListener(columnDragListener(rows))
+        }
+    }
+
+    /**
+     * Holding a pill starts a drag; letting go without having moved it opens the menu.
+     *
+     * Both gestures were asked for on the same press (白い熊, 2026-09-11), and this is the
+     * arrangement that gives both without a mode: the drag is what a moving finger means, and
+     * the menu is what a still one means. `ACTION_DRAG_ENDED` reports whether a drop was
+     * handled, which is exactly the distinction — so nothing has to guess from coordinates.
+     */
+    private fun holdToMoveOrEdit(
+        pill: View,
+        column: View,
+        rows: LinearLayout,
+        peer: PairedPeer,
+    ) {
+        pill.setOnLongClickListener {
+            val shadow = View.DragShadowBuilder(column)
+            val started = if (Build.VERSION.SDK_INT >= 24) {
+                column.startDragAndDrop(null, shadow, column, View.DRAG_FLAG_OPAQUE)
+            } else {
+                @Suppress("DEPRECATION")
+                column.startDrag(null, shadow, column, 0)
+            }
+            if (!started) {
+                // No drag means no ACTION_DRAG_ENDED, so the menu would never appear.
+                openDeviceMenu(peer)
+                return@setOnLongClickListener true
+            }
+            column.alpha = 0.4f
+            draggedColumnMoved = false
+            true
+        }
+    }
+
+    /**
+     * Reorders on the fly: as the shadow passes over a column, the dragged one takes its
+     * place. Rearranging during the drag rather than on the drop is what makes the order
+     * visible while choosing it, instead of a guess that resolves only once the finger lifts.
+     */
+    private fun columnDragListener(rows: LinearLayout) = View.OnDragListener { target, event ->
+        val dragged = event.localState as? View ?: return@OnDragListener false
+        when (event.action) {
+            DragEvent.ACTION_DRAG_STARTED -> true
+            DragEvent.ACTION_DRAG_ENTERED -> {
+                if (target !== dragged) {
+                    val from = rows.indexOfChild(dragged)
+                    val to = rows.indexOfChild(target)
+                    if (from >= 0 && to >= 0) {
+                        rows.removeViewAt(from)
+                        rows.addView(dragged, to)
+                        draggedColumnMoved = true
+                    }
+                }
+                true
+            }
+            DragEvent.ACTION_DROP -> true
+            DragEvent.ACTION_DRAG_ENDED -> {
+                dragged.alpha = 1f
+                // Only the dragged view's own listener should act on the end, or every
+                // column in the row would save the order and open the menu at once.
+                if (target === dragged) {
+                    if (draggedColumnMoved) {
+                        val order = (0 until rows.childCount).mapNotNull {
+                            rows.getChildAt(it).tag as? String
+                        }
+                        pairedController.pairing.reorder(order)
+                    } else {
+                        // Held and released without moving: that is the menu.
+                        (dragged.tag as? String)
+                            ?.let { pairedController.pairing.findPeer(it) }
+                            ?.let { openDeviceMenu(it) }
+                    }
+                }
+                true
+            }
+            else -> true
+        }
+    }
+
+    /** Fork: everything that can be done to one paired device. */
+    private fun openDeviceMenu(peer: PairedPeer) {
+        DeviceMenu.show(
+            activity = this,
+            controller = pairedController,
+            peer = peer,
+            onPickFolder = { target ->
+                folderPickerForPeer = target
+                peerFolderPicker.launch(lastReceiveDir())
+            },
+            onHotspot = { target, sending -> pairedOverHotspot(target, sending) },
+            onChanged = { refreshDevicePills() },
+        )
+    }
+
+    /** Both pills in a column take the width of the wider one, so the rows stay aligned. */
+    private fun stretch(view: View) {
+        view.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+    }
+
+    /**
+     * Fork: the hotspot route to a paired device. Sending picks files first; receiving uses
+     * the directory the last receive used, and asks for one only if there isn't one.
+     */
+    private fun pairedOverHotspot(peer: PairedPeer, sending: Boolean) {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        if (sending) {
+            hotspotPeerForPicker = peer
+            toggleUI(false)
+            filePicker.launch(arrayOf("*/*"))
+            return
+        }
+        val dir = lastReceiveDir()
+        if (dir == null) {
+            viewModel.outputText(
+                "Pick a folder to receive into first — press Receive and choose one, then try again."
+            )
+            return
+        }
+        toggleUI(false)
+        pairedController.overHotspot(peer, sending = false, receiveDir = dir) { }
+    }
+
     private fun getBarcodeLauncher(): ActivityResultLauncher<ScanOptions> {
         return registerForActivityResult(ScanContract()) { result ->
             if (result.contents == null) {
@@ -631,6 +1024,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
         viewModel.barcodeLauncher = getBarcodeLauncher()
+        // Fork: paired devices.
+        pairingScanLauncher = getPairingScanLauncher()
+        pairedController = PairedController(applicationContext, viewModel)
+        // An unattended transfer lands where the last one did — the same directory the
+        // "Receive in ..." button uses, so there is nothing extra to configure.
+        pairedController.receiveDirProvider = { lastReceiveDir() }
+        peerFolderPicker = getPeerFolderPicker()
+        findViewById<Button>(id.devicesButton)?.setOnClickListener { openDevicesSheet() }
+        // The UI page's "Devices" row comes back here rather than growing a second, lesser
+        // copy of the sheet on that screen.
+        if (intent?.action == ACTION_OPEN_DEVICES) {
+            intent.action = null
+            window.decorView.post { openDevicesSheet() }
+        }
         viewModel.displayQrCode = ::displayQrCode
         viewModel.cleanUpUi = ::cleanUpUi
         viewModel.enableBluetoothUi = ::enableBluetoothUi
@@ -771,16 +1178,16 @@ class MainActivity : AppCompatActivity() {
         modeGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
             if (checkedId == id.sendButton) {
-                startButton.text = settings.textOr("start.filesText", getString(R.string.selectFiles))
+                refreshStartLabel()
                 sendDirButton.isVisible = true
                 refreshLastFolderButton()
             } else {
-                startButton.text = settings.textOr("start.folderText", getString(R.string.selectFolder))
                 sendDirButton.isVisible = false
                 refreshLastFolderButton()
                 // Switching to Receive abandons a shared selection: those files were handed to us
                 // to send, and the button is about to mean "pick where to receive" instead.
                 sharedSelectionPending = false
+                refreshStartLabel()
             }
             // which side shows the QR code and which scans it depends on this choice
             updateBluetoothHint()
@@ -810,6 +1217,10 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Re-apply the UI customizations every time we return to the screen (incl. from the settings page).
         Appearance.apply(this)
+        // Fork: Appearance.applyStartButton() knows only about send/receive, so it would put
+        // "Files to send" back over a shared selection every time this screen came forward.
+        refreshStartLabel()
+        refreshDevicePills()
         // and re-evaluate the remembered-directory button: it was previously only refreshed on a
         // mode tap, so on a fresh launch it never appeared at all
         if (this::lastFolderButton.isInitialized) {
@@ -822,6 +1233,13 @@ class MainActivity : AppCompatActivity() {
         }
         // pick the preview back up if the password dialog was open when we left
         scannerView?.let { if (it.visibility == View.VISIBLE) it.resume() }
+        // Fork: be findable and reachable while this screen is up — unless the "Stay
+        // reachable" service already is. Both binding would not fail: the listener sets
+        // SO_REUSEADDR, so the second bind succeeds and the two silently split the incoming
+        // connections between them, which looks like "it works most of the time".
+        if (this::pairedController.isInitialized && !PresenceService.running) {
+            pairedController.start()
+        }
     }
 
     override fun onPause() {
@@ -829,6 +1247,16 @@ class MainActivity : AppCompatActivity() {
         // never hold the camera open behind another app: the dialog survives, the preview restarts
         // in onResume()
         scannerView?.pause()
+        // Fork: drop presence and the listener with the screen. The MulticastLock the
+        // responder holds is the expensive part — it switches off the Wi-Fi chip's multicast
+        // filtering — and leaving it held behind another app is exactly the standing cost
+        // this design exists to avoid. A transfer already under way is not affected: it owns
+        // its own socket, not the listener's.
+        if (this::pairedController.isInitialized && !viewModel.transferIsRunning &&
+            !PresenceService.running
+        ) {
+            pairedController.stop()
+        }
     }
 
     // The directory picked last time, remembered across restarts so receiving is one tap. The tree
