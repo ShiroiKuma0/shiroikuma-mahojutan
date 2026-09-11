@@ -1197,6 +1197,7 @@ dependencies = [
  "rand 0.8.7",
  "regex",
  "serde",
+ "serde_json",
  "sha2",
  "snow",
  "socket2 0.5.10",

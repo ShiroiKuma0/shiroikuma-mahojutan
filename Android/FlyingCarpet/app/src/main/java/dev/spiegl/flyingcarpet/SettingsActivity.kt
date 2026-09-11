@@ -3,10 +3,13 @@ package dev.spiegl.flyingcarpet
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.text.Editable
@@ -125,6 +128,18 @@ class SettingsActivity : AppCompatActivity() {
         content.addView(sectionHeader("Export / Import"))
         content.addView(sectionNote("Carry everything you set in this app to another device, or put it back."))
         addExportImportRows(content)
+
+        // ── Paired devices ──
+        // Second section, directly under Export/Import: both are about this device as a thing
+        // in a group of devices rather than about how any one screen looks, so they sit
+        // together above the appearance catalog.
+        content.addView(sectionHeader("Paired devices"))
+        content.addView(
+            sectionNote(
+                "Send to your other devices in one tap, with nothing to do on the device receiving."
+            )
+        )
+        addPairedRows(content)
 
         // ── Sections ──
         // One block per logical area of the main screen (UiCatalog.sections). Each block carries its
@@ -639,6 +654,209 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /** kxkb's settings-row shape: title over summary at the control indent, optional widget right. */
+    // ── Paired devices ─────────────────────────────────────────────────────────────────────
+
+    private val pairing by lazy { Pairing(applicationContext) }
+
+    private fun addPairedRows(container: LinearLayout) {
+        container.addView(
+            settingRow(
+                "This device's name",
+                rowSummary(pairing.name, null),
+                onClick = { renameDevice() },
+            )
+        )
+
+        val reachable = SwitchCompat(this).apply {
+            isChecked = pairing.stayReachable && PresenceService.running
+            setOnCheckedChangeListener { _, checked ->
+                if (checked) requestReachable() else stopReachable()
+            }
+        }
+        container.addView(
+            settingRow(
+                "Stay reachable",
+                // Red, like every other "this is not configured the way you think" line on
+                // this page. The cost belongs on the switch, not in a document.
+                rowSummary(
+                    if (pairing.stayReachable) {
+                        "On — a notification stays up and the Wi-Fi radio is kept listening. " +
+                            "This phone freezes background apps, so also allow the app in " +
+                            "Battery settings and in EMUI's protected-app list, or it will " +
+                            "still be killed."
+                    } else {
+                        "Off — paired devices can reach this one only while the app is open. " +
+                            "Turning this on costs battery: it holds the Wi-Fi radio " +
+                            "listening and keeps a notification up."
+                    },
+                    if (pairing.stayReachable) Defaults.RED else null,
+                ),
+                widget = reachable,
+            )
+        )
+
+        val wake = SwitchCompat(this).apply {
+            isChecked = pairing.bleWake
+            isEnabled = pairing.stayReachable
+            setOnCheckedChangeListener { _, checked ->
+                pairing.bleWake = checked
+                // Taking effect means restarting the service, which is where the scan is
+                // registered — a switch that only works after a reboot is not a switch.
+                if (pairing.stayReachable) {
+                    PresenceService.stop(this@SettingsActivity)
+                    PresenceService.start(this@SettingsActivity)
+                }
+                recreate()
+            }
+        }
+        container.addView(
+            settingRow(
+                "Wake over Bluetooth",
+                rowSummary(
+                    when {
+                        !pairing.stayReachable ->
+                            "Needs “Stay reachable” first — there is nothing to wake otherwise."
+                        pairing.bleWake ->
+                            "On — a paired device can raise a hotspot with this one without " +
+                                "anybody touching it. Costs battery on top of the above, and " +
+                                "is the least reliable part of this feature on these phones."
+                        else ->
+                            "Off — a hotspot transfer needs one tap on this device. Turning " +
+                                "this on lets a paired device start one on its own."
+                    },
+                    if (pairing.stayReachable && pairing.bleWake) Defaults.RED else null,
+                ),
+                widget = wake,
+            )
+        )
+
+        container.addView(
+            settingRow(
+                "Battery settings for this app",
+                rowSummary(
+                    "Android stops a background app from being reached. Exempt this one here.",
+                    null,
+                ),
+                onClick = { openBatterySettings() },
+            )
+        )
+
+        val peers = pairing.peers()
+        container.addView(
+            settingRow(
+                "Devices",
+                rowSummary(
+                    when {
+                        !pairing.isPaired -> "Not paired with anything yet"
+                        peers.isEmpty() -> "Paired, but no devices found yet"
+                        else -> peers.joinToString(", ") { it.displayName }
+                    },
+                    if (pairing.isPaired) null else Defaults.RED,
+                ),
+                onClick = {
+                    // The list, the pairing codes and the per-device rules all live on one
+                    // sheet, reached from the main screen too: two places that both half-do
+                    // it would be worse than one that does all of it.
+                    startActivity(
+                        Intent(this, MainActivity::class.java)
+                            .setAction(MainActivity.ACTION_OPEN_DEVICES)
+                            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    )
+                    finish()
+                },
+            )
+        )
+    }
+
+    private fun renameDevice() {
+        val field = EditText(this).apply {
+            setText(pairing.name)
+            setSingleLine()
+        }
+        AlertDialog.Builder(this)
+            .setTitle("This device's name")
+            .setMessage("What the other devices call this one.")
+            .setView(field)
+            .setPositiveButton("Set") { _, _ ->
+                pairing.name = field.text.toString()
+                recreate()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Turning the switch on needs the notification permission first: a foreground service
+     * whose notification cannot be shown is a service Android will not let run.
+     */
+    private fun requestReachable() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 77)
+            return
+        }
+        if (!pairing.isPaired) {
+            AlertDialog.Builder(this)
+                .setTitle("Nothing to be reachable for")
+                .setMessage("Pair this device with another one first; there is no one to receive from yet.")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+        pairing.stayReachable = true
+        PresenceService.start(this)
+        recreate()
+    }
+
+    private fun stopReachable() {
+        pairing.stayReachable = false
+        PresenceService.stop(this)
+        recreate()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 77) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            requestReachable()
+        } else {
+            // Said plainly rather than leaving a switch that silently refuses to stay on.
+            AlertDialog.Builder(this)
+                .setTitle("Notifications are required")
+                .setMessage(
+                    "Android only lets an app stay reachable in the background while it shows " +
+                        "a notification saying so. Without that permission this switch cannot " +
+                        "be turned on."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+            recreate()
+        }
+    }
+
+    private fun openBatterySettings() {
+        // The generic screen, not REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: that one is a
+        // policy-restricted intent, and EMUI's protected-app list is a separate thing again
+        // that no intent reaches at all — which is why the summary above names it in words.
+        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(android.net.Uri.fromParts("package", packageName, null))
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            ForkDialog.alert(
+                this,
+                "Could not open settings",
+                "Android would not open the settings screen: ${e.message}",
+            )
+        }
+    }
+
     private fun settingRow(
         title: String,
         summaryView: TextView,

@@ -116,6 +116,24 @@ object ForkDialog {
         setOnClickListener { onClick() }
     }
 
+    /**
+     * Puts a tinted icon at the head of a pill, sized to sit with the text rather than at the
+     * drawable's own 24dp. Tinted with the accent, so an icon follows the UI page exactly as
+     * the label does and never becomes the one fixed colour on a themed screen.
+     *
+     * [dim] is for a device that has not been heard from recently: the icon says which route
+     * the pill takes, and its weight says whether that route is known to be there.
+     */
+    fun icon(button: Button, resId: Int, sizeDp: Int = 16, dim: Boolean = false) {
+        val context = button.context
+        val drawable = androidx.core.content.ContextCompat.getDrawable(context, resId)?.mutate()
+            ?: return
+        drawable.setTint(accent(context))
+        drawable.setBounds(0, 0, dp(context, sizeDp), dp(context, sizeDp))
+        button.setCompoundDrawablesRelative(drawable, null, null, null)
+        button.compoundDrawablePadding = dp(context, 6)
+    }
+
     /** Wraps [content] in a transparent-windowed dialog so only our bordered box is visible. */
     fun wrap(context: Context, content: View, cancelable: Boolean = true): Dialog =
         Dialog(context).apply {

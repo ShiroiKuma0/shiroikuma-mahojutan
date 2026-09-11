@@ -132,6 +132,7 @@ object UiCatalog {
                         LabelField("start.filesText", "“Files to send” text"),
                         LabelField("start.dirText", "“Directory to send” text"),
                         LabelField("start.folderText", "“Select directory” text (receive mode)"),
+                        LabelField("start.sharedText", "Text after a share (“共有された N 件を送る”)"),
                     ),
                     extraColors = listOf(
                         ColorField("start.fill", "Background", Defaults.BLACK),
@@ -170,6 +171,10 @@ object UiCatalog {
                 TextSurface("title", "Title", listOf(LabelField("title.text", "Title text"))),
                 TextSurface("version", "Version label", listOf(LabelField("version.text", "Label text"))),
                 TextSurface("about", "“About” link", listOf(LabelField("about.text", "Link text"))),
+                TextSurface(
+                    "devicesButton", "“Devices” button",
+                    listOf(LabelField("devicesButton.text", "Button text")),
+                ),
                 TextSurface(
                     "uiButton", "“白い熊 魔法絨毯 UI” button", listOf(LabelField("uiButton.text", "Button text")),
                     extraColors = listOf(
@@ -353,6 +358,17 @@ object Appearance {
 
         // "Customize UI" button: text/font/size via applyText, then background / border / corner radius.
         applyText(activity, s, R.id.uiButton, "uiButton", setText = true)
+        // Fork: the Devices button is the UI button's pair and takes the same box, so one
+        // border width sets both rather than two controls having to be kept in step. Without
+        // this it inflated as a stock filled MaterialButton — a purple slab beside a yellow
+        // pill, which is exactly how it looked on 白い熊's screen (2026-09-11).
+        applyText(activity, s, R.id.devicesButton, "devicesButton", setText = true)
+        activity.findViewById<MaterialButton>(R.id.devicesButton)?.let { b ->
+            b.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("uiButton.bg") ?: Defaults.BLACK)
+            b.strokeColor = ColorStateList.valueOf(s.colorOrNull("uiButton.stroke") ?: Defaults.YELLOW)
+            b.strokeWidth = dpToPx(activity, s.sizeOrNull("uiButton.strokeWidth") ?: Defaults.BORDER_WIDTH)
+            b.cornerRadius = dpToPx(activity, s.sizeOrNull("uiButton.cornerRadius") ?: Defaults.CORNER_RADIUS)
+        }
         activity.findViewById<MaterialButton>(R.id.uiButton)?.let { b ->
             b.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("uiButton.bg") ?: Defaults.BLACK)
             b.strokeColor = ColorStateList.valueOf(s.colorOrNull("uiButton.stroke") ?: Defaults.YELLOW)

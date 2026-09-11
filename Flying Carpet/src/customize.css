@@ -6,7 +6,9 @@ body {
   color: #ffff00;
 }
 
-#uiButton {
+/* fork: the Devices button sits beside the UI button and reads as its pair. */
+#uiButton,
+#devicesButton {
   margin-top: 6px;
   padding: 2px 12px;
   background-color: #000000;
