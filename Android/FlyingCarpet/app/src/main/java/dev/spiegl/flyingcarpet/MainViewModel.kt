@@ -6,6 +6,7 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.*
+import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.net.wifi.p2p.WifiP2pConfig
@@ -18,6 +19,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.location.LocationManagerCompat
 import androidx.core.app.ActivityCompat
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
@@ -152,7 +154,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     var password: String = ""
     // PBKDF2-stretched Noise PSK, derived once per transfer off the main thread (600k
     // iterations); also the source of the discovery HMAC key (deriveDiscoveryKey).
-    private lateinit var psk: ByteArray
+    // Fork: not private, because a paired transfer sets it from Paired.kt — its key comes
+    // from the group key rather than from a password, so it cannot be derived in here.
+    lateinit var psk: ByteArray
     // Fork default: Shared Network rather than upstream's Hotspot. The Bluetooth switch stays
     // usable there (fork, 白い熊 2026-08-07): BLE carries the transfer password when no hotspot
     // credentials need negotiating.
@@ -173,8 +177,24 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     var transferCoroutine: Job? = null
     var transferIsRunning = false
 
+    // Fork: set for the length of a paired transfer, null for every other kind. Its presence
+    // is what the two hooks below switch on — see Paired.kt.
+    var pairedSession: PairedSession? = null
+
+    // Fork: set while the fallback hotspot is waiting on a Location grant, so the permission
+    // result resumes the fallback rather than restarting Wi-Fi Direct — which would be
+    // refused again for whatever reason sent us to the fallback in the first place.
+    var awaitingLocationForFallback = false
+
+    // Fork: called when a Bluetooth peer makes contact while no transfer is running. Returns
+    // true if this device armed itself to answer. Set by PairedController.
+    var onIdlePeerContact: ((String) -> Boolean)? = null
+
     // How many times to ask for the peer's hotspot before giving up, so a first look that lands
     // before the AP is beaconing costs a few seconds rather than a manual retry.
+    // Long enough for a removeGroup() to take the interface down on the drivers we have
+    // measured, short enough not to read as a hang.
+    private val GROUP_TEARDOWN_SETTLE_MS = 1200L
     private val MAX_JOIN_ATTEMPTS = 4
     private var joinAttempts = 0
     var hotspotRunning = false
@@ -183,21 +203,30 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     lateinit var requestPermissionLauncher: ActivityResultLauncher<String>
     val bluetooth = Bluetooth(application, this)
     lateinit var barcodeLauncher: ActivityResultLauncher<ScanOptions>
-    lateinit var displayQrCode: (String, String) -> Unit
-    lateinit var cleanUpUi: () -> Unit
-    lateinit var enableBluetoothUi: (Boolean) -> Unit
-    lateinit var promptForPassword: () -> Unit // shared network mode: sender asks user for the receiver's password
+    // Fork: these six carried an Activity's behaviour and were `lateinit`, which made the
+    // ViewModel unusable without one — the first cleanUpTransfer() threw. A paired transfer
+    // that arrives while the app is closed has no Activity by definition, so each now starts
+    // as a no-op and MainActivity replaces it when there is a screen to drive. Nothing about
+    // the Activity's own path changes: it assigns all six in onCreate exactly as before.
+    var displayQrCode: (String, String) -> Unit = { _, _ -> }
+    var cleanUpUi: () -> Unit = { }
+    var enableBluetoothUi: (Boolean) -> Unit = { }
+    var promptForPassword: () -> Unit = { } // shared network mode: sender asks user for the receiver's password
     // "The other device already has this file" -- asked on the SENDING device, which is where the
     // user who picked the files is. Set by MainActivity; answered through the callback. The third
     // argument is false on the last file, where "apply to all" has nothing left to apply to.
-    lateinit var askFileConflict: (String, Boolean, Boolean, (FileConflictAnswer) -> Unit) -> Unit
+    // Headless, this answers "skip" rather than hanging for ever on a dialog nobody can see.
+    // It is only ever reached on the SENDING side, and a send with no screen has no user to
+    // ask — so the safe answer is the one that changes nothing on the far device.
+    var askFileConflict: (String, Boolean, Boolean, (FileConflictAnswer) -> Unit) -> Unit =
+        { _, _, _, answer -> answer(FileConflictAnswer(FileConflictChoice.Skip, false)) }
     // "Apply to all", once ticked, for the rest of THIS transfer. The viewmodel outlives a
     // transfer, so it is cleared at the start of every send loop as well as in cleanUpTransfer().
     var conflictRule: ConflictRule? = null
     // True when the peer announced this fork's wire version, i.e. it understands the conflict
     // exchange. A stock peer is spoken to exactly as upstream does.
     var peerIsFork = false
-    lateinit var displaySharedNetworkPassword: (String) -> Unit // shared network mode: receiver shows generated password as QR code
+    var displaySharedNetworkPassword: (String) -> Unit = { } // shared network mode: receiver shows generated password as QR code
     var discoveryManager: DiscoveryManager? = null
     private var discoveryJob: Job? = null // receiver-role background discovery in shared network mode
     private var boundToWifiNetwork = false
@@ -451,7 +480,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             // of startTransfer()'s three callers ran -- and on 白い熊's Huawei this fired with no
             // "Joining", no "SSID:" and no hotspot line anywhere above it, i.e. from a caller the
             // visible log did not account for (2026-08-10). These three states tell them apart.
-            if (password.isEmpty()) {
+            if (password.isEmpty() && pairedSession?.overHotspot != true) {
                 val how = when {
                     hotspotRunning -> "after starting our own hotspot"
                     peerIP != null -> "after joining the peer's hotspot"
@@ -462,7 +491,18 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                         "Bluetooth. Cancel and start the transfer again."
                 )
             }
-            withContext(Dispatchers.IO) { psk = derivePsk(password) }
+            // Fork: a paired hotspot keys the handshake from the group key itself. The
+            // derived Wi-Fi password above is a radio credential and nothing more — someone
+            // who learns it joins the access point and gets no further, because the payload
+            // is behind 256 bits of randomness that never leaves either device. It also
+            // skips 600k PBKDF2 iterations, which exist to slow a dictionary attack on a
+            // low-entropy password and buy nothing against a random key.
+            val paired = pairedSession
+            if (paired != null && paired.overHotspot) {
+                psk = derivePairedPsk(paired.groupKey)
+            } else {
+                withContext(Dispatchers.IO) { psk = derivePsk(password) }
+            }
         }
         startTCP()
         // Plaintext preamble on the raw socket: version, then send/receive mode. Every
@@ -498,6 +538,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             outputStream = transport.output
         }
         outputText("Encrypted connection established.")
+        // Fork: paired devices say who they are and what they are sending before any file
+        // data, so an unattended receiver can refuse with a reason and can name the sender.
+        // After the handshake, so it is encrypted and the peer has already proved it holds
+        // the group key.
+        pairedSession?.let { exchangePairedOffer(it) }
         // Assigned unconditionally: a cache left over from a previous transfer must not
         // survive into this one, whichever direction it runs in.
         safCache = if (mode == Mode.Receiving && this::receiveDir.isInitialized) {
@@ -552,6 +597,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     override fun cleanUpTransfer() {
         transferIsRunning = false
+        // Fork: a paired session must never outlive its transfer, or the next ordinary
+        // hotspot transfer would take the paired branch in startTCP() and try to use a
+        // socket that is already closed.
+        pairedSession = null
         // First thing, before any of the teardown below can throw: a WifiLock left held pins the
         // radio out of power-save for the rest of the process's life.
         releaseTransferLocks()
@@ -663,6 +712,26 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         warnIfVpnActive()
         ssid = ""
         password = ""
+        // Fork: a hotspot between paired devices needs no credential exchange at all. Both
+        // ends derive the same password from the group key, and the SSID follows from the
+        // password exactly as it always has — including the Wi-Fi Direct group name, which is
+        // "DIRECT-fc-" plus that password. So the QR code, the typing and the whole BLE
+        // handshake are simply skipped: this device raises or joins, and the other one has
+        // already worked out what to look for.
+        val pairedHotspot = pairedSession
+        if (pairedHotspot != null && pairedHotspot.overHotspot) {
+            password = deriveHotspotPassword(pairedHotspot.groupKey)
+            ssid = if (isHosting()) {
+                getSsidAndKey(password).first
+            } else {
+                // Joining a paired peer: an Android host raises a Wi-Fi Direct group, whose
+                // name is the one thing a generated password could never produce and a
+                // derived one can.
+                if (peer == Peer.Android) "DIRECT-fc-$password" else getSsidAndKey(password).first
+            }
+            if (isHosting()) startHotspot() else joinHotspot()
+            return
+        }
         if (connectionMode == ConnectionMode.SharedNetwork) {
             // No hotspot: discovery finds the peer on the network both devices are already on,
             // and the only thing to agree on is the password. The receiver generates it either
@@ -952,8 +1021,11 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private val localOnlyHotspotCallback = object : WifiManager.LocalOnlyHotspotCallback() {
         override fun onFailed(reason: Int) {
             super.onFailed(reason)
-            outputText("Hotspot failed: $reason")
+            outputText("The hotspot could not be started: ${localOnlyFailure(reason)}")
             hotspotRunning = false
+            // Nothing else is coming. Without this the transfer sat armed for ever on a
+            // hotspot that was never going to exist.
+            cleanUpTransfer()
         }
 
         override fun onStarted(res: WifiManager.LocalOnlyHotspotReservation?) {
@@ -1089,8 +1161,27 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         if (wifiDirectSettled) return
         wifiDirectSettled = true
         outputText("Wi-Fi Direct unavailable ($why) — falling back to the standard hotspot.")
+        // Fork: the fallback is where a paired hotspot stops being ceremony-free. Android
+        // chooses LocalOnlyHotspot's SSID and password itself ("AndroidShare_9975"), so
+        // nothing about them can be derived and the other device has no way to work out what
+        // to join. Say that plainly here: the QR code hotspotCredentialsReady() falls back to
+        // is then the answer, not a bug, and the transfer still completes.
+        if (pairedSession?.overHotspot == true) {
+            outputText(
+                "This hotspot's name and password are chosen by Android, so the other device " +
+                    "cannot work them out from the pairing. Scan the QR code on it, or type " +
+                    "the password shown below."
+            )
+        }
         removeWifiDirectGroup()
-        startLocalOnlyHotspot()
+        // removeGroup() is asynchronous and reports nothing, so the group can still hold the
+        // radio when the fallback asks for it — and the fallback then fails with
+        // ERROR_NO_CHANNEL, which reads as a different fault entirely. Given that the usual
+        // reason for being here at all is BUSY, i.e. a group that already exists, this is
+        // exactly the case worth waiting out. A fixed pause rather than a callback because
+        // removeGroup's listener is not delivered on every driver — the same reason
+        // startWifiDirectGroup carries its own timeout.
+        handler.postDelayed({ startLocalOnlyHotspot() }, GROUP_TEARDOWN_SETTLE_MS)
     }
 
     fun removeWifiDirectGroup() {
@@ -1121,7 +1212,15 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // We choose the credentials rather than reading them back, which is what lets the network
         // name carry the DIRECT- prefix the framework requires while the passphrase stays the
         // transfer password everything else is keyed from.
-        val generated = generatePassword()
+        // Fork: derived rather than generated for a paired hotspot, which is the whole trick
+        // — the joiner computes "DIRECT-fc-<password>" for itself and needs to be told
+        // nothing. Every other transfer still gets a fresh single-use password.
+        val paired = pairedSession
+        val generated = if (paired != null && paired.overHotspot) {
+            deriveHotspotPassword(paired.groupKey)
+        } else {
+            generatePassword()
+        }
         val netName = "DIRECT-fc-$generated"
         val config = WifiP2pConfig.Builder()
             .setNetworkName(netName)
@@ -1136,7 +1235,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             mgr.createGroup(ch, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() = readWifiDirectGroup(mgr, ch, attempt = 0)
                 override fun onFailure(reason: Int) =
-                    fallBackToLocalOnlyHotspot("group creation refused, reason $reason")
+                    fallBackToLocalOnlyHotspot("group creation refused — ${p2pFailure(reason)}")
             })
         } catch (e: Exception) {
             fallBackToLocalOnlyHotspot("group creation threw: ${e.message}")
@@ -1191,18 +1290,120 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         }
     }
 
+    /**
+     * The fallback access point, for when Wi-Fi Direct will not raise a group.
+     *
+     * It checks its own permission rather than trusting startHotspot()'s, and that is the
+     * whole point of this function's existence in this shape (白い熊, 2026-09-11, Android 12):
+     * `createGroup` had returned BUSY, which the framework can decide *before* it checks
+     * anything — so the transfer arrived here with the permission question still unanswered,
+     * `startLocalOnlyHotspot` threw a SecurityException, the catch printed its raw message
+     * ("UID 10018 does not have Coarse/Fine Location permission") with no context at all, and
+     * the transfer was torn down. Reading that log, nothing said which call had failed or that
+     * anything could be done about it.
+     *
+     * Below API 33 this call wants ACCESS_FINE_LOCATION *and* the master Location switch on;
+     * NEARBY_WIFI_DEVICES does not exist there, so the declaration that covers Android 13+ is
+     * simply inert on a phone like this one.
+     */
     private fun startLocalOnlyHotspot() {
+        if (hotspotRunning) {
+            Log.e("Flying Carpet", "startLocalOnlyHotspot() called when hotspot already running")
+            return
+        }
+        if (!canStartLocalOnlyHotspot()) return
         try {
-            if (!hotspotRunning) {
-                wifiManager.startLocalOnlyHotspot(localOnlyHotspotCallback, handler)
-                outputText("Started hotspot. Waiting for the other device to join...")
-            } else {
-                Log.e("Flying Carpet", "startHotspot() called when hotspot already running")
-            }
+            wifiManager.startLocalOnlyHotspot(localOnlyHotspotCallback, handler)
+            outputText("Started hotspot. Waiting for the other device to join...")
+        } catch (e: SecurityException) {
+            // Reached when checkSelfPermission says yes and the framework still says no —
+            // which happens: an app-op can be revoked underneath a granted permission, and
+            // EMUI's own permission manager does exactly that. Say which call failed and what
+            // to do, rather than handing over the framework's own words and nothing else.
+            outputText(
+                "The fallback hotspot was refused: ${e.message}. Give this app Location " +
+                    "permission in Android's settings — the Wi-Fi framework requires it to " +
+                    "start a hotspot on this version of Android, and it is not used to work " +
+                    "out where you are."
+            )
+            cleanUpTransfer()
         } catch (e: Exception) {
-            e.message?.let { outputText(it) }
+            outputText("The fallback hotspot could not be started: ${e.message}")
             cleanUpTransfer()
         }
+    }
+
+    /**
+     * Asks for what the fallback needs, and returns false when the answer has to be waited
+     * for — the permission result resumes the transfer through requestPermissionLauncher.
+     */
+    private fun canStartLocalOnlyHotspot(): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) return true
+        val granted = ActivityCompat.checkSelfPermission(
+            application, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            outputText("The fallback hotspot needs Location permission on this version of Android.")
+            // Resumed by the launcher, which knows to come back here rather than restart
+            // Wi-Fi Direct — that would only be refused again for the same reason.
+            awaitingLocationForFallback = true
+            requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            return false
+        }
+        // The permission is not enough on its own: below API 33 the framework also refuses
+        // while the master Location switch is off, and that refusal reads identically.
+        val locationManager =
+            application.getSystemService(AppCompatActivity.LOCATION_SERVICE) as? LocationManager
+        val locationOn = locationManager?.let {
+            LocationManagerCompat.isLocationEnabled(it)
+        } ?: true
+        if (!locationOn) {
+            outputText(
+                "Android's Location switch is off, and the Wi-Fi framework will not start a " +
+                    "hotspot on this version while it is. Turn it on in Quick Settings and " +
+                    "start the transfer again. Nothing here uses your position."
+            )
+            cleanUpTransfer()
+            return false
+        }
+        return true
+    }
+
+    /**
+     * WifiP2pManager's ActionListener reason codes, in words. A bare "reason 2" is a riddle
+     * that has to be looked up in the SDK to be read at all (白い熊 asked exactly that,
+     * 2026-09-11), and the four values mean very different things: BUSY is transient and worth
+     * retrying, P2P_UNSUPPORTED never will be.
+     */
+    private fun p2pFailure(reason: Int): String = when (reason) {
+        WifiP2pManager.P2P_UNSUPPORTED -> "this device does not support Wi-Fi Direct"
+        WifiP2pManager.BUSY ->
+            "the Wi-Fi framework is busy; a Wi-Fi Direct group may already exist, here or in " +
+                "another app. Turning Wi-Fi off and on again clears a stranded one."
+        WifiP2pManager.NO_SERVICE_REQUESTS -> "no service requests were registered"
+        WifiP2pManager.ERROR -> "the framework reported an internal error"
+        else -> "reason $reason"
+    }
+
+    /**
+     * WifiManager.LocalOnlyHotspotCallback's reason codes, for the same reason.
+     */
+    private fun localOnlyFailure(reason: Int): String = when (reason) {
+        WifiManager.LocalOnlyHotspotCallback.ERROR_NO_CHANNEL ->
+            "no free Wi-Fi channel — another access point or Wi-Fi Direct group may be using " +
+                "the radio"
+        WifiManager.LocalOnlyHotspotCallback.ERROR_GENERIC ->
+            "the framework refused without saying why"
+        WifiManager.LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE ->
+            "the Wi-Fi hardware is in a mode that cannot also host a hotspot"
+        WifiManager.LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED ->
+            "tethering is disallowed on this device, possibly by a policy or the carrier"
+        else -> "reason $reason"
+    }
+
+    /** Entry point for the permission launcher, which cannot see a private function. */
+    fun resumeFallbackHotspot() {
+        startLocalOnlyHotspot()
     }
 
     fun startHotspot() {
@@ -1347,6 +1548,19 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
                 return
             }
         }
+        // Fork: contact arriving while nothing is running means a paired device found this
+        // one's standing advertisement and wants to send over a hotspot. Arm as the receiving
+        // half here; the existing logic below then drives it exactly as a normal transfer
+        // would, because by this point it *is* one.
+        if (!transferIsRunning) {
+            if (onIdlePeerContact?.invoke(peerOS) != true) {
+                outputText(
+                    "A device made contact over Bluetooth, but nothing is set up to receive " +
+                        "from it here."
+                )
+                return
+            }
+        }
         // By role, not by send/receive. The central is the side holding a GATT client, so it is
         // the side that can write -- and the peer's peripheral half is blocked waiting for exactly
         // that write to learn what we are. Keying this off "sending" was right when the sender was
@@ -1425,7 +1639,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             }
         }
         withContext(Dispatchers.IO) {
-            if (connectionMode == ConnectionMode.SharedNetwork) {
+            // Fork: a paired transfer arrives here with `client` already connected — dialled
+            // by connectToPairedPeer(), or handed over by the listener that accepted it — so
+            // there is nothing to discover and nothing to wait for. Everything below the
+            // branches (socket options, streams) still applies and is deliberately shared.
+            if (pairedSession?.overHotspot == false) {
+                // nothing to do: the socket is open
+            } else if (connectionMode == ConnectionMode.SharedNetwork) {
                 // receiver is TCP server, sender connects. the server socket was bound
                 // before discovery started, in findPeerOnSharedNetwork().
                 if (mode == Mode.Receiving) {

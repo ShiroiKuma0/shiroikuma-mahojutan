@@ -213,11 +213,11 @@
         android:layout_width="match_parent"
         android:layout_height="50dp"
         android:layout_marginStart="16dp"
-        android:layout_marginTop="196dp"
+        android:layout_marginTop="4dp"
         android:layout_marginEnd="16dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/modeInstruction"
         app:selectionRequired="true"
         app:singleSelection="true">
 
@@ -391,13 +391,14 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
+        android:layout_marginTop="10dp"
         android:text="@string/step1"
         android:textColor="?android:attr/textColorPrimary"
         android:textSize="16sp"
         android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@+id/modeGroup"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/topBlockBarrier" />
 
     <TextView
         android:id="@+id/programTitle"
@@ -444,9 +445,65 @@
         android:text="@string/uiSettingsLink"
         android:textAllCaps="false"
         android:textSize="12sp"
-        app:layout_constraintBottom_toTopOf="@+id/modeGroup"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/qrCodeView" />
+
+    <!-- Fork: the top of the screen is two columns — the title, version, Bluetooth switch and
+         its hint on the left; the logo, the Devices pill and the device strip on the right —
+         and either can be the taller one. The hint wraps to two lines on a narrow screen and
+         the strip appears and disappears with pairing, so neither can be assumed to win. A
+         barrier takes whichever is lower, which is what stops "Select mode for this device"
+         landing on top of one of them. -->
+    <androidx.constraintlayout.widget.Barrier
+        android:id="@+id/topBlockBarrier"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:barrierDirection="bottom"
+        app:constraint_referenced_ids="bluetoothHint,devicePills" />
+
+    <!-- Fork: the paired devices, as one tap each. Two rows in one HorizontalScrollView — a
+         column per device, top pill for this network and bottom pill over a hotspot — so the
+         two rows are aligned by construction and scroll together, which two separate scroll
+         views could never be made to do reliably. Gone until something is paired. -->
+    <HorizontalScrollView
+        android:id="@+id/devicePills"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
+        android:scrollbars="none"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/uiButton">
+
+        <LinearLayout
+            android:id="@+id/devicePillRows"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
+    <!-- Fork: paired devices. Beside the UI button rather than in the connection-mode row,
+         because it is not a third connection mode: it is a different way in, one that skips
+         the mode, the password and arming the other device entirely. -->
+    <Button
+        android:id="@+id/devicesButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="6dp"
+        android:insetTop="0dp"
+        android:insetBottom="0dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:text="@string/devicesLink"
+        android:textAllCaps="false"
+        android:textSize="12sp"
+        app:layout_constraintBaseline_toBaselineOf="@+id/uiButton"
+        app:layout_constraintEnd_toStartOf="@+id/uiButton" />
 
     <TextView
         android:id="@+id/textView"

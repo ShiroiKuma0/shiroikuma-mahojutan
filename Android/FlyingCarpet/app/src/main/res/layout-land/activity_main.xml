@@ -65,6 +65,24 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/qrCodeView" />
 
+    <!-- Fork: paired devices — see the note in the portrait layout. -->
+    <Button
+        android:id="@+id/devicesButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="6dp"
+        android:insetTop="0dp"
+        android:insetBottom="0dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp"
+        android:text="@string/devicesLink"
+        android:textAllCaps="false"
+        android:textSize="12sp"
+        app:layout_constraintBaseline_toBaselineOf="@+id/uiButton"
+        app:layout_constraintEnd_toStartOf="@+id/uiButton" />
+
     <TextView
         android:id="@+id/peerInstruction"
         android:layout_width="0dp"
@@ -78,6 +96,30 @@
         app:layout_constraintEnd_toStartOf="@+id/qrCodeView"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/connectionGroup" />
+
+    <!-- Fork: the paired devices, one tap each. Portrait puts this under the settings pill;
+         landscape cannot, because the top right is a 120dp logo column, so it sits full width
+         above the log instead. One HorizontalScrollView holding a column per device, so the
+         two rows are aligned by construction and scroll together. -->
+    <HorizontalScrollView
+        android:id="@+id/devicePills"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
+        android:scrollbars="none"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/startButton">
+
+        <LinearLayout
+            android:id="@+id/devicePillRows"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
 
     <TextView
         android:id="@+id/outputBox"
@@ -99,7 +141,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.476"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/startButton" />
+        app:layout_constraintTop_toBottomOf="@+id/devicePills" />
 
     <Button
         android:id="@+id/startButton"

@@ -6,6 +6,9 @@
     <title>白い熊 魔法絨毯</title>
     <script type="module" src="/main.js" defer></script>
     <script type="module" src="/customize.js" defer></script>
+    <!-- fork: paired devices — the one-click send. Loaded after customize.js, whose dialog
+         primitives it imports. -->
+    <script type="module" src="/devices.js" defer></script>
     <!-- <script type="module" src="/deps/bootstrap.bundle.min.js" defer></script> -->
     <link rel="stylesheet" href="/deps/bootstrap.min.css">
     <link rel="stylesheet" href="style.css" />
@@ -29,6 +32,10 @@
             <img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">
           </div>
           <button type="button" id="uiButton" onclick="window.forkUI.openSettings()">白い熊 魔法絨毯 UI</button>
+          <!-- fork: paired devices. Sits with the UI button rather than in the mode row,
+               because it is not a third connection mode — it is a different way in, one
+               that skips the mode, the password and arming the other device entirely. -->
+          <button type="button" id="devicesButton" onclick="window.forkDevices.openDevicesPanel()">Devices</button>
         </div>
       </div>
       <div class="horizontalContainer" style="flex-grow: 0; margin: 10px;">

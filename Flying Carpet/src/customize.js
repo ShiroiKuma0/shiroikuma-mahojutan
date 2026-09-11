@@ -199,6 +199,7 @@ const SECTIONS = [
       textSurface('title', 'Title', [labelField('title.text', 'Title text')]),
       textSurface('version', 'Version label', [labelField('version.text', 'Label text')]),
       textSurface('about', '“About” link', [labelField('about.text', 'Link text')]),
+      textSurface('devicesButton', '“Devices” button', [labelField('devicesButton.text', 'Button text')]),
       textSurface('uiButton', '“白い熊 魔法絨毯 UI” button', [labelField('uiButton.text', 'Button text')], {
         extraColors: [
           colorField('uiButton.bg', 'Background', BLACK),
@@ -359,6 +360,7 @@ const DEFAULT_TEXTS = {
   'title.text': '白い熊 魔法絨毯',
   'about.text': 'About',
   'uiButton.text': '白い熊 魔法絨毯 UI',
+  'devicesButton.text': 'Devices',
   'bluetooth.text': 'Use Bluetooth',
   'modeInstruction.text': 'Select File Mode',
   'connectionInstruction.text': 'Select Connection Mode',
@@ -389,6 +391,7 @@ const TEXT_SELECTORS = {
   version: '#versionLabel',
   about: '#aboutButton',
   uiButton: '#uiButton',
+  devicesButton: '#devicesButton',
   bluetooth: 'label[for=bluetoothSwitch]',
   bluetoothHint: '#bluetoothHint',
   modeInstruction: '#modeInstruction',
@@ -442,8 +445,8 @@ function buildThemeCss() {
   css += `body { background-color: ${eColor('window.bg', BLACK)} !important; }\n`;
 
   // Simple text surfaces.
-  for (const key of ['title', 'version', 'about', 'bluetooth', 'bluetoothHint', 'modeInstruction',
-    'connectionInstruction', 'peerInstruction']) {
+  for (const key of ['title', 'version', 'about', 'uiButton', 'devicesButton', 'bluetooth',
+    'bluetoothHint', 'modeInstruction', 'connectionInstruction', 'peerInstruction']) {
     css += `${TEXT_SELECTORS[key]} { ${textDecls(key, true)} }\n`;
   }
   css += `#aboutButton { cursor: pointer; }\n`;
@@ -467,6 +470,15 @@ function buildThemeCss() {
   css += `#startButton, #sendDirButton, #lastFolderButton { background-color: ${eColor('start.fill', BLACK)} !important;` +
     ` border: ${eDim('start.strokeWidth', BORDER_WIDTH)}px solid ${eColor('start.stroke', YELLOW)} !important;` +
     ` border-radius: ${eDim('start.cornerRadius', CORNER_RADIUS)}px !important; ${textDecls('start', true)} }\n`;
+
+  // The two buttons under the logo. These four settings have always been in the catalog and
+  // never had a rule generated for them, so the page offered controls that changed nothing;
+  // #uiButton was picking up its box from the static base in customize.css instead. The
+  // Devices button is styled from the same keys, because the two read as one pair of
+  // controls and splitting them would mean setting a border width twice to get one look.
+  css += `#uiButton, #devicesButton { background-color: ${eColor('uiButton.bg', BLACK)} !important;` +
+    ` border: ${eDim('uiButton.strokeWidth', BORDER_WIDTH)}px solid ${eColor('uiButton.stroke', YELLOW)} !important;` +
+    ` border-radius: ${eDim('uiButton.cornerRadius', CORNER_RADIUS)}px !important; }\n`;
 
   // Cancel button.
   css += `#cancelButton { background-color: ${eColor('cancel.fill', BLACK)} !important;` +
@@ -559,7 +571,7 @@ function buildThemeCss() {
 
 // Set label texts on the main page (only surfaces whose element carries its own text).
 function applyTexts() {
-  for (const key of ['title', 'about', 'uiButton', 'bluetooth', 'modeInstruction', 'connectionInstruction',
+  for (const key of ['title', 'about', 'uiButton', 'devicesButton', 'bluetooth', 'modeInstruction', 'connectionInstruction',
     'peerInstruction', 'send', 'receive', 'hotspot', 'sharedNetwork', 'androidOs', 'iosOs', 'linuxOs',
     'macOs', 'windowsOs', 'cancel']) {
     const el = document.querySelector(TEXT_SELECTORS[key]);
@@ -673,7 +685,7 @@ function surfaceKeys(surface) {
   return keys;
 }
 
-function el(tag, className, text) {
+export function el(tag, className, text) {
   const e = document.createElement(tag);
   if (className) e.className = className;
   if (text !== undefined) e.innerText = text;
@@ -878,7 +890,7 @@ function buildColorGroup(group, container) {
 // only the info dialog, so the panel stays open and the problem can be fixed on the spot.
 
 /** A yellow-bordered black dialog with right-aligned pills. Each action decides what to close. */
-function forkInfo(title, body, actions) {
+export function forkInfo(title, body, actions) {
   const overlay = el('div', 'fork-overlay');
   const box = el('div', 'fork-info-box');
   box.appendChild(el('div', 'fork-info-title', title));
@@ -898,7 +910,7 @@ function forkInfo(title, body, actions) {
 }
 
 /** Single-OK dialog that closes only itself — every failure message uses this. */
-function forkAlert(title, body) {
+export function forkAlert(title, body) {
   forkInfo(title, body, [{ label: 'OK', onClick: (close) => close() }]);
 }
 

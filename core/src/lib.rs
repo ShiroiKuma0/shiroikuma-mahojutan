@@ -9,6 +9,9 @@ pub mod bluetooth;
 pub mod discovery;
 pub mod error;
 pub mod noise;
+pub mod paired;
+pub mod pairing;
+pub mod presence;
 mod receiving;
 mod sending;
 pub mod utils;
@@ -396,6 +399,11 @@ pub async fn start_transfer<T: UI>(
     connection_mode: ConnectionMode,
     // The sending side's answers to "the other device already has this file" (fork-only).
     mut conflict_rx: mpsc::Receiver<FileConflictAnswer>,
+    // Fork: the group key, when this is a transfer between paired devices over a hotspot.
+    // Everything a hotspot transfer normally has to exchange — the password, the SSID, and
+    // therefore the whole QR-or-Bluetooth ceremony — is derived from it instead. None for
+    // every other transfer, which then behaves exactly as it always has.
+    paired_key: Option<[u8; 32]>,
 ) -> Option<TransferStream> {
     // get files or receive directory
     // don't panic on bad input: a panic here kills the transfer task without running
@@ -444,7 +452,19 @@ pub async fn start_transfer<T: UI>(
     // NetworkManager quite rightly reported "Wi-Fi ネットワークが見つかりませんでした" (白い熊,
     // 2026-08-11, first transfer after the hosting flip).
     let mut peer_ssid: Option<String> = None;
-    if using_bluetooth {
+    // Fork: paired devices need no credential exchange at all. The password is derived from
+    // the group key on both sides, and so is the SSID — including an Android host's Wi-Fi
+    // Direct group name, which is "DIRECT-fc-" followed by that same password, so the one
+    // name that genuinely cannot be derived from a *generated* password can be derived from
+    // this one. That is what removes the QR code, the typing and the BLE handshake.
+    if let Some(key) = paired_key {
+        let derived = noise::derive_hotspot_password(&key);
+        if peer.as_deref() == Some("android") && !network::is_hosting(&Peer::Android, &mode) {
+            peer_ssid = Some(format!("DIRECT-fc-{}", derived));
+        }
+        password = Some(derived);
+    }
+    if using_bluetooth && paired_key.is_none() {
         match negotiate_bluetooth(&mode, ble_ui_rx, ui, connection_mode).await {
             Ok((p, s, pw)) => {
                 peer = Some(p);
@@ -476,7 +496,14 @@ pub async fn start_transfer<T: UI>(
     // mode the discovery HMAC key is derived from it too (see noise::derive_discovery_key)
     // so that no fast hash of the password ever goes on the air. Same PBKDF2 cost as
     // before — it previously ran inside the handshake — just moved before discovery.
-    let psk = noise::derive_psk(&password);
+    // Fork: a paired transfer keys the handshake from the group key directly. The hotspot
+    // password derived above is a Wi-Fi credential and nothing more — someone who learns it
+    // gets onto the access point and no further, because the payload is behind this key,
+    // which is 256 bits of randomness and never leaves either device.
+    let psk = match paired_key {
+        Some(key) => noise::derive_paired_psk(&key),
+        None => noise::derive_psk(&password),
+    };
 
     {
         let mut _state_ssid = state_ssid.lock().expect("Couldn't lock state_ssid");
@@ -945,7 +972,8 @@ async fn start_shared_network_transfer<T: UI>(
     Ok((PeerResource::WifiClient(peer_ip), stream))
 }
 
-async fn confirm_mode<S: AsyncRead + AsyncWrite + Unpin>(
+// fork: pub(crate) so paired.rs can run the same preamble over its own connection.
+pub(crate) async fn confirm_mode<S: AsyncRead + AsyncWrite + Unpin>(
     mode: Mode,
     is_wifi_client: bool,
     stream: &mut S,
@@ -1004,7 +1032,8 @@ async fn confirm_mode<S: AsyncRead + AsyncWrite + Unpin>(
     Ok(())
 }
 
-async fn confirm_version<S: AsyncRead + AsyncWrite + Unpin>(
+// fork: pub(crate) so paired.rs can run the same preamble over its own connection.
+pub(crate) async fn confirm_version<S: AsyncRead + AsyncWrite + Unpin>(
     is_wifi_client: bool,
     stream: &mut S,
 ) -> Result<bool, FCError> {

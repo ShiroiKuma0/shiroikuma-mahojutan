@@ -63,6 +63,79 @@ pub fn derive_discovery_key(psk: &[u8; 32]) -> [u8; 32] {
     crate::utils::compute_hmac(psk, DISCOVERY_INFO)
 }
 
+// ---------------------------------------------------------------------------------------
+// Fork: paired devices.
+//
+// A paired group shares one 32-byte random group key instead of a per-transfer password.
+// Everything below is one HMAC-SHA256 of that key under a distinct label, exactly the
+// domain-separation shape derive_discovery_key already uses. There is no PBKDF2 anywhere
+// on this path and there must not be: PBKDF2 exists to slow a dictionary attack on a
+// low-entropy password, and a 256-bit random key has no dictionary. Stretching it would
+// cost 600k iterations per transfer and buy nothing.
+//
+// Must be byte-identical to Pairing.kt.
+// ---------------------------------------------------------------------------------------
+
+pub const PAIRED_PRESENCE_INFO: &[u8] = b"mahojutan presence v1";
+pub const PAIRED_PSK_INFO: &[u8] = b"mahojutan paired psk v1";
+pub const PAIRED_HOTSPOT_INFO: &[u8] = b"mahojutan hotspot v1";
+
+/// Authenticates presence announcements (see presence.rs). Separate from the Noise PSK so
+/// that a captured announcement reveals nothing usable against the transport.
+pub fn derive_presence_key(group_key: &[u8; 32]) -> [u8; 32] {
+    crate::utils::compute_hmac(group_key, PAIRED_PRESENCE_INFO)
+}
+
+/// The Noise pre-shared key for a transfer between paired devices. Completing the
+/// handshake with it *is* the authentication: only a group member can.
+pub fn derive_paired_psk(group_key: &[u8; 32]) -> [u8; 32] {
+    crate::utils::compute_hmac(group_key, PAIRED_PSK_INFO)
+}
+
+/// The Wi-Fi credential for a hotspot raised between paired devices, so neither side has
+/// to be told it. Mapped into the same 57-symbol alphabet and length as
+/// `utils::generate_password`, because everything downstream — `get_key_and_ssid`, the
+/// Wi-Fi Direct group name `DIRECT-fc-<pw>`, the WPA2 passphrase — already expects exactly
+/// that shape.
+///
+/// Rejection sampling, not plain `% 57`: 256 is not a multiple of 57, so a bare modulo
+/// would make the first 28 symbols of the alphabet likelier than the rest. Bytes at or
+/// above 4×57 are discarded instead. One 32-byte round accepts ~89% of its bytes and so
+/// almost always yields the 10 symbols needed; the counter suffix exists for the rounds
+/// that don't, and makes the function total rather than fallible.
+///
+/// This credential is *stable* for the life of the group key, unlike the single-use
+/// generated password. That is a deliberate trade — it is the only way the joiner can know
+/// the credential without being told — and it is safe because the AP password protects
+/// only radio access here, never the payload: the transfer itself is still behind the
+/// Noise handshake keyed by `derive_paired_psk`. Rotating it means re-keying the group.
+pub fn derive_hotspot_password(group_key: &[u8; 32]) -> String {
+    const ALPHABET: &[u8] = b"23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+    const PASSWORD_LENGTH: usize = 10;
+    // 4 * 57 = 228. Bytes >= this are rejected so the modulo below stays uniform.
+    const REJECT_AT: u8 = 228;
+
+    let mut password = String::with_capacity(PASSWORD_LENGTH);
+    let mut counter: u8 = 0;
+    while password.len() < PASSWORD_LENGTH {
+        let mut labelled = Vec::with_capacity(PAIRED_HOTSPOT_INFO.len() + 1);
+        labelled.extend_from_slice(PAIRED_HOTSPOT_INFO);
+        labelled.push(counter);
+        let block = crate::utils::compute_hmac(group_key, &labelled);
+        for byte in block {
+            if byte >= REJECT_AT {
+                continue;
+            }
+            password.push(ALPHABET[(byte % ALPHABET.len() as u8) as usize] as char);
+            if password.len() == PASSWORD_LENGTH {
+                break;
+            }
+        }
+        counter = counter.wrapping_add(1);
+    }
+    password
+}
+
 /// Builds the canonical Noise prologue from the plaintext preamble transcript.
 /// `initiator_transcript` is every byte the Noise initiator sent during the preamble
 /// (version + mode exchange) and `responder_transcript` every byte the responder sent;
@@ -539,6 +612,75 @@ mod tests {
         assert_eq!(to_hex(&key), DISCOVERY_KEY_KAT_HEX);
     }
 
+    // Fork: the three paired-device derivations, from a fixed group key. Pairing.kt must
+    // produce these exact values or a phone and the desktop will pair without ever being
+    // able to hear or talk to one another.
+    const GROUP_KEY_KAT: [u8; 32] = [0xABu8; 32];
+
+    #[test]
+    fn paired_derivations_known_answer() {
+        assert_eq!(to_hex(&derive_presence_key(&GROUP_KEY_KAT)), PRESENCE_KEY_KAT_HEX);
+        assert_eq!(to_hex(&derive_paired_psk(&GROUP_KEY_KAT)), PAIRED_PSK_KAT_HEX);
+        assert_eq!(derive_hotspot_password(&GROUP_KEY_KAT), HOTSPOT_PASSWORD_KAT);
+    }
+
+    // Each label must give a different key: that separation is the whole reason they are
+    // labelled, and a copy-paste slip between them would be invisible in every other test.
+    #[test]
+    fn the_three_paired_keys_are_distinct() {
+        let presence = derive_presence_key(&GROUP_KEY_KAT);
+        let psk = derive_paired_psk(&GROUP_KEY_KAT);
+        assert_ne!(presence, psk);
+        assert_ne!(presence, GROUP_KEY_KAT);
+        assert_ne!(psk, GROUP_KEY_KAT);
+    }
+
+    // The derived hotspot credential has to be indistinguishable in shape from a generated
+    // one, because get_key_and_ssid, the WPA2 passphrase and the Wi-Fi Direct group name
+    // all take it as-is.
+    #[test]
+    fn the_hotspot_password_has_the_shape_the_hotspot_code_expects() {
+        const ALPHABET: &str = "23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+        for seed in 0u8..32 {
+            let password = derive_hotspot_password(&[seed; 32]);
+            assert_eq!(password.chars().count(), 10, "seed {}", seed);
+            assert!(
+                password.chars().all(|c| ALPHABET.contains(c)),
+                "seed {} produced {:?}, which is outside the alphabet",
+                seed,
+                password
+            );
+        }
+    }
+
+    // Rejection sampling is only worth its complexity if it actually removes the bias, and
+    // the bias it removes is invisible in a single sample. Over many group keys every
+    // symbol should appear at a comparable rate; a bare `% 57` would make the first 28
+    // symbols roughly twice as likely as the rest, which this bound catches easily.
+    #[test]
+    fn the_hotspot_alphabet_is_used_evenly() {
+        const ALPHABET: &str = "23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+        let mut counts = std::collections::HashMap::new();
+        let mut key = [0u8; 32];
+        for i in 0..4000u32 {
+            key[..4].copy_from_slice(&i.to_be_bytes());
+            for c in derive_hotspot_password(&key).chars() {
+                *counts.entry(c).or_insert(0u32) += 1;
+            }
+        }
+        let expected = (4000 * 10) as f64 / ALPHABET.chars().count() as f64;
+        for c in ALPHABET.chars() {
+            let seen = *counts.get(&c).unwrap_or(&0) as f64;
+            assert!(
+                seen > expected * 0.7 && seen < expected * 1.3,
+                "symbol {:?} appeared {} times against an expected {:.0}",
+                c,
+                seen,
+                expected
+            );
+        }
+    }
+
     // A full NNpsk0 handshake + a transport message, with fixed ephemerals and a fixed PSK,
     // so any platform can reproduce the exact wire bytes (see docs §9).
     #[test]
@@ -792,6 +934,13 @@ const PSK_KAT_HEX: &str = "a3d8b7f17f2252e4c2847a365ab2f392beaa996b7e51dd6fa19ff
 #[cfg(test)]
 const DISCOVERY_KEY_KAT_HEX: &str =
     "45e49b632788b21069bf48720d6af230ecbd936b3cb16c898a8e1eac51944112";
+// Fork: paired-device derivations from a group key of 32 bytes of 0xAB.
+#[cfg(test)]
+const PRESENCE_KEY_KAT_HEX: &str = "5678179a00a6f0f3a42e3c51a9e9ab1a26bb43bbb7613347e1c7c4634cd77bd6";
+#[cfg(test)]
+const PAIRED_PSK_KAT_HEX: &str = "a93dc0ab95d012e32d5d98c447cfd72edb404faab555856cf7f8e8f80aaed594";
+#[cfg(test)]
+const HOTSPOT_PASSWORD_KAT: &str = "wy2MBG98PJ";
 #[cfg(test)]
 const HANDSHAKE_MSG1_HEX: &str =
     "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209a3e9c18456aba2185de800ffaca55b22";
