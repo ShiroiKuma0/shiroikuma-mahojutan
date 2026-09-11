@@ -6,8 +6,9 @@
 
 **Encrypted, peer-to-peer file transfer — over an ad hoc WiFi hotspot, or over a network you are already on. No cloud, no account.**
 
-A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**: a full
-yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles every single surface, a live
+A fork of [Flying Carpet](https://github.com/spieglt/FlyingCarpet) with **major additions**:
+**paired devices** — send to a device you already know in one tap, with nothing to do on the device
+receiving — a full yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI* page that restyles every single surface, a live
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a headless backup surface that lets a sister app back
 this one up — and put it back on a wiped phone — external font
@@ -26,9 +27,50 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+067`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+075`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
+
+---
+
+## 👥 Paired devices — one tap, and nothing to do over there
+
+Pair two devices once, by showing a QR code and scanning it. From then on each one carries a name
+and appears on the other as a pill: **tap it and the files go.** No mode to choose, no password to
+agree, no arming the far device within the same minute — the thing that made sending a file a
+ceremony rather than an action.
+
+It works because a paired device **runs a server while its app is open**. One 32-byte key, agreed at
+pairing, is all either side needs: the presence key, the encryption key and the Wi-Fi credential are
+all derived from it, so nothing is ever exchanged again.
+
+**This is stronger than the password it replaces, not weaker.** A single-use ten-character password
+is about 58 bits, and an attacker who completes one handshake can crack it offline at leisure —
+stated plainly in the fork's own crypto design notes. A 256-bit random key has no dictionary to
+attack, so that gap simply does not exist.
+
+**Two rows of pills, two routes.** The top row sends over the network you are both on. The bottom
+row raises a hotspot — for a network that will not pass traffic between its clients, or no network
+at all — and it *also* needs nothing tapped over there: the sender asks over the LAN when it can and
+over Bluetooth when it cannot, and the other device raises its access point on its own. Hold a pill
+to rename, re-home or forget a device; drag it to reorder.
+
+**Built for a real network rather than a textbook one.** The receiver never beacons — it answers, and
+only the device whose screen is lit does any shouting. Each peer's last address is tried before
+anything is broadcast, because a unicast packet reaches a phone whose Wi-Fi driver is filtering
+everything else. Broadcast carries what multicast cannot on a large managed network. And presence
+asks Android which network is *Wi-Fi*, rather than taking the first interface it finds — which on a
+phone with mobile data on is the carrier's.
+
+---
+
+## 📨 A share that asks which device, not which button
+
+Sharing files into the app used to arm them and then ask you to press a button labelled **“Files to
+send”** — a label that was untrue at that moment, since pressing it sent the share rather than
+picking anything. The pause was deliberate and stays, because Hotspot and Shared Network are not
+interchangeable and the choice has to be somewhere. It is just a real question now: **which device?**
+— with the route as a remembered toggle above it rather than two more buttons to press.
 
 ---
 
