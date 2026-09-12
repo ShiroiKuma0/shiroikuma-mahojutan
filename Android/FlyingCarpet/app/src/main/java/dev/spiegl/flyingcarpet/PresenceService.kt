@@ -71,6 +71,10 @@ class PresenceService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // The notification's Stop is the switch, not a pause: it clears the setting too,
+            // so the main page's switch reads off and nothing restarts this behind the user's
+            // back when the app is next opened.
+            Pairing(applicationContext).stayReachable = false
             stopSelf()
             return START_NOT_STICKY
         }

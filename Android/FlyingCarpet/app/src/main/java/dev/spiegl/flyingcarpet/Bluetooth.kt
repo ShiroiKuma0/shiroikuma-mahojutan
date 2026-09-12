@@ -138,6 +138,9 @@ interface BluetoothDelegate {
     // next, so they have to know which of the two it is.
     fun usingSharedNetwork(): Boolean
     fun gotPeer(peerOS: String)
+    // Fork: what to answer when asked what we are — the bare OS, or, in a paired session, the
+    // OS and this device's id, so the far end can pick the pair key (MainViewModel.bleOsValue).
+    fun osValue(): String
     fun gotSsid(ssid: String)
     fun gotPassword(password: String)
     fun connectToPeer()
@@ -515,8 +518,10 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
                 // tell peer we're android
                 OS_CHARACTERISTIC_UUID -> {
                     outputText("Receiving device asked what we are, told it Android")
+                    // Fork: with a paired session running, the answer carries this device's
+                    // id too, so the far end can pick the pair key. See bleOsValue().
                     bluetoothGattServer.sendResponse(
-                        device, requestId, BluetoothGatt.GATT_SUCCESS, 0, "android".toByteArray()
+                        device, requestId, BluetoothGatt.GATT_SUCCESS, 0, osValue().toByteArray()
                     )
                 }
                 // if we've started wifi hotspot, this will send the details. if not, it will send a blank string and the peer will need to wait and try again

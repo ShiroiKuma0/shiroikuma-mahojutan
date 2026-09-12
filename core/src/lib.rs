@@ -384,6 +384,16 @@ impl Transfer {
     }
 }
 
+/// Fork: what a hotspot transfer between paired devices needs to know — the key shared
+/// with the one peer, this device's own id for the hello, and the peer's name for the
+/// sentences.
+#[derive(Clone, Debug)]
+pub struct PairedHotspot {
+    pub key: [u8; 32],
+    pub local_id: [u8; 16],
+    pub peer_name: String,
+}
+
 pub async fn start_transfer<T: UI>(
     mode: String,
     using_bluetooth: bool,
@@ -399,12 +409,14 @@ pub async fn start_transfer<T: UI>(
     connection_mode: ConnectionMode,
     // The sending side's answers to "the other device already has this file" (fork-only).
     mut conflict_rx: mpsc::Receiver<FileConflictAnswer>,
-    // Fork: the group key, when this is a transfer between paired devices over a hotspot.
-    // Everything a hotspot transfer normally has to exchange — the password, the SSID, and
-    // therefore the whole QR-or-Bluetooth ceremony — is derived from it instead. None for
-    // every other transfer, which then behaves exactly as it always has.
-    paired_key: Option<[u8; 32]>,
+    // Fork: the pair key and this device's identity, when this is a transfer between
+    // paired devices over a hotspot. Everything a hotspot transfer normally has to exchange
+    // — the password, the SSID, and therefore the whole QR-or-Bluetooth ceremony — is
+    // derived from the key instead. None for every other transfer, which then behaves
+    // exactly as it always has.
+    paired: Option<PairedHotspot>,
 ) -> Option<TransferStream> {
+    let paired_key = paired.as_ref().map(|p| p.key);
     // get files or receive directory
     // don't panic on bad input: a panic here kills the transfer task without running
     // cleanup, which is how the UI used to get stuck in its in-progress state (#118)
@@ -692,6 +704,36 @@ pub async fn start_transfer<T: UI>(
             return Some(TransferStream::Plain(tcp));
         }
     };
+
+    // Fork: between paired devices the hello goes here, still in the clear and still on
+    // the recording stream — who is calling and under which key — so the far end can pick
+    // the pair key before the handshake and say so in words if it cannot.
+    if let Some(p) = &paired {
+        let outcome = match noise_role {
+            noise::Role::Initiator => {
+                let identity = paired::HelloIdentity {
+                    device_id: p.local_id,
+                    os: presence::PeerOs::this_device(),
+                };
+                paired::send_hello(&mut preamble, &identity, &p.key, &p.peer_name)
+                    .await
+                    .map(|_| ())
+            }
+            noise::Role::Responder => {
+                // The one key, accepted from whoever holds it: on a hotspot the peer was
+                // chosen by hand on both ends, so there is nobody else it could be.
+                let ring = pairing::KeyRing {
+                    keys: vec![pairing::PairKey::pending(p.key)],
+                };
+                paired::receive_hello(&mut preamble, &ring).await.map(|_| ())
+            }
+        };
+        if let Err(e) = outcome {
+            ui.output(&format!("{}", e));
+            let (tcp, _, _) = preamble.into_parts();
+            return Some(TransferStream::Plain(tcp));
+        }
+    }
 
     // Now establish the Noise encrypted transport over the same connection, for both modes,
     // with the preamble transcript bound in as the prologue. Everything after this — file

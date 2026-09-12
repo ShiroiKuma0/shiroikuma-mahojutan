@@ -24,13 +24,19 @@ import kotlin.coroutines.coroutineContext
 //
 //   stock shared network        paired
 //   -------------------------   -----------------------------------------------
-//   generate a password         nothing; the group key was agreed once, at pairing
+//   generate a password         nothing; the pair key was agreed once, at pairing
 //   show it / hand it over BLE  nothing
 //   arm both devices            arm neither; the receiver has been listening all along
 //   discover by role            connect straight to a known address
-//   PBKDF2(password) → PSK      HMAC(groupKey) → PSK, no stretching needed
+//   PBKDF2(password) → PSK      HMAC(pairKey) → PSK, no stretching needed
 //
-// The Rust twin is core/src/paired.rs and the offer exchange below must match it exactly.
+// Two additions to the wire, both spoken only between paired devices: the **hello**, in
+// the clear between the preamble and the Noise handshake — who is calling and under which
+// key, so the far end can pick its pair key before the handshake and say "not paired" or
+// "different key" in words — and the **offer**, inside Noise before the file count. Every
+// byte of the hello is recorded into the Noise prologue like the preamble is.
+//
+// The Rust twin is core/src/paired.rs and both exchanges below must match it exactly.
 // Note that a paired transfer reports itself as ConnectionMode.SharedNetwork throughout:
 // the two are symmetric in the same way, so confirmMode's existing shared-network branch is
 // correct as it stands and no new connection mode has to be threaded through the app.
@@ -53,6 +59,14 @@ const val REQUEST_TRANSFER = 0L
  * accept/refuse, so a device that will not host says so in the usual way.
  */
 const val REQUEST_RAISE_HOTSPOT = 1L
+
+/** The hello's own version, separate from the offer's. Must match core/src/paired.rs. */
+const val HELLO_VERSION = 1L
+const val HELLO_PROCEED = 1L
+/** "I hold no key for you and no unclaimed code with that id." Pair the two. */
+const val HELLO_UNKNOWN = 2L
+/** "I know you, but under a different key." One side re-paired; pair them again. */
+const val HELLO_KEY_MISMATCH = 3L
 
 /** The same bound Receive.kt puts on a filename length, and for the same reason. */
 private const val MAX_OFFER_FIELD_BYTES = 8192L
@@ -108,13 +122,21 @@ sealed class Verdict {
  */
 class HotspotRequested(val offer: PairedOffer?) : Exception("Hotspot requested")
 
+/** Whom a hello proved, on the listening side, and under which key. */
+data class Caller(val deviceId: String, val os: PeerOs, val key: PairKey)
+
 /**
  * Marks the running transfer as a paired one and carries what only it needs. Its presence is
- * what the two hooks in MainViewModel.startTransfer() switch on; null means an ordinary
+ * what the three hooks in MainViewModel.startTransfer() switch on; null means an ordinary
  * hotspot or shared-network transfer and nothing behaves differently.
  */
 class PairedSession(
-    val groupKey: ByteArray,
+    /**
+     * The pair key, when this side already knows whom it is talking to: always on the
+     * calling side, and on a hotspot host armed for one peer. Null on the listener, where
+     * the hello decides and fills it in.
+     */
+    var key: ByteArray?,
     val sending: Boolean,
     /**
      * True when this paired transfer rides a hotspot rather than a network both devices are
@@ -132,8 +154,91 @@ class PairedSession(
     var offer: PairedOffer? = null,
     val localId: String,
     val localName: String,
+    /** The other device's name, for the sentences a refused hello produces. */
+    val peerName: String = "",
+    /** On the listener: the keys the hello may pick from, read afresh per connection. */
+    val ring: (() -> KeyRing)? = null,
+    /** On the listener: whom the hello proved, once it has. */
+    var caller: Caller? = null,
+    /** On the listener: told when a handshake claims a code this device showed. */
+    val onClaimed: (Caller, String) -> Unit = { _, _ -> },
     val decide: (PairedOffer) -> Verdict = { Verdict.Refuse(Refusal.NO_DESTINATION) },
 )
+
+// ── the hello ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Runs the hello, from whichever end this device is on. Called from startTransfer() after the
+ * preamble and before the Noise handshake, on the *recording* streams, so it lands in the
+ * prologue. On the listening side it is what chooses the PSK.
+ */
+suspend fun MainViewModel.exchangePairedHello(session: PairedSession, role: NoiseRole) {
+    withContext(Dispatchers.IO) {
+        if (role == NoiseRole.INITIATOR) {
+            val key = session.key ?: throw Exception("No pairing key for that device; pair it again.")
+            outputStream.write(longToBigEndianBytes(HELLO_VERSION))
+            writeBytes(outputStream, base32Decode(session.localId) ?: ByteArray(16))
+            writeBytes(outputStream, keyId(key))
+            outputStream.write(longToBigEndianBytes(PeerOs.ANDROID.value.toLong()))
+            outputStream.flush()
+            val who = session.peerName.ifEmpty { "The other device" }
+            when (val answer = ByteBuffer.wrap(readNBytesOrThrow(inputStream, 8)).long) {
+                HELLO_PROCEED -> {}
+                HELLO_UNKNOWN -> throw Exception(
+                    "$who is not paired with this device. Pair the two — show the code on " +
+                        "either one and scan or type it on the other."
+                )
+                HELLO_KEY_MISMATCH -> throw Exception(
+                    "$who knows this device under a different pairing key — one of the two " +
+                        "was paired again since. Pair them once more, from either side."
+                )
+                else -> throw Exception("$who answered the hello with $answer")
+            }
+        } else {
+            val version = ByteBuffer.wrap(readNBytesOrThrow(inputStream, 8)).long
+            if (version != HELLO_VERSION) {
+                throw Exception(
+                    "The other device sent a hello of version $version, which this version " +
+                        "does not understand. Update both devices."
+                )
+            }
+            val id = readBytes(inputStream)
+            if (id.size != 16) throw Exception("The other device sent a malformed identity")
+            val wanted = readBytes(inputStream)
+            if (wanted.size != 4) throw Exception("The other device sent a malformed key id")
+            val os = PeerOs.fromByte(ByteBuffer.wrap(readNBytesOrThrow(inputStream, 8)).long.toInt())
+                ?: PeerOs.ANDROID
+            // A hotspot host armed for one peer holds that one key and accepts whoever
+            // proves it; a listener asks the store, so a code shown a moment ago counts.
+            val ring = session.ring?.invoke()
+                ?: KeyRing(listOfNotNull(session.key?.let { PairKey.pending(it) }))
+            val candidates = ring.candidates(id, wanted)
+            // A peer's own key first, then an unclaimed code: a device we know does not get
+            // to spend a code it did not need.
+            val chosen = candidates.firstOrNull { !it.isPending } ?: candidates.firstOrNull()
+            if (chosen == null) {
+                val known = ring.forDevice(id) != null
+                outputStream.write(
+                    longToBigEndianBytes(if (known) HELLO_KEY_MISMATCH else HELLO_UNKNOWN)
+                )
+                outputStream.flush()
+                throw Exception(
+                    if (known) {
+                        "A paired device called under a different key than the one stored " +
+                            "for it; it needs pairing again."
+                    } else {
+                        "A device that is not paired with this one tried to connect."
+                    }
+                )
+            }
+            outputStream.write(longToBigEndianBytes(HELLO_PROCEED))
+            outputStream.flush()
+            session.key = chosen.key
+            session.caller = Caller(base32Encode(id), os, chosen)
+            psk = derivePairedPsk(chosen.key)
+        }
+    }
+}
 
 // ── the offer exchange ────────────────────────────────────────────────────────────────────
 
@@ -226,6 +331,15 @@ suspend fun MainViewModel.exchangePairedOffer(session: PairedSession) {
         } else {
             val offer = readPairedOffer()
             session.offer = offer
+            // The handshake has proved the caller holds the key it named in the hello. If
+            // that key was a code this device showed, the caller is the device it was shown
+            // to: record it now, with the name the offer carries.
+            session.caller?.let { caller ->
+                if (offer.deviceId != caller.deviceId) {
+                    throw Exception("The other device's offer names a different device than its hello.")
+                }
+                session.onClaimed(caller, offer.name)
+            }
             if (offer.request == REQUEST_RAISE_HOTSPOT) {
                 // Asked, not told: the same accept/refuse the file case uses, so a device
                 // that will not host says so in a sentence the caller can act on.

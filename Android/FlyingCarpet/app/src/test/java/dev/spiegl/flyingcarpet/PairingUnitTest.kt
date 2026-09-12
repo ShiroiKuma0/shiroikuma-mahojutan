@@ -113,24 +113,68 @@ class PairingUnitTest {
     @Test
     fun pairUriRoundTripsWithAJapaneseName() {
         val key = ByteArray(32) { 0x42 }
-        val uri = "$PAIR_URI_PREFIX${base32Encode(key)}:白い熊二代目"
-        val (parsedKey, parsedName) = parsePairUri(uri)!!
-        assertArrayEquals(key, parsedKey)
-        assertEquals("白い熊二代目", parsedName)
+        val id = ByteArray(16) { 0x17 }
+        val uri = pairUri(key, base32Encode(id), "白い熊二代目")
+        val code = parsePairUri(uri)!!
+        assertArrayEquals(key, code.key)
+        assertArrayEquals(id, code.deviceId)
+        assertEquals("白い熊二代目", code.name)
     }
 
-    /** A bare key is exactly what someone retyping from under a QR code produces. */
+    /** The typed form is exactly what someone retyping from under a QR code produces. */
     @Test
-    fun aBareKeyPairsWithoutTheUriWrapper() {
+    fun theTypedFormPairsWithoutTheUriWrapper() {
         val key = ByteArray(32) { 0x42 }
-        val (parsedKey, name) = parsePairUri(base32Encode(key))!!
-        assertArrayEquals(key, parsedKey)
-        assertNull(name)
+        val id = ByteArray(16) { 0x17 }
+        val typed = typedCode(pairUri(key, base32Encode(id), "desk"))
+        assertEquals(78, typed.replace(" ", "").length)
+        val code = parsePairUri(typed.lowercase())!!
+        assertArrayEquals(key, code.key)
+        assertArrayEquals(id, code.deviceId)
+        assertNull(code.name)
     }
 
     @Test
-    fun aShortKeyIsRefused() {
-        assertNull(parsePairUri(base32Encode(ByteArray(8))))
+    fun aShortCodeIsRefused() {
+        assertNull(parsePairUri(base32Encode(ByteArray(32))))
+    }
+
+    /** A group-model code must be refused, and recognisably so. */
+    @Test
+    fun anOldGroupCodeIsRefused() {
+        val old = "mahojutan-pair:1:${base32Encode(ByteArray(32) { 1 })}:phone"
+        assertNull(parsePairUri(old))
+        assertTrue(isOldPairUri(old))
+    }
+
+    // ── keys ──────────────────────────────────────────────────────────────────────────────
+
+    /** The key id, byte for byte what pairing.rs computes — see presence_known_answer. */
+    @Test
+    fun keyIdMatchesRust() {
+        assertEquals("c179cecd", hex(keyId(groupKey)))
+    }
+
+    @Test
+    fun theRingOpensOnlyWithTheRightKeyForTheRightDevice() {
+        val me = ByteArray(16) { 7 }
+        val mine = PairKey.bound(ByteArray(32) { 0x10 }, me)
+        val someoneElses = PairKey.bound(ByteArray(32) { 0x20 }, ByteArray(16) { 3 })
+        val pending = PairKey.pending(ByteArray(32) { 0x30 })
+        val ring = KeyRing(listOf(mine, someoneElses, pending))
+        assertEquals(listOf(mine), ring.candidates(me, mine.keyId))
+        assertEquals(listOf(pending), ring.candidates(me, pending.keyId))
+        assertTrue(ring.candidates(me, someoneElses.keyId).isEmpty())
+    }
+
+    /** A derived ring keeps the pair key's id: that is what travels on the wire. */
+    @Test
+    fun aPresenceRingKeepsThePairKeyIds() {
+        val key = PairKey.bound(groupKey, ByteArray(16) { 7 })
+        val presence = KeyRing(listOf(key)).forPresence().keys.single()
+        assertArrayEquals(key.keyId, presence.keyId)
+        assertArrayEquals(derivePresenceKey(groupKey), presence.key)
+        assertArrayEquals(groupKey, KeyRing(listOf(key)).pairKeyBehind(presence.key))
     }
 
     /** Half an encoded kanji would make the presence record's name field invalid UTF-8. */
@@ -151,6 +195,7 @@ class PairingUnitTest {
      */
     @Test
     fun presenceRecordMatchesRust() {
+        val key = ByteArray(32) { 0xAB.toByte() }
         val announcement = PresenceAnnouncement(
             flags = FLAG_PROBE or FLAG_UNATTENDED,
             os = PeerOs.LINUX,
@@ -159,24 +204,25 @@ class PairingUnitTest {
                 0x88.toByte(), 0x99.toByte(), 0xaa.toByte(), 0xbb.toByte(),
                 0xcc.toByte(), 0xdd.toByte(), 0xee.toByte(), 0xff.toByte(),
             ),
+            keyId = keyId(key),
             ipAddress = byteArrayOf(192.toByte(), 168.toByte(), 128.toByte(), 7),
             port = PRESENCE_PORT,
             timestamp = 1_700_000_000L,
             name = "白い熊",
         )
-        val key = ByteArray(32) { 0xAB.toByte() }
         assertEquals(
             "46435052" +                         // "FCPR"
-                "0001" +                         // version 1
+                "0002" +                         // version 2
                 "0003" +                         // FLAG_PROBE | FLAG_UNATTENDED
                 "02" +                           // PeerOs.LINUX
                 "00112233445566778899aabbccddeeff" +
+                "c179cecd" +                     // key id
                 "c0a88007" +                     // 192.168.128.7
                 "0cdb" +                         // port 3291
                 "000000006553f100" +             // timestamp 1700000000
                 "09" +                           // name length in BYTES
                 "e799bde38184e7868a" +           // 白い熊
-                "986b7e88c6db87d391d6cc85b7557f04902daaf5a216cd72a3b8be8b3c721e34",
+                "24899f92f07f9065baa4562e1d61ca584c5c29e847b0e9bd3b9c2669b29fdcfe",
             hex(announcement.serialize(key)),
         )
     }
@@ -191,7 +237,7 @@ class PairingUnitTest {
             unattended = true,
         )
         val bytes = PresenceAnnouncement
-            .create(identity, InetAddress.getByName("192.168.128.7"), probe = true)
+            .create(identity, PairKey.pending(key), InetAddress.getByName("192.168.128.7"), probe = true)
             .serialize(key)
         val parsed = PresenceAnnouncement.deserialize(bytes, bytes.size, key)!!
         assertEquals("白い熊二代目", parsed.name)
@@ -205,7 +251,7 @@ class PairingUnitTest {
     fun aWrongKeyIsRejected() {
         val identity = LocalIdentity(ByteArray(16), "x", PeerOs.ANDROID, false)
         val bytes = PresenceAnnouncement
-            .create(identity, InetAddress.getByName("10.0.0.1"), probe = false)
+            .create(identity, PairKey.pending(ByteArray(32) { 1 }), InetAddress.getByName("10.0.0.1"), probe = false)
             .serialize(ByteArray(32) { 1 })
         assertNull(PresenceAnnouncement.deserialize(bytes, bytes.size, ByteArray(32) { 2 }))
     }
@@ -215,7 +261,7 @@ class PairingUnitTest {
         val key = ByteArray(32) { 0x33 }
         val identity = LocalIdentity(ByteArray(16), "hello", PeerOs.ANDROID, false)
         val bytes = PresenceAnnouncement
-            .create(identity, InetAddress.getByName("10.0.0.1"), probe = false)
+            .create(identity, PairKey.pending(key), InetAddress.getByName("10.0.0.1"), probe = false)
             .serialize(key)
         bytes[PRESENCE_HEADER_SIZE] = (bytes[PRESENCE_HEADER_SIZE].toInt() xor 0xff).toByte()
         assertNull(PresenceAnnouncement.deserialize(bytes, bytes.size, key))
@@ -227,7 +273,7 @@ class PairingUnitTest {
         val key = ByteArray(32) { 0x44 }
         val identity = LocalIdentity(ByteArray(16), "hello", PeerOs.ANDROID, false)
         val bytes = PresenceAnnouncement
-            .create(identity, InetAddress.getByName("10.0.0.1"), probe = false)
+            .create(identity, PairKey.pending(key), InetAddress.getByName("10.0.0.1"), probe = false)
             .serialize(key)
         bytes[PRESENCE_HEADER_SIZE - 1] = 200.toByte()
         assertNull(PresenceAnnouncement.deserialize(bytes, bytes.size, key))
@@ -238,7 +284,7 @@ class PairingUnitTest {
         val key = ByteArray(32) { 0x66 }
         val identity = LocalIdentity(ByteArray(16), "", PeerOs.ANDROID, false)
         val bytes = PresenceAnnouncement
-            .create(identity, InetAddress.getByName("10.0.0.1"), probe = false)
+            .create(identity, PairKey.pending(key), InetAddress.getByName("10.0.0.1"), probe = false)
             .serialize(key)
         assertEquals(PRESENCE_MIN_SIZE, bytes.size)
         assertEquals("", PresenceAnnouncement.deserialize(bytes, bytes.size, key)!!.name)

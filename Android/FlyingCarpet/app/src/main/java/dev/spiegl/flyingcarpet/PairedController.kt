@@ -21,10 +21,10 @@ import java.net.Socket
 //   * the listener, which holds the TCP port and serves whoever connects,
 //   * the send path, which is one call and needs nothing from the far device.
 //
-// In this phase both run only while the app is open, which is already enough to remove the
-// mode, the password and the arming step from a transfer. Making a phone reachable with the
-// app closed is a foreground service and a battery cost, and is deliberately a later,
-// opt-in step — see `stayReachable` in Pairing.kt, which is stored but not yet acted on.
+// Both run while the app is open, which is already enough to remove the mode, the password
+// and the arming step from a transfer; PresenceService runs the same controller with the
+// app closed, behind the "Stay reachable" switch. Keys are pairwise (Pairing.kt), so every
+// probe, handshake and hotspot here is keyed to the one peer it concerns.
 
 /** How long a scan listens. Long enough for a /21 sweep's chunk delays plus the replies. */
 private const val SCAN_WINDOW_MS = 1500L
@@ -57,8 +57,23 @@ class PairedController(
         os = PeerOs.ANDROID,
         // Honest rather than aspirational: this device only accepts a transfer nobody
         // touches while it is actually listening, which for now means while the app is open.
-        unattended = pairing.isPaired && listenerJob?.isActive == true,
+        unattended = pairing.shouldServe && listenerJob?.isActive == true,
     )
+
+    /** The presence keys, one per peer and one per unclaimed code, as the store now stands. */
+    private fun presenceRing(): KeyRing = pairing.keyRing().forPresence()
+
+    /** The presence keys a probe goes out under: the peers' only. */
+    private fun probeKeys(): List<PairKey> = presenceRing().keys.filter { !it.isPending }
+
+    /**
+     * A device has just proved it holds one of our keys — by answering presence, or by
+     * completing a handshake. Records it as the peer that key belongs to, and if the key
+     * was a code this device showed, the code is spent.
+     */
+    private fun claim(pairKey: ByteArray, peer: PairedPeer) {
+        pairing.claim(pairKey, peer)
+    }
 
     /**
      * Brings presence and the listener up, or takes them down to match the store. Idempotent,
@@ -67,14 +82,14 @@ class PairedController(
     init {
         // A paired device that hears a knock while idle answers it. Nothing else in the app
         // has a reason to, so this is set once and left.
-        viewModel.onIdlePeerContact = { peerOs ->
-            armForIncomingHotspot(null, PeerOs.fromLabel(peerOs))
+        viewModel.onIdlePeerContact = { peerOs, peerId ->
+            armForIncomingHotspot(peerId, PeerOs.fromLabel(peerOs))
         }
     }
 
     fun start() {
         stop()
-        val groupKey = pairing.groupKey ?: return
+        if (!pairing.shouldServe) return
         val endpoint = presenceEndpoint(context)
         if (endpoint == null) {
             // Named rather than vague: mobile data is not a local network, and a phone with
@@ -86,13 +101,11 @@ class PairedController(
             )
             return
         }
-        val presenceKey = derivePresenceKey(groupKey)
-
         val paired = PairedListener()
         listener = paired
         listenerJob = scope.launch {
             try {
-                paired.listen { socket -> serveOne(socket, groupKey) }
+                paired.listen { socket -> serveOne(socket) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -112,7 +125,7 @@ class PairedController(
         // does the scanning, and only when a pill is tapped.
         startBleBeacon()
 
-        val presence = PresenceResponder(context, presenceKey, identity())
+        val presence = PresenceResponder(context, ::presenceRing, identity())
         responder = presence
         responderJob = scope.launch {
             try {
@@ -169,18 +182,18 @@ class PairedController(
     }
 
     /**
-     * A device in the group has just told us where it is. Adds it if it is new.
+     * A paired device has just told us where it is — or a device has just claimed a code
+     * this one showed. Adds it if it is new.
      *
-     * That last part is the whole of what made pairing feel one-way (白い熊, 2026-09-11): the
-     * device that *scanned* the QR ran a probe and so learned the other, while the device that
-     * *showed* it only ever answered probes — and this used to discard anything it had not
-     * already heard of, so it never listed the device that had just joined. Pairing is
-     * symmetric by construction: both ends hold the same group key, and completing a presence
-     * exchange is the only credential this feature has, so hearing one is exactly as good a
-     * reason to list a device as finding one.
+     * That last part is what makes pairing symmetric: the device that *showed* the code only
+     * ever answers probes, and this is the moment it learns who scanned it. Completing a
+     * presence exchange means holding the key, which is the only credential this feature
+     * has, so hearing a device is exactly as good a reason to list it as finding one.
      */
     private fun rememberSeen(peer: DiscoveredPeer) {
-        pairing.upsertPeer(
+        val key = pairing.keyRing().pairKeyBehind(peer.presenceKey) ?: return
+        claim(
+            key,
             PairedPeer(
                 deviceId = peer.deviceId,
                 name = peer.name,
@@ -198,10 +211,21 @@ class PairedController(
      * is on screen. A silent first pass is followed by a subnet sweep, which is what rescues
      * 白い熊's own /21 where multicast is dropped between clients.
      */
-    suspend fun scan(): List<DiscoveredPeer> {
-        val groupKey = pairing.groupKey
-        if (groupKey == null) {
-            viewModel.outputText("Not paired with anything yet, so there is nothing to look for.")
+    suspend fun scan(): List<DiscoveredPeer> = scanFor(null)
+
+    /**
+     * Asks for one device, or for all of them. A targeted look goes out under that device's
+     * key alone, so it need not wake every other peer.
+     */
+    private suspend fun scanFor(deviceId: String?): List<DiscoveredPeer> {
+        val keys = probeKeys().filter { key ->
+            deviceId == null || key.deviceId?.let { base32Encode(it) } == deviceId
+        }
+        if (keys.isEmpty()) {
+            viewModel.outputText(
+                if (deviceId == null) "Not paired with anything yet, so there is nothing to look for."
+                else "No pairing key is stored for that device; pair it again."
+            )
             return emptyList()
         }
         val endpoint = presenceEndpoint(context)
@@ -220,31 +244,32 @@ class PairedController(
             "Looking for paired devices on ${endpoint.nic.name} " +
                 "(${endpoint.ip.hostAddress}/${endpoint.prefixLength})..."
         )
-        val key = derivePresenceKey(groupKey)
-        var found = presenceProbe(key, identity(), endpoint, SCAN_WINDOW_MS, sweep = false)
-        if (found.isEmpty()) {
-            found = presenceProbe(key, identity(), endpoint, SCAN_WINDOW_MS, sweep = true)
+        var found = presenceProbe(keys, identity(), endpoint, SCAN_WINDOW_MS, sweep = false)
+        if (found.size < keys.size) {
+            found = presenceProbe(keys, identity(), endpoint, SCAN_WINDOW_MS, sweep = true)
         }
         viewModel.outputText(
             if (found.isEmpty()) {
                 "No paired devices answered. Check the other device has this app open and is " +
-                    "on the same Wi-Fi, and that both were paired with the same key."
+                    "on the same Wi-Fi."
             } else {
                 "Found ${found.size}: " + found.joinToString(", ") { it.name.ifEmpty { "unnamed" } }
             }
         )
         for (peer in found) {
-            pairing.upsertPeer(
+            val key = pairing.keyRing().pairKeyBehind(peer.presenceKey) ?: continue
+            claim(
+                key,
                 PairedPeer(
                     deviceId = peer.deviceId,
                     name = peer.name,
                     os = peer.os.label,
                     lastIp = peer.ip,
                     lastSeen = System.currentTimeMillis() / 1000,
-                    // A peer that has just completed a presence exchange holds the group
-                    // key, which is the only credential this feature has. Starting it
-                    // trusted is the feature; having to switch each device on by hand is
-                    // not. Revocable per peer afterwards.
+                    // A peer that has just completed a presence exchange holds the key,
+                    // which is the only credential this feature has. Starting it trusted is
+                    // the feature; having to switch each device on by hand is not.
+                    // Revocable per peer afterwards.
                     autoAccept = true,
                     // Seeded from the main screen's "Receive in …" folder, so a device works
                     // the moment it is paired instead of refusing its first transfer for
@@ -280,11 +305,11 @@ class PairedController(
      * Returns true if the peer was reached and agreed. False is not fatal — the caller joins
      * anyway, because the peer may be raising one for its own reasons.
      */
-    private suspend fun askPeerToHost(peer: PairedPeer, groupKey: ByteArray): Boolean {
+    private suspend fun askPeerToHost(peer: PairedPeer, key: ByteArray): Boolean {
         val address = peer.lastIp ?: locate(peer.deviceId)
         if (address != null) {
             viewModel.outputText("Asking ${peer.displayName} to raise its hotspot...")
-            if (requestOverLan(peer, address, groupKey)) return true
+            if (requestOverLan(peer, address, key)) return true
             viewModel.outputText("Could not reach it over this network; trying Bluetooth.")
         } else {
             viewModel.outputText(
@@ -298,18 +323,19 @@ class PairedController(
     private suspend fun requestOverLan(
         peer: PairedPeer,
         address: String,
-        groupKey: ByteArray,
+        key: ByteArray,
     ): Boolean {
         return try {
             if (!viewModel.connectToPairedPeer(address)) return false
             viewModel.mode = Mode.Sending
             viewModel.connectionMode = ConnectionMode.SharedNetwork
-            viewModel.psk = derivePairedPsk(groupKey)
+            viewModel.psk = derivePairedPsk(key)
             viewModel.pairedSession = PairedSession(
-                groupKey = groupKey,
+                key = key,
                 sending = true,
                 localId = pairing.deviceId,
                 localName = pairing.name,
+                peerName = peer.displayName,
                 request = REQUEST_RAISE_HOTSPOT,
             )
             viewModel.startTransfer()
@@ -351,9 +377,9 @@ class PairedController(
     }
 
     fun overHotspot(peer: PairedPeer, sending: Boolean, receiveDir: Uri?, onFinished: () -> Unit) {
-        val groupKey = pairing.groupKey
-        if (groupKey == null) {
-            viewModel.outputText("This device is not paired with anything yet.")
+        val key = pairing.keyFor(peer.deviceId)
+        if (key == null) {
+            viewModel.outputText("No pairing key is stored for ${peer.displayName}; pair it again.")
             onFinished()
             return
         }
@@ -377,7 +403,7 @@ class PairedController(
         // Ring the doorbell, if this device has been told to. Best-effort in the strictest
         // sense: it is not waited on, nothing depends on it, and a failure is silent because
         // the tap on the far device is the fallback and is what happens anyway.
-        ringWakeBell(sending)
+        ringWakeBell(key, sending)
         viewModel.peer = resolved
         viewModel.mode = if (sending) Mode.Sending else Mode.Receiving
         viewModel.connectionMode = ConnectionMode.Hotspot
@@ -390,11 +416,12 @@ class PairedController(
         // paired hotspot transfer asks decide() from inside the transfer this arms.
         val alreadyBusy = viewModel.transferIsRunning
         viewModel.pairedSession = PairedSession(
-            groupKey = groupKey,
+            key = key,
             sending = sending,
             overHotspot = true,
             localId = pairing.deviceId,
             localName = pairing.name,
+            peerName = peer.displayName,
             decide = { offer -> decide(offer, alreadyBusy) },
         )
         viewModel.transferIsRunning = true
@@ -407,9 +434,9 @@ class PairedController(
             // seconds, which comfortably covers the few it takes the peer to raise one — so
             // there is nothing to sequence and no callback to wait on.
             scope.launch {
-                askPeerToHost(peer, groupKey)
+                askPeerToHost(peer, key)
                 withContext(Dispatchers.Main) {
-                    rearmForHotspot(peer, groupKey, sending = true)
+                    rearmForHotspot(peer, key, sending = true)
                     viewModel.connectToPeer()
                     onFinished()
                 }
@@ -425,15 +452,16 @@ class PairedController(
      * used it for something else. Cheap, and it keeps the two uses from sharing state by
      * accident — the control connection's session must never be the one the transfer runs on.
      */
-    private fun rearmForHotspot(peer: PairedPeer, groupKey: ByteArray, sending: Boolean) {
+    private fun rearmForHotspot(peer: PairedPeer, key: ByteArray, sending: Boolean) {
         viewModel.mode = if (sending) Mode.Sending else Mode.Receiving
         viewModel.connectionMode = ConnectionMode.Hotspot
         viewModel.pairedSession = PairedSession(
-            groupKey = groupKey,
+            key = key,
             sending = sending,
             overHotspot = true,
             localId = pairing.deviceId,
             localName = pairing.name,
+            peerName = peer.displayName,
             decide = { offer -> decide(offer, false) },
         )
         viewModel.transferIsRunning = true
@@ -457,10 +485,19 @@ class PairedController(
      * later, and doing it here as well would raise two access points.
      */
     fun armForIncomingHotspot(senderId: String?, senderOs: PeerOs?): Boolean {
-        val groupKey = pairing.groupKey ?: return false
+        // The credentials are derived per pair, so a caller that did not say who it is
+        // cannot be hosted for — there is no key to derive them from.
         val peer = senderId?.let { pairing.findPeer(it) }
-        val os = senderOs ?: peer?.os?.let { PeerOs.fromLabel(it) } ?: PeerOs.ANDROID
-        val destination = peer?.receiveDir?.let(Uri::parse) ?: receiveDirProvider()
+        val key = peer?.let { pairing.keyFor(it.deviceId) }
+        if (peer == null || key == null) {
+            viewModel.outputText(
+                "A device made contact over a hotspot request, but it is not paired with " +
+                    "this one. Pair the two first."
+            )
+            return false
+        }
+        val os = senderOs ?: PeerOs.fromLabel(peer.os) ?: PeerOs.ANDROID
+        val destination = peer.receiveDir?.let(Uri::parse) ?: receiveDirProvider()
         if (destination == null) {
             viewModel.outputText(
                 "A paired device wants to send over a hotspot, but no folder has been chosen " +
@@ -478,15 +515,8 @@ class PairedController(
             PeerOs.WINDOWS -> Peer.Windows
         }
         viewModel.receiveDir = destination
-        rearmForHotspot(
-            peer ?: PairedPeer(senderId.orEmpty(), "", os.label, null, 0, true),
-            groupKey,
-            sending = false,
-        )
-        viewModel.outputText(
-            "${peer?.displayName ?: "A paired device"} is sending over a hotspot — nothing to " +
-                "do here."
-        )
+        rearmForHotspot(peer, key, sending = false)
+        viewModel.outputText("${peer.displayName} is sending over a hotspot — nothing to do here.")
         return true
     }
 
@@ -498,12 +528,11 @@ class PairedController(
      * ways to fail on these phones, so nothing here is allowed to hold up, or fail, a transfer
      * that would otherwise work with one extra tap.
      */
-    private fun ringWakeBell(sending: Boolean) {
+    private fun ringWakeBell(key: ByteArray, sending: Boolean) {
         if (!pairing.bleWake) return
-        val groupKey = pairing.groupKey ?: return
         val advertiser = WakeAdvertiser(context)
         val started = try {
-            advertiser.start(derivePresenceKey(groupKey), pairing.deviceIdBytes, sending)
+            advertiser.start(derivePresenceKey(key), pairing.deviceIdBytes, sending)
         } catch (e: Exception) {
             Log.w("Paired", "Could not ring: ${e.message}")
             false
@@ -521,7 +550,7 @@ class PairedController(
 
     /** Finds one device now, for when its remembered address did not answer. */
     private suspend fun locate(deviceId: String): String? =
-        scan().find { it.deviceId == deviceId }?.ip
+        scanFor(deviceId).find { it.deviceId == deviceId }?.ip
 
     // ── receiving ─────────────────────────────────────────────────────────────────────────
 
@@ -539,8 +568,8 @@ class PairedController(
     private fun decide(offer: PairedOffer, alreadyBusy: Boolean): Verdict {
         if (alreadyBusy) return Verdict.Refuse(Refusal.BUSY)
         val peer = pairing.findPeer(offer.deviceId)
-        // Holding the group key is necessary but not sufficient: 白い熊 gets the last word on
-        // which of their own devices may write here without being asked.
+        // Holding the key is necessary but not sufficient: 白い熊 gets the last word on which
+        // of their own devices may write here without being asked.
         if (peer == null || !peer.autoAccept) return Verdict.Refuse(Refusal.NOT_ALLOWED)
         val ceiling = pairing.autoAcceptMaxBytes
         if (ceiling > 0 && offer.totalBytes > ceiling) return Verdict.Refuse(Refusal.TOO_LARGE)
@@ -551,21 +580,36 @@ class PairedController(
         return Verdict.Accept(destination)
     }
 
-    private suspend fun serveOne(socket: Socket, groupKey: ByteArray) {
+    private suspend fun serveOne(socket: Socket) {
         // The destination is deliberately NOT chosen here: it depends on which device is
         // calling, and that is not known until its offer has been read — inside the transfer,
-        // after the handshake has proved it holds the group key. decide() picks it then.
+        // after the handshake has proved it holds the key. decide() picks it then. The key
+        // itself is chosen by the hello, from the ring as it stands when the call arrives.
         viewModel.client = socket
         viewModel.mode = Mode.Receiving
         viewModel.connectionMode = ConnectionMode.SharedNetwork
-        viewModel.psk = derivePairedPsk(groupKey)
         // Sampled before arming, or the guard in decide() sees the flag set two lines below.
         val alreadyBusy = viewModel.transferIsRunning
         val session = PairedSession(
-            groupKey = groupKey,
+            key = null,
             sending = false,
             localId = pairing.deviceId,
             localName = pairing.name,
+            ring = { pairing.keyRing() },
+            onClaimed = { caller, name ->
+                claim(
+                    caller.key.key,
+                    PairedPeer(
+                        deviceId = caller.deviceId,
+                        name = name,
+                        os = caller.os.label,
+                        lastIp = socket.inetAddress?.hostAddress,
+                        lastSeen = System.currentTimeMillis() / 1000,
+                        autoAccept = true,
+                        receiveDir = receiveDirProvider()?.toString(),
+                    )
+                )
+            },
             decide = { offer -> decide(offer, alreadyBusy) },
         )
         viewModel.pairedSession = session
@@ -601,9 +645,9 @@ class PairedController(
      * device being off, so a failed connect looks again rather than giving up.
      */
     fun sendTo(peer: PairedPeer, onFinished: () -> Unit) {
-        val groupKey = pairing.groupKey
-        if (groupKey == null) {
-            viewModel.outputText("This device is not paired with anything yet.")
+        val key = pairing.keyFor(peer.deviceId)
+        if (key == null) {
+            viewModel.outputText("No pairing key is stored for ${peer.displayName}; pair it again.")
             onFinished()
             return
         }
@@ -611,12 +655,13 @@ class PairedController(
             try {
                 viewModel.mode = Mode.Sending
                 viewModel.connectionMode = ConnectionMode.SharedNetwork
-                viewModel.psk = derivePairedPsk(groupKey)
+                viewModel.psk = derivePairedPsk(key)
                 viewModel.pairedSession = PairedSession(
-                    groupKey = groupKey,
+                    key = key,
                     sending = true,
                     localId = pairing.deviceId,
                     localName = pairing.name,
+                    peerName = peer.displayName,
                 )
                 viewModel.transferIsRunning = true
 

@@ -6,40 +6,59 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
 
-// Fork: paired devices — identity, the group key, and the list of devices we know.
+// Fork: paired devices — identity, the pair keys, and the list of devices we know.
 //
-// The Kotlin twin of core/src/pairing.rs. The base32 codec, the pairing URI and the three
-// key derivations must produce byte-identical results to the Rust reference, because that
-// is how this phone and the desktop pair; PairingUnitTest.kt holds the same known-answer
-// vectors as noise.rs's paired_derivations_known_answer.
+// The Kotlin twin of core/src/pairing.rs. The base32 codec, the pairing URI, the key id and
+// the three key derivations must produce byte-identical results to the Rust reference,
+// because that is how this phone and the desktop pair; PairingUnitTest.kt holds the same
+// known-answer vectors as noise.rs's paired_derivations_known_answer.
+//
+// Pairwise, not a group (白い熊, 2026-09-11). The first design shared one key between all
+// of a person's devices, and pairing a third device by scanning *its* fresh code silently
+// replaced the key on the phone that scanned it — stranding the phone it was paired with
+// before. Now every pair of devices shares its own key: either one shows a code, the other
+// scans or types it, and a third pairing adds a key without touching the others. The shown
+// code's key stays *pending* on the device that showed it until a device proves it holds
+// it, and that device becomes the peer the key belongs to. One code, one pairing.
 //
 // Everything here lives in its OWN preferences file, never in `shiroikuma_ui`. That is not
 // tidiness: Backup.isAppearanceKey sweeps up every key in `shiroikuma_ui` that is not a
-// `page.*` one, so a group key stored there would be written into the Export/Import archive
-// — a plaintext credential travelling in a backup 白い熊 might move between devices or hand
-// to a sister app. It also follows the `mahojutan_local` precedent (Backup.kt), which keeps
+// `page.*` one, so a key stored there would be written into the Export/Import archive — a
+// plaintext credential travelling in a backup 白い熊 might move between devices or hand to
+// a sister app. It also follows the `mahojutan_local` precedent (Backup.kt), which keeps
 // the backup folder out of backups for the same reason.
 
 private const val PAIRING_PREFS = "mahojutan_pairing"
+/** The group model's key. Read once for migration, then removed. */
 private const val KEY_GROUP = "group_key"
 private const val KEY_DEVICE_ID = "device_id"
 private const val KEY_NAME = "device_name"
 private const val KEY_PEERS = "peers"
+private const val KEY_PENDING = "pending_codes"
 private const val KEY_STAY_REACHABLE = "stay_reachable"
 private const val KEY_AUTO_ACCEPT_CEILING = "auto_accept_max_bytes"
 private const val KEY_BLE_WAKE = "ble_wake"
 private const val KEY_SHARE_HOTSPOT = "share_over_hotspot"
 
-/** `mahojutan-pair:1:<base32 key>:<name>` — the name last, so it may contain colons. */
-const val PAIR_URI_PREFIX = "mahojutan-pair:1:"
+/**
+ * `mahojutan-pair:2:<base32 key>:<base32 device id>:<name>` — the name last, so it may
+ * contain colons. Version 1 carried a group key and is refused with a reason.
+ */
+const val PAIR_URI_PREFIX = "mahojutan-pair:2:"
+private const val OLD_PAIR_URI_PREFIX = "mahojutan-pair:1:"
+
+/** Codes shown but never used are dropped after a day, and never more than eight stand. */
+private const val PENDING_CODE_TTL_SECS = 24L * 3600L
+private const val MAX_PENDING_CODES = 8
 
 /** Bounded by the presence record's single length byte. 48 bytes is sixteen kanji. */
 const val MAX_NAME_BYTES = 48
 
-// Domain-separation labels. Byte-identical to noise.rs.
+// Domain-separation labels. Byte-identical to noise.rs / pairing.rs.
 private val PAIRED_PRESENCE_INFO = "mahojutan presence v1".toByteArray(Charsets.UTF_8)
 private val PAIRED_PSK_INFO = "mahojutan paired psk v1".toByteArray(Charsets.UTF_8)
 private val PAIRED_HOTSPOT_INFO = "mahojutan hotspot v1".toByteArray(Charsets.UTF_8)
+private val KEY_ID_INFO = "mahojutan key id v1".toByteArray(Charsets.UTF_8)
 
 /**
  * Crockford's alphabet: no I, L, O or U, so nothing in a typed key can be misread as 1 or 0
@@ -89,10 +108,60 @@ fun base32Decode(text: String): ByteArray? {
 }
 
 /** Authenticates presence announcements. Byte-identical to noise.rs derive_presence_key. */
-fun derivePresenceKey(groupKey: ByteArray): ByteArray = computeHmac(groupKey, PAIRED_PRESENCE_INFO)
+fun derivePresenceKey(pairKey: ByteArray): ByteArray = computeHmac(pairKey, PAIRED_PRESENCE_INFO)
 
 /** The Noise PSK for a paired transfer. Byte-identical to noise.rs derive_paired_psk. */
-fun derivePairedPsk(groupKey: ByteArray): ByteArray = computeHmac(groupKey, PAIRED_PSK_INFO)
+fun derivePairedPsk(pairKey: ByteArray): ByteArray = computeHmac(pairKey, PAIRED_PSK_INFO)
+
+/**
+ * Four bytes that name a key without revealing it, so the receiving side can pick the right
+ * one out of the handful it holds. Travels in the clear. Byte-identical to pairing.rs key_id.
+ */
+fun keyId(key: ByteArray): ByteArray = computeHmac(key, KEY_ID_INFO).copyOf(4)
+
+/**
+ * One key this device holds, and whom it is shared with — null for an unclaimed code. The
+ * id is that of the *pair* key even when [key] is a derived one (see [KeyRing.forPresence]),
+ * because the id is what travels on the wire and it always names the pair key.
+ */
+class PairKey(val key: ByteArray, val deviceId: ByteArray?, val keyId: ByteArray = keyId(key)) {
+    val isPending: Boolean get() = deviceId == null
+
+    companion object {
+        fun bound(key: ByteArray, deviceId: ByteArray) = PairKey(key, deviceId)
+        fun pending(key: ByteArray) = PairKey(key, null)
+    }
+}
+
+/** Everything this device could authenticate a peer with. */
+class KeyRing(val keys: List<PairKey>) {
+    /**
+     * The keys that could have produced something from [deviceId] under [keyId]: the key
+     * bound to that very device, and every unclaimed code with that id. A key bound to
+     * another device is never a candidate — a peer's key vouches for that peer alone.
+     */
+    fun candidates(deviceId: ByteArray, keyId: ByteArray): List<PairKey> =
+        keys.filter { it.keyId.contentEquals(keyId) }
+            .filter { it.deviceId == null || it.deviceId.contentEquals(deviceId) }
+
+    fun forDevice(deviceId: ByteArray): PairKey? =
+        keys.find { it.deviceId != null && it.deviceId.contentEquals(deviceId) }
+
+    /** The same ring with every key replaced by its presence key, ids and bindings kept. */
+    fun forPresence(): KeyRing =
+        KeyRing(keys.map { PairKey(derivePresenceKey(it.key), it.deviceId, it.keyId) })
+
+    /** The pair key a presence key was derived from, if it is one of ours. */
+    fun pairKeyBehind(presenceKey: ByteArray): ByteArray? =
+        keys.map { it.key }.find { derivePresenceKey(it).contentEquals(presenceKey) }
+
+    val isEmpty: Boolean get() = keys.isEmpty()
+}
+
+/** What a pairing code says: the key, who showed it, and what they call themselves. */
+data class PairCode(val key: ByteArray, val deviceId: ByteArray, val name: String?) {
+    val deviceIdText: String get() = base32Encode(deviceId)
+}
 
 /**
  * The Wi-Fi credential a paired hotspot uses, so neither side has to be told it. Mapped into
@@ -104,14 +173,14 @@ fun derivePairedPsk(groupKey: ByteArray): ByteArray = computeHmac(groupKey, PAIR
  * modulo would make the first 28 symbols of the alphabet nearly twice as likely as the rest.
  * Byte-identical to noise.rs derive_hotspot_password.
  */
-fun deriveHotspotPassword(groupKey: ByteArray): String {
+fun deriveHotspotPassword(pairKey: ByteArray): String {
     val alphabet = "23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
     val length = 10
     val rejectAt = 228 // 4 * 57
     val password = StringBuilder(length)
     var counter = 0
     while (password.length < length) {
-        val block = computeHmac(groupKey, PAIRED_HOTSPOT_INFO + byteArrayOf(counter.toByte()))
+        val block = computeHmac(pairKey, PAIRED_HOTSPOT_INFO + byteArrayOf(counter.toByte()))
         for (b in block) {
             val v = b.toInt() and 0xff
             if (v >= rejectAt) continue
@@ -152,6 +221,11 @@ data class PairedPeer(
     val lastSeen: Long,
     val autoAccept: Boolean,
     /**
+     * The key this device and the peer share, base32, and nobody else's. Empty only for a
+     * moment during migration from the group model.
+     */
+    val key: String = "",
+    /**
      * Where files from *this* device land. Seeded when the device is paired from whatever
      * the main screen's "Receive in …" button is pointing at, so a newly paired device works
      * immediately; changeable per device afterwards, because "photos from the other phone"
@@ -171,8 +245,12 @@ data class PairedPeer(
             ?: name.takeIf { it.isNotEmpty() }
             ?: deviceId.take(6)
 
+    val keyBytes: ByteArray?
+        get() = base32Decode(key)?.takeIf { it.size >= 32 }?.copyOf(32)
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("device_id", deviceId)
+        put("key", key)
         put("name", name)
         put("os", os)
         put("last_ip", lastIp ?: JSONObject.NULL)
@@ -187,8 +265,9 @@ data class PairedPeer(
             val id = o.optString("device_id").takeIf { it.isNotEmpty() } ?: return null
             return PairedPeer(
                 deviceId = id,
+                key = o.optString("key"),
                 name = o.optString("name"),
-                os = o.optString("os", "android"),
+                os = o.optString("os", ""),
                 lastIp = o.optString("last_ip").takeIf { it.isNotEmpty() && it != "null" },
                 lastSeen = o.optLong("last_seen", 0),
                 autoAccept = o.optBoolean("auto_accept", true),
@@ -222,6 +301,17 @@ class Pairing(context: Context) {
                 .putString(KEY_NAME, clampName(defaultDeviceName()))
                 .apply()
         }
+        migrateGroupKey()
+    }
+
+    /**
+     * From the group model to pairwise keys: every peer known under the old shared key keeps
+     * working, because that key simply becomes the pair key with each of them.
+     */
+    private fun migrateGroupKey() {
+        val group = prefs.getString(KEY_GROUP, null) ?: return
+        savePeers(peers().map { if (it.key.isEmpty()) it.copy(key = group) else it })
+        prefs.edit().remove(KEY_GROUP).apply()
     }
 
     val deviceId: String get() = prefs.getString(KEY_DEVICE_ID, "") ?: ""
@@ -276,38 +366,116 @@ class Pairing(context: Context) {
             prefs.edit().putBoolean(KEY_SHARE_HOTSPOT, value).apply()
         }
 
-    val isPaired: Boolean get() = groupKey != null
+    /** Paired with at least one device. */
+    val isPaired: Boolean get() = peers().isNotEmpty()
 
-    val groupKey: ByteArray?
-        get() {
-            val text = prefs.getString(KEY_GROUP, null) ?: return null
-            val bytes = base32Decode(text) ?: return null
-            return if (bytes.size >= 32) bytes.copyOf(32) else null
+    /** Paired, or showing a code somebody may still use: either way a reason to listen. */
+    val shouldServe: Boolean get() = peers().isNotEmpty() || pendingCodes().isNotEmpty()
+
+    // ── codes ─────────────────────────────────────────────────────────────────────────────
+
+    private fun pendingCodes(): List<Pair<String, Long>> {
+        val raw = prefs.getString(KEY_PENDING, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).map {
+                val o = array.getJSONObject(it)
+                Pair(o.getString("key"), o.optLong("created", 0))
+            }
+        } catch (e: Exception) {
+            emptyList()
         }
-
-    /** Starts a group. Whoever does this shows the QR; there is no other asymmetry after. */
-    fun createGroup(): ByteArray {
-        val key = ByteArray(32)
-        SecureRandom().nextBytes(key)
-        prefs.edit().putString(KEY_GROUP, base32Encode(key)).apply()
-        return key
     }
 
-    fun joinGroup(key: ByteArray) {
-        prefs.edit().putString(KEY_GROUP, base32Encode(key)).apply()
+    private fun savePending(codes: List<Pair<String, Long>>) {
+        val array = JSONArray()
+        codes.forEach { (key, created) ->
+            array.put(JSONObject().put("key", key).put("created", created))
+        }
+        prefs.edit().putString(KEY_PENDING, array.toString()).apply()
     }
 
     /**
-     * Leaves the group, and takes the peer list with it. Those entries mean nothing without
-     * the key, and leaving them on screen would offer devices that can no longer be reached.
+     * Makes a fresh code to show. The key is remembered as pending until a device claims it,
+     * and the code says who is showing it, so the scanner can list this device at once.
      */
-    fun leaveGroup() {
-        prefs.edit().remove(KEY_GROUP).remove(KEY_PEERS).apply()
+    fun newCode(): String {
+        val key = ByteArray(32)
+        SecureRandom().nextBytes(key)
+        val now = System.currentTimeMillis() / 1000
+        val kept = pendingCodes().filter { now - it.second <= PENDING_CODE_TTL_SECS }
+        savePending((kept + Pair(base32Encode(key), now)).takeLast(MAX_PENDING_CODES))
+        return pairUri(key, deviceId, name)
     }
 
-    fun pairUri(): String? {
-        val text = prefs.getString(KEY_GROUP, null) ?: return null
-        return "$PAIR_URI_PREFIX$text:$name"
+    /**
+     * Every key this device holds — one per peer, bound to that peer's id, plus the unbound
+     * keys of codes shown and not yet claimed.
+     */
+    fun keyRing(): KeyRing {
+        val keys = ArrayList<PairKey>()
+        for (peer in peers()) {
+            val key = peer.keyBytes ?: continue
+            val id = base32Decode(peer.deviceId)?.takeIf { it.size >= 16 }?.copyOf(16) ?: continue
+            keys.add(PairKey.bound(key, id))
+        }
+        for ((text, _) in pendingCodes()) {
+            val key = base32Decode(text)?.takeIf { it.size >= 32 }?.copyOf(32) ?: continue
+            keys.add(PairKey.pending(key))
+        }
+        return KeyRing(keys)
+    }
+
+    /** The keys that name a peer — what a probe goes out under. */
+    fun peerKeys(): List<PairKey> = keyRing().keys.filter { !it.isPending }
+
+    /** The key shared with one peer. */
+    fun keyFor(deviceId: String): ByteArray? = findPeer(deviceId)?.keyBytes
+
+    /**
+     * Takes a code scanned or typed off another device: that device becomes a peer under the
+     * code's key, here and now. Its OS is learned on first contact.
+     */
+    fun addPeerFromCode(code: PairCode) {
+        val id = code.deviceIdText
+        val existing = findPeer(id)
+        if (existing != null) {
+            // Re-pairing a device we already know replaces the key and nothing else: the
+            // folder, the alias and the auto-accept decision are ours, not the code's.
+            savePeers(
+                peers().map {
+                    if (it.deviceId == id) {
+                        it.copy(key = base32Encode(code.key), name = code.name ?: it.name)
+                    } else {
+                        it
+                    }
+                }
+            )
+        } else {
+            savePeers(
+                peers() + PairedPeer(
+                    deviceId = id,
+                    key = base32Encode(code.key),
+                    name = code.name.orEmpty(),
+                    os = "",
+                    lastIp = null,
+                    lastSeen = 0,
+                    autoAccept = true,
+                )
+            )
+        }
+    }
+
+    /**
+     * A device has just proved it holds one of our keys. Records it as the peer that key
+     * belongs to — and if the key was a pending code, the code is spent. A peer arriving
+     * under a different key than the one stored for it has re-paired, and the new key
+     * replaces the old; the user's own decisions about it are kept, as [upsertPeer] keeps them.
+     */
+    fun claim(key: ByteArray, peer: PairedPeer) {
+        val encoded = base32Encode(key)
+        savePending(pendingCodes().filter { it.first != encoded })
+        upsertPeer(peer.copy(key = encoded))
     }
 
     fun peers(): List<PairedPeer> {
@@ -341,8 +509,9 @@ class Pairing(context: Context) {
         } else {
             val existing = current[index]
             current[index] = existing.copy(
-                name = peer.name,
-                os = peer.os,
+                name = peer.name.ifEmpty { existing.name },
+                os = peer.os.ifEmpty { existing.os },
+                key = peer.key.ifEmpty { existing.key },
                 lastIp = peer.lastIp ?: existing.lastIp,
                 lastSeen = maxOf(peer.lastSeen, existing.lastSeen),
                 // Kept, like autoAccept: the folder is 白い熊's choice and an announcement
@@ -425,22 +594,43 @@ fun defaultDeviceName(): String {
     return clampName(if (model.isNotEmpty()) model else "Android")
 }
 
+/** The string that goes into the QR. Byte-identical to pairing.rs pair_uri. */
+fun pairUri(key: ByteArray, deviceId: String, name: String): String =
+    "$PAIR_URI_PREFIX${base32Encode(key)}:$deviceId:$name"
+
+/** The typed form: key and id run together, 78 characters, grouped in fives for reading. */
+fun typedCode(uri: String): String {
+    val body = uri.removePrefix(PAIR_URI_PREFIX)
+    val parts = body.split(':', limit = 3)
+    val joined = parts.getOrElse(0) { "" } + parts.getOrElse(1) { "" }
+    return joined.chunked(5).joinToString(" ")
+}
+
+/** Whether a scanned string is a code from the group model, which cannot be used. */
+fun isOldPairUri(text: String): Boolean = text.trim().startsWith(OLD_PAIR_URI_PREFIX)
+
 /**
- * Parses a scanned or typed pairing payload. A bare key is accepted as well as the full URI,
- * because that is exactly what someone retyping from under a QR code produces.
- * Returns the key and the peer's name, or null if the text is not a pairing code.
+ * Parses a scanned or typed pairing code: the full URI, or the typed form — key and id run
+ * together with whatever spaces a person put in. Returns null if the text is not one.
  */
-fun parsePairUri(text: String): Pair<ByteArray, String?>? {
+fun parsePairUri(text: String): PairCode? {
     val trimmed = text.trim()
-    val body = if (trimmed.startsWith(PAIR_URI_PREFIX)) {
-        trimmed.substring(PAIR_URI_PREFIX.length)
+    if (trimmed.startsWith(OLD_PAIR_URI_PREFIX)) return null
+    val keyPart: String
+    val idPart: String
+    var name: String? = null
+    if (trimmed.startsWith(PAIR_URI_PREFIX)) {
+        val parts = trimmed.substring(PAIR_URI_PREFIX.length).split(':', limit = 3)
+        keyPart = parts.getOrElse(0) { "" }
+        idPart = parts.getOrElse(1) { "" }
+        name = parts.getOrNull(2)?.let(::clampName)?.takeIf { it.isNotEmpty() }
     } else {
-        trimmed
+        val compact = trimmed.filter { it !in " -\t\n\r" }
+        if (compact.length < 78) return null
+        keyPart = compact.substring(0, 52)
+        idPart = compact.substring(52)
     }
-    val separator = body.indexOf(':')
-    val keyPart = if (separator >= 0) body.substring(0, separator) else body
-    val name = if (separator >= 0) clampName(body.substring(separator + 1)) else null
-    val bytes = base32Decode(keyPart) ?: return null
-    if (bytes.size < 32) return null
-    return Pair(bytes.copyOf(32), name?.takeIf { it.isNotEmpty() })
+    val key = base32Decode(keyPart)?.takeIf { it.size >= 32 }?.copyOf(32) ?: return null
+    val id = base32Decode(idPart)?.takeIf { it.size >= 16 }?.copyOf(16) ?: return null
+    return PairCode(key, id, name)
 }

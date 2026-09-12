@@ -18,6 +18,38 @@ body {
   cursor: pointer;
 }
 
+/* fork: the paired-device strip on the main page — a column per device, two pills each,
+   scrolling sideways when there are more columns than width, as on Android. */
+#devicePills {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  margin: 0 10px 6px 10px;
+  overflow-x: auto;
+  flex-grow: 0;
+  flex-shrink: 0;
+}
+#devicePills[hidden] {
+  display: none;
+}
+.fork-device-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.fork-device-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.fork-device-pill svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
 /* ── Overlays ── */
 
 .fork-overlay {

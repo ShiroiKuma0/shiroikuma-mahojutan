@@ -10,11 +10,10 @@
 
 use flying_carpet_core::{
     network,
-    noise::{derive_paired_psk, derive_presence_key},
-    paired::{self, PairedOffer, Refusal, Verdict},
-    pairing::{self, PairedPeer, PairingStore},
+    paired::{self, Caller, PairedOffer, Refusal, Verdict},
+    pairing::{self, KeyRing, PairKey, PairedPeer, PairingStore},
     presence::{self, DiscoveredPeer, LocalIdentity, PeerOs, PRESENCE_PORT},
-    SendFile, Transfer, WiFiInterface, UI,
+    PairedHotspot, SendFile, Transfer, WiFiInterface, UI,
 };
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
@@ -117,10 +116,22 @@ impl PairedState {
         }
     }
 
-    /// The group key, for the one caller outside this module: start_async, which needs it to
-    /// hand to a paired hotspot transfer.
-    pub fn group_key(&self) -> Option<[u8; 32]> {
-        self.snapshot().group_key_bytes()
+    /// What a paired hotspot transfer with one device needs, for the one caller outside
+    /// this module: start_async.
+    pub fn hotspot_with(&self, device_id: &str) -> Option<PairedHotspot> {
+        let store = self.snapshot();
+        let peer = store.find_peer(device_id)?;
+        Some(PairedHotspot {
+            key: store.key_for(device_id)?,
+            local_id: store.device_id_bytes(),
+            peer_name: peer.name.clone(),
+        })
+    }
+
+    /// The ring as it stands right now — asked for per packet and per connection by the
+    /// listeners, so a code shown or claimed a moment ago is already in effect.
+    fn key_ring(&self) -> KeyRing {
+        self.snapshot().key_ring()
     }
 
     fn snapshot(&self) -> PairingStore {
@@ -166,7 +177,7 @@ pub struct PairedStatus {
 
 fn status_of(store: &PairingStore) -> PairedStatus {
     PairedStatus {
-        paired: store.group_key.is_some(),
+        paired: store.is_paired(),
         device_id: store.device_id.clone(),
         name: store.name.clone(),
         receive_dir: store.receive_dir.clone(),
@@ -183,7 +194,7 @@ fn status_of(store: &PairingStore) -> PairedStatus {
                 reachable: false,
             })
             .collect(),
-        serving: store.group_key.is_some(),
+        serving: store.should_serve(),
         port: PRESENCE_PORT,
     }
 }
@@ -195,8 +206,15 @@ fn identity_of(store: &PairingStore) -> LocalIdentity {
         os: PeerOs::this_device(),
         // The desktop serves whenever it is running, so it always advertises that a
         // transfer will land without anyone touching it.
-        unattended: store.group_key.is_some(),
+        unattended: store.should_serve(),
     }
+}
+
+/// Records a device that has just proved it holds one of our keys — by answering
+/// presence, or by completing a handshake — as the peer that key belongs to. If the key
+/// was a code this device showed, the code is spent here.
+fn claim(app: &AppHandle, state: &State<PairedState>, key: &[u8; 32], peer: PairedPeer) {
+    let _ = state.update(app, |store| store.claim(key, peer));
 }
 
 /// The interface presence and paired transfers ride on: the default-route one, which
@@ -223,54 +241,41 @@ pub fn paired_status(state: State<PairedState>) -> PairedStatus {
     status_of(&state.snapshot())
 }
 
-/// Starts a group and returns what to show in the QR — and, printed underneath it, what to
-/// type on a device with no camera.
+/// A fresh code to show: the QR, and — printed underneath it — what to type on a device
+/// with no camera. The key is kept as pending until a device claims it, and the listeners
+/// are (re)started so the claim can land the moment the other device has scanned.
 #[tauri::command]
-pub fn paired_create_group(app: AppHandle, state: State<PairedState>) -> Result<String, String> {
+pub fn paired_show_code(app: AppHandle, state: State<PairedState>) -> Result<String, String> {
+    let mut uri = String::new();
     state.update(&app, |store| {
-        store.create_group();
+        uri = store.new_code();
     })?;
-    let uri = state
-        .snapshot()
-        .pair_uri()
-        .ok_or_else(|| "Could not build the pairing code.".to_string())?;
     restart_serving(&app);
     Ok(uri)
 }
 
-/// The existing group's code, for showing again to a third device. Separate from
-/// `paired_create_group` so that re-showing can never accidentally re-key the group and
-/// silently strand every device already paired.
+/// The typed form of a code, grouped for reading.
 #[tauri::command]
-pub fn paired_pair_code(state: State<PairedState>) -> Result<String, String> {
-    state
-        .snapshot()
-        .pair_uri()
-        .ok_or_else(|| "This device is not paired with anything yet.".to_string())
+pub fn paired_typed_code(uri: String) -> String {
+    pairing::typed_code(&uri)
 }
 
-/// Joins a group from a scanned or typed code. The peers themselves are not learned here —
-/// they arrive on the first scan, which is also what proves the key is right.
+/// Pairs with the device whose code was scanned or typed. That device becomes a peer here
+/// at once; it learns about this one when this one introduces itself, which the scan the
+/// page runs next does.
 #[tauri::command]
-pub fn paired_join(app: AppHandle, state: State<PairedState>, text: String) -> Result<(), String> {
-    let (key, _name) = pairing::parse_pair_uri(&text).map_err(|e| e.to_string())?;
-    state.update(&app, |store| {
-        store.group_key = Some(pairing::base32_encode(&key));
-    })?;
+pub fn paired_add_from_code(
+    app: AppHandle,
+    state: State<PairedState>,
+    text: String,
+) -> Result<String, String> {
+    let code = pairing::parse_pair_uri(&text).map_err(|e| e.to_string())?;
+    if code.device_id == state.snapshot().device_id_bytes() {
+        return Err("That is this device's own code.".to_string());
+    }
+    state.update(&app, |store| store.add_peer_from_code(&code))?;
     restart_serving(&app);
-    Ok(())
-}
-
-/// Leaves the group. The peer list goes with it: those entries are meaningless without the
-/// key, and leaving them behind would show devices that can no longer be reached.
-#[tauri::command]
-pub fn paired_leave(app: AppHandle, state: State<PairedState>) -> Result<(), String> {
-    state.update(&app, |store| {
-        store.group_key = None;
-        store.peers.clear();
-    })?;
-    stop_serving(&app);
-    Ok(())
+    Ok(pairing::base32_encode(&code.device_id))
 }
 
 #[tauri::command]
@@ -330,18 +335,18 @@ pub async fn paired_scan(
     state: State<'_, PairedState>,
 ) -> Result<Vec<PeerView>, String> {
     let store = state.snapshot();
-    let group_key = store
-        .group_key_bytes()
-        .ok_or_else(|| "This device is not paired with anything yet.".to_string())?;
-    let presence_key = derive_presence_key(&group_key);
+    if !store.is_paired() {
+        return Err("This device is not paired with anything yet.".to_string());
+    }
+    let keys = presence_keys(&store);
     let identity = identity_of(&store);
     let (_interface, ip, prefix) = local_endpoint()?;
 
-    let mut found = presence::probe(&presence_key, &identity, ip, prefix, SCAN_WINDOW, false)
+    let mut found = presence::probe(&keys, &identity, ip, prefix, SCAN_WINDOW, false)
         .await
         .map_err(|e| e.to_string())?;
-    if found.is_empty() {
-        found = presence::probe(&presence_key, &identity, ip, prefix, SCAN_WINDOW, true)
+    if found.len() < keys.len() {
+        found = presence::probe(&keys, &identity, ip, prefix, SCAN_WINDOW, true)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -371,27 +376,62 @@ pub async fn paired_scan(
         .collect())
 }
 
+/// Presence goes out under every key bound to a peer — one probe each, since a peer can
+/// only read the one signed with its own key. Under each key the presence key is derived,
+/// never the pair key itself.
+fn presence_keys(store: &PairingStore) -> Vec<PairKey> {
+    store
+        .peer_keys()
+        .into_iter()
+        .map(|k| PairKey {
+            key: flying_carpet_core::noise::derive_presence_key(&k.key),
+            key_id: k.key_id,
+            device_id: k.device_id,
+        })
+        .collect()
+}
+
+/// The pair key a presence exchange under `presence_key` proves: the ring entry whose
+/// derived presence key it is.
+fn pair_key_behind(store: &PairingStore, presence_key: &[u8; 32]) -> Option<[u8; 32]> {
+    store
+        .key_ring()
+        .keys
+        .into_iter()
+        .map(|k| k.key)
+        .find(|k| &flying_carpet_core::noise::derive_presence_key(k) == presence_key)
+}
+
 fn remember(
     app: &AppHandle,
     state: &State<PairedState>,
     found: &[DiscoveredPeer],
 ) -> Result<(), String> {
-    state.update(app, |store| {
-        for peer in found {
-            store.upsert_peer(PairedPeer {
+    let store = state.snapshot();
+    for peer in found {
+        let Some(key) = pair_key_behind(&store, &peer.key) else {
+            continue;
+        };
+        claim(
+            app,
+            state,
+            &key,
+            PairedPeer {
                 device_id: pairing::base32_encode(&peer.device_id),
+                key: String::new(),
                 name: peer.name.clone(),
                 os: peer.os.as_str().to_string(),
                 last_ip: Some(peer.ip.to_string()),
                 last_seen: pairing::now_secs(),
                 // A peer we have never seen before starts trusted: it already proved it
-                // holds the group key, which is the only credential this feature has, and
-                // an unattended receive the user has to go and switch on for each device
-                // is not the feature they asked for. Revocable per peer.
+                // holds the key, which is the only credential this feature has, and an
+                // unattended receive the user has to go and switch on for each device is
+                // not the feature they asked for. Revocable per peer.
                 auto_accept: true,
-            });
-        }
-    })
+            },
+        );
+    }
+    Ok(())
 }
 
 /// Sends to a paired device in one call: no mode, no password, no interface picker.
@@ -411,13 +451,13 @@ pub async fn paired_send(
     let state: State<PairedState> = app.state();
     let transfer: State<Transfer> = app.state();
     let store = state.snapshot();
-    let group_key = store
-        .group_key_bytes()
-        .ok_or_else(|| "This device is not paired with anything yet.".to_string())?;
     let peer = store
         .find_peer(&device_id)
         .cloned()
         .ok_or_else(|| "That device is not in the paired list.".to_string())?;
+    let key = store
+        .key_for(&device_id)
+        .ok_or_else(|| "No key is stored for that device; pair it again.".to_string())?;
 
     // Claim the one transfer slot exactly as start_async does, so a paired send and a
     // classic transfer can never run at once and Cancel keeps working on either.
@@ -437,9 +477,13 @@ pub async fn paired_send(
     }
 
     let ui = BackgroundUi { app: app.clone() };
-    let psk = derive_paired_psk(&group_key);
     let identity_id = store.device_id_bytes();
     let identity_name = store.name.clone();
+    let peer_name = if peer.name.is_empty() {
+        "That device".to_string()
+    } else {
+        peer.name.clone()
+    };
 
     let mut address: Option<IpAddr> = peer
         .last_ip
@@ -459,7 +503,8 @@ pub async fn paired_send(
     let result = paired::send_to_peer(
         address,
         PRESENCE_PORT,
-        &psk,
+        &key,
+        &peer_name,
         identity_id,
         &identity_name,
         &file_list,
@@ -488,7 +533,8 @@ pub async fn paired_send(
                     let outcome = paired::send_to_peer(
                         new_address,
                         PRESENCE_PORT,
-                        &psk,
+                        &key,
+                        &peer_name,
                         identity_id,
                         &identity_name,
                         &file_list,
@@ -523,17 +569,24 @@ async fn find_now(
     device_id: &str,
 ) -> Result<Option<IpAddr>, String> {
     let store = state.snapshot();
-    let Some(group_key) = store.group_key_bytes() else {
+    let Ok(wanted) = presence::parse_device_id(device_id) else {
         return Ok(None);
     };
-    let presence_key = derive_presence_key(&group_key);
+    // Only that device's key: a targeted look need not wake every other peer.
+    let keys: Vec<PairKey> = presence_keys(&store)
+        .into_iter()
+        .filter(|k| k.device_id == Some(wanted))
+        .collect();
+    if keys.is_empty() {
+        return Ok(None);
+    }
     let identity = identity_of(&store);
     let (_interface, ip, prefix) = local_endpoint()?;
-    let mut found = presence::probe(&presence_key, &identity, ip, prefix, SCAN_WINDOW, false)
+    let mut found = presence::probe(&keys, &identity, ip, prefix, SCAN_WINDOW, false)
         .await
         .map_err(|e| e.to_string())?;
     if !found.iter().any(|f| pairing::base32_encode(&f.device_id) == device_id) {
-        found = presence::probe(&presence_key, &identity, ip, prefix, SCAN_WINDOW, true)
+        found = presence::probe(&keys, &identity, ip, prefix, SCAN_WINDOW, true)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -565,8 +618,8 @@ fn decide(app: &AppHandle, offer: &PairedOffer) -> Verdict {
     let id = pairing::base32_encode(&offer.device_id);
     match store.find_peer(&id) {
         Some(peer) if peer.auto_accept => (),
-        // Holding the group key is necessary but not sufficient: the user gets the last
-        // word on which of their own devices may write here unattended.
+        // Holding the key is necessary but not sufficient: the user gets the last word on
+        // which of their own devices may write here unattended.
         _ => return Verdict::Refuse(Refusal::NotAllowed),
     }
     match store.receive_dir.as_deref() {
@@ -575,15 +628,33 @@ fn decide(app: &AppHandle, offer: &PairedOffer) -> Verdict {
     }
 }
 
-/// Brings the serve loop up, or takes it down, to match the store. Idempotent, so it can
-/// simply be called after anything that might have changed the group.
+/// Brings the serve loop up, or takes it down, to match the store.
+///
+/// **Does not rebind when it is already up.** The serve loop reads the key ring afresh for
+/// every connection and the presence responder for every packet, so a new pairing takes
+/// effect with nothing restarted — and rebinding the TCP listener while the old one is still
+/// in its 250 ms-polled accept loop hits EADDRINUSE and leaves the port dead (白い熊,
+/// 2026-09-12: pairing a second device killed the desktop's listener, so every send was
+/// refused; the UDP responder uses SO_REUSEADDR and survived, which is why the PC still
+/// answered presence but accepted nothing). So this only ever starts a loop that is not
+/// running, or stops one that should no longer run.
 pub fn restart_serving(app: &AppHandle) {
-    stop_serving(app);
     let state: State<PairedState> = app.state();
     let store = state.snapshot();
-    let Some(group_key) = store.group_key_bytes() else {
+    let already = state
+        .serve_cancel
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some();
+    if !store.should_serve() {
+        stop_serving(app);
         return;
-    };
+    }
+    if already {
+        // A code shown or a device paired while already serving: the running loops pick it
+        // up on their own. Rebinding would only race the old listener for the port.
+        return;
+    }
 
     let cancel = Arc::new(AtomicBool::new(false));
     {
@@ -591,8 +662,6 @@ pub fn restart_serving(app: &AppHandle) {
         *slot = Some(cancel.clone());
     }
 
-    let psk = derive_paired_psk(&group_key);
-    let presence_key = derive_presence_key(&group_key);
     let identity = identity_of(&store);
 
     // The transfer half.
@@ -602,9 +671,34 @@ pub fn restart_serving(app: &AppHandle) {
         tokio::spawn(async move {
             let ui = BackgroundUi { app: app.clone() };
             let decider_app = app.clone();
-            let result = paired::serve(psk, &ui, cancel, move |offer: &PairedOffer| {
-                decide(&decider_app, offer)
-            })
+            let ring_app = app.clone();
+            let claim_app = app.clone();
+            let result = paired::serve(
+                move || {
+                    let state: State<PairedState> = ring_app.state();
+                    state.key_ring()
+                },
+                &ui,
+                cancel,
+                move |offer: &PairedOffer| decide(&decider_app, offer),
+                move |caller: &Caller, name: &str| {
+                    let state: State<PairedState> = claim_app.state();
+                    claim(
+                        &claim_app,
+                        &state,
+                        &caller.key.key,
+                        PairedPeer {
+                            device_id: pairing::base32_encode(&caller.device_id),
+                            key: String::new(),
+                            name: name.to_string(),
+                            os: caller.os.as_str().to_string(),
+                            last_ip: None,
+                            last_seen: pairing::now_secs(),
+                            auto_accept: true,
+                        },
+                    );
+                },
+            )
             .await;
             if let Err(e) = result {
                 // Port already taken is the realistic case — a second copy of the app, or
@@ -633,7 +727,28 @@ pub fn restart_serving(app: &AppHandle) {
                     return;
                 }
             };
-            let responder = presence::PresenceResponder::new(presence_key, identity);
+            // The ring the responder verifies against carries the *presence* keys, derived
+            // per pair key, and is rebuilt on every packet from the store as it then stands.
+            let ring_app = app.clone();
+            let responder = presence::PresenceResponder::new(
+                Arc::new(move || {
+                    let state: State<PairedState> = ring_app.state();
+                    let store = state.snapshot();
+                    KeyRing {
+                        keys: store
+                            .key_ring()
+                            .keys
+                            .into_iter()
+                            .map(|k| PairKey {
+                                key: flying_carpet_core::noise::derive_presence_key(&k.key),
+                                key_id: k.key_id,
+                                device_id: k.device_id,
+                            })
+                            .collect(),
+                    }
+                }),
+                identity,
+            );
             let watcher = cancel.clone();
             let responder_cancel = responder.cancel_handle();
             tokio::spawn(async move {
@@ -647,21 +762,29 @@ pub fn restart_serving(app: &AppHandle) {
                 .run(ip, prefix, move |peer: DiscoveredPeer| {
                     let state: State<PairedState> = heard.state();
                     // Adds a device it has not heard of before, rather than only refreshing
-                    // one it has. That omission is what made pairing look one-way: the device
-                    // that showed the QR only ever *answers* probes, so it never learned about
-                    // the device that had just joined it. Completing a presence exchange means
-                    // holding the group key, which is the only credential here — so hearing a
-                    // device is exactly as good a reason to list it as finding one.
-                    let _ = state.update(&heard, |store| {
-                        store.upsert_peer(PairedPeer {
+                    // one it has: the device that showed the code only ever *answers*
+                    // probes, and this is the moment it learns who scanned it. Completing a
+                    // presence exchange means holding the key, which is the only credential
+                    // here — so hearing a device is exactly as good a reason to list it as
+                    // finding one, and for a pending code it is what claims it.
+                    let store = state.snapshot();
+                    let Some(key) = pair_key_behind(&store, &peer.key) else {
+                        return;
+                    };
+                    claim(
+                        &heard,
+                        &state,
+                        &key,
+                        PairedPeer {
                             device_id: pairing::base32_encode(&peer.device_id),
+                            key: String::new(),
                             name: peer.name.clone(),
                             os: peer.os.as_str().to_string(),
                             last_ip: Some(peer.ip.to_string()),
                             last_seen: pairing::now_secs(),
                             auto_accept: true,
-                        });
-                    });
+                        },
+                    );
                 })
                 .await
             {

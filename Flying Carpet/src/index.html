@@ -35,9 +35,13 @@
           <!-- fork: paired devices. Sits with the UI button rather than in the mode row,
                because it is not a third connection mode — it is a different way in, one
                that skips the mode, the password and arming the other device entirely. -->
-          <button type="button" id="devicesButton" onclick="window.forkDevices.openDevicesPanel()">Devices</button>
+          <button type="button" id="devicesButton" onclick="window.forkDevices.openDevicesPanel()">Devices ＋</button>
         </div>
       </div>
+      <!-- fork: the paired devices, one click each — the desktop end of the Android main page's
+           strip. A column per device: the top pill sends over this network, the bottom one
+           over a hotspot. Filled by devices.js; hidden until something is paired. -->
+      <div id="devicePills" hidden></div>
       <div class="horizontalContainer" style="flex-grow: 0; margin: 10px;">
         <div class="form-check form-switch" style="margin: 10px;">
           <input class="form-check-input"  style="width: 40px; height: 20px; margin-right: 5px;" type="checkbox" role="switch" id="bluetoothSwitch" onchange="bluetoothChange()">

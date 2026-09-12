@@ -242,9 +242,10 @@ fn start_async(
     receive_dir: Option<String>,
     using_bluetooth: bool,
     connection_mode: Option<String>,
-    // Fork: true for a hotspot transfer between paired devices. The group key itself never
-    // crosses into the page — only this flag does, and the key is read from the store here.
-    paired_hotspot: Option<bool>,
+    // Fork: the paired device's id, for a hotspot transfer between paired devices. The key
+    // itself never crosses into the page — only the id does, and the key is read from the
+    // store here.
+    paired_hotspot: Option<String>,
     paired_state: State<fork_paired::PairedState>,
     window: Window,
 ) -> Option<String> {
@@ -271,13 +272,12 @@ fn start_async(
     // Fork: resolved before the task is spawned, so a transfer asked to be paired but
     // started on an unpaired device is refused outright rather than quietly falling back to
     // a credential exchange the other device is not expecting.
-    let paired_key = if paired_hotspot.unwrap_or(false) {
-        match paired_state.group_key() {
-            Some(key) => Some(key),
-            None => return Some("This device is not paired with anything yet.".to_string()),
-        }
-    } else {
-        None
+    let paired_key = match paired_hotspot.as_deref().filter(|id| !id.is_empty()) {
+        Some(device_id) => match paired_state.hotspot_with(device_id) {
+            Some(paired) => Some(paired),
+            None => return Some("That device is not paired with this one.".to_string()),
+        },
+        None => None,
     };
 
     // hold the lock across the check and the spawn so two starts can't both pass the check
@@ -429,10 +429,9 @@ async fn main() {
             fork_list_dir,
             fork_restart,
             fork_paired::paired_status,
-            fork_paired::paired_create_group,
-            fork_paired::paired_pair_code,
-            fork_paired::paired_join,
-            fork_paired::paired_leave,
+            fork_paired::paired_show_code,
+            fork_paired::paired_typed_code,
+            fork_paired::paired_add_from_code,
             fork_paired::paired_set_name,
             fork_paired::paired_set_receive_dir,
             fork_paired::paired_forget,

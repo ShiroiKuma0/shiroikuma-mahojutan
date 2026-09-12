@@ -339,6 +339,11 @@ object Appearance {
         applyText(activity, s, R.id.bluetoothSwitch, "bluetooth", setText = true)
         // portrait only, and its text is set by MainActivity, never from the catalog
         applyText(activity, s, R.id.bluetoothHint, "bluetoothHint", setText = false)
+        // Fork: the "Stay reachable" switch wears the Bluetooth row's dress — same label
+        // style, same hint style, same switch colours — so the two read as one block. Its
+        // texts are fixed, and MainActivity paints the hint red while the switch is on.
+        applyText(activity, s, R.id.reachableSwitch, "bluetooth", setText = false)
+        applyText(activity, s, R.id.reachableHint, "bluetoothHint", setText = false)
         applyText(activity, s, R.id.modeInstruction, "modeInstruction", setText = true)
         applyText(activity, s, R.id.sendButton, "send", setText = true)
         applyText(activity, s, R.id.receiveButton, "receive", setText = true)
@@ -617,8 +622,10 @@ object Appearance {
         val trackOn = s.colorOrNull("bt.trackOn") ?: Defaults.YELLOW
         val trackOff = s.colorOrNull("bt.trackOff") ?: Defaults.SWITCH_TRACK_OFF
 
-        val switch = activity.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.bluetoothSwitch) ?: return
-        switch.thumbTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(thumbOn, thumbOff))
-        switch.trackTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(trackOn, trackOff))
+        for (switchId in listOf(R.id.bluetoothSwitch, R.id.reachableSwitch)) {
+            val switch = activity.findViewById<androidx.appcompat.widget.SwitchCompat>(switchId) ?: continue
+            switch.thumbTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(thumbOn, thumbOff))
+            switch.trackTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(trackOn, trackOff))
+        }
     }
 }

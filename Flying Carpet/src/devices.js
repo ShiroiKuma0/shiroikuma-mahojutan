@@ -37,23 +37,16 @@ function whenSeen(seconds) {
   return `seen ${Math.floor(ago / 86400)} days ago`;
 }
 
-/**
- * Groups the pairing key into fives so it can be read across and typed without losing the
- * place. Purely presentational — base32_decode skips the spaces on the way back in.
- */
-function grouped(key) {
-  return (key.match(/.{1,5}/g) || []).join(' ');
-}
-
 // ── Pairing ───────────────────────────────────────────────────────────────────────────────
+//
+// Pairwise, no group (白い熊, 2026-09-11): a code pairs exactly the two devices involved,
+// either one can show it, and pairing a third device never touches the first pairing.
 
 /**
- * Shows the code another device scans or types. The QR and the text carry exactly the same
- * string, which is the same arrangement the shared-network password already uses: scan it
- * or read it, whichever the other device can manage.
+ * Shows the code another device scans or types. The QR and the text carry the same key and
+ * the same id — the QR as a URI, the text as 78 characters grouped in fives.
  */
-function showPairCode(uri) {
-  const key = uri.split(':')[2] || uri;
+function showPairCode(uri, typed) {
   const overlay = el('div', 'fork-overlay');
   const box = el('div', 'fork-info-box');
   box.appendChild(el('div', 'fork-info-title', 'Pair a device'));
@@ -61,7 +54,7 @@ function showPairCode(uri) {
     el(
       'div',
       'fork-info-body',
-      'On the other device, open Devices and choose “Pair with a device”, then scan this code — or type the key underneath it.',
+      'On the other device, open Devices ＋ and choose “Scan a code” — or “Type a code” and type what is under the QR. The two are paired the moment it answers; nothing else is needed.',
     ),
   );
 
@@ -69,7 +62,7 @@ function showPairCode(uri) {
   qrHolder.style.cssText =
     'background:#ffff00; padding:16px; width:214px; margin:12px auto 6px auto;';
   new QRCode(qrHolder, { text: uri, width: 182, height: 182, colorLight: '#ffff00' });
-  const caption = el('div', null, grouped(key));
+  const caption = el('div', null, typed);
   caption.style.cssText =
     'margin-top:8px; text-align:center; font-family:monospace; font-weight:bold;'
     + ' color:#000000; font-size:13px; letter-spacing:1px; line-height:1.5; word-break:break-all;';
@@ -79,7 +72,7 @@ function showPairCode(uri) {
   const warn = el(
     'div',
     'fork-info-hint',
-    'Anyone who has this key can send files to your devices. Show it, don’t send it.',
+    'Whoever uses this code first becomes paired with this device. Show it, don’t send it.',
   );
   box.appendChild(warn);
 
@@ -96,16 +89,16 @@ function showPairCode(uri) {
   document.body.appendChild(overlay);
 }
 
-/** Joins an existing group from a key typed or pasted off the other device's screen. */
+/** Pairs with a device from the code typed or pasted off its screen. */
 function askForPairCode() {
   const overlay = el('div', 'fork-overlay');
   const box = el('div', 'fork-info-box');
-  box.appendChild(el('div', 'fork-info-title', 'Join a device'));
+  box.appendChild(el('div', 'fork-info-title', 'Type a code'));
   box.appendChild(
     el(
       'div',
       'fork-info-body',
-      'Type or paste the key shown under the QR code on the other device. Spaces and capitals do not matter.',
+      'Type or paste the 78 characters shown under the QR code on the other device. Spaces and capitals do not matter.',
     ),
   );
   const input = el('input', 'fork-text-input');
@@ -119,20 +112,20 @@ function askForPairCode() {
   const cancel = el('button', 'fork-pill', 'Cancel');
   cancel.type = 'button';
   cancel.onclick = () => overlay.remove();
-  const join = el('button', 'fork-pill', 'Join');
+  const join = el('button', 'fork-pill', 'Pair');
   join.type = 'button';
   join.onclick = async () => {
     const text = input.value.trim();
     if (!text) return;
     try {
-      await core.invoke('paired_join', { text });
+      await core.invoke('paired_add_from_code', { text });
       overlay.remove();
       await refresh();
-      // A key that decodes is not yet a key that matches: only a scan proves that, so the
-      // scan happens now rather than leaving the user to wonder whether it worked.
+      // The other device learns about this one when this one introduces itself, which is
+      // what a scan is — so it happens now rather than at some later opening of the list.
       await scan();
     } catch (e) {
-      forkAlert('Could not join', String(e));
+      forkAlert('Could not pair', String(e));
     }
   };
   row.appendChild(cancel);
@@ -158,7 +151,7 @@ function peerRow(peer, onSend) {
     : peer.last_ip
       ? `○ ${whenSeen(peer.last_seen)} at ${peer.last_ip}`
       : `○ ${whenSeen(peer.last_seen)}`;
-  const summary = el('div', 'fork-setting-summary', `${peer.os} · ${state}`);
+  const summary = el('div', 'fork-setting-summary', `${peer.os || 'not yet heard from'} · ${state}`);
   if (!peer.reachable) summary.classList.add('fork-note');
   row.appendChild(summary);
 
@@ -277,6 +270,15 @@ async function hotspotInterface() {
 }
 
 async function overHotspot(peer, mode, fileList, receiveDir) {
+  if (!peer.os) {
+    // Which side raises the hotspot follows from the peer's OS, and that is only learned
+    // on first contact over a network. Until then the pill is a promise, not a route.
+    forkAlert(
+      'Not yet heard from',
+      `${peer.name || 'That device'} has not answered on a network yet, so it is not known what kind of device it is. Open the app on it while both are on the same Wi-Fi and press “Look again” once.`,
+    );
+    return;
+  }
   const page = document.getElementById('forkDevicesPage');
   if (page) page.remove();
   try {
@@ -289,7 +291,7 @@ async function overHotspot(peer, mode, fileList, receiveDir) {
       receiveDir: receiveDir || null,
       usingBluetooth: false,
       connectionMode: 'hotspot',
-      pairedHotspot: true,
+      pairedHotspot: peer.device_id,
       window: window.__TAURI__.window.getCurrentWindow(),
     });
     if (refused) forkAlert('Could not start', refused);
@@ -351,15 +353,30 @@ async function chooseReceiveFolder() {
   await refresh();
 }
 
+/**
+ * Which refresh is the latest. Opening the panel, a scan finishing and a `pairedChanged`
+ * from the backend all redraw, and a scan fires the event while it is still running — so two
+ * refreshes routinely overlap. Each used to clear the body and then, after its await, append;
+ * both appended, and the panel showed everything twice (白い熊, 2026-09-11). Now the body is
+ * built off-screen and only the newest call is allowed to put it in place.
+ */
+let refreshGeneration = 0;
+
 async function refresh() {
   const page = document.getElementById('forkDevicesPage');
   if (!page) return;
-  const body = page.querySelector('[data-devices-body]');
-  if (!body) return;
-  body.innerHTML = '';
+  const generation = ++refreshGeneration;
 
   const state = await status();
+  renderPills(state);
+  if (generation !== refreshGeneration) return;
+  const body = page.querySelector('[data-devices-body]');
+  if (!body) return;
+  body.replaceChildren(...buildPanelBody(state));
+}
 
+/** The panel's two sections, as detached nodes. */
+function buildPanelBody(state) {
   // Identity.
   const identity = el('div', 'fork-section');
   identity.appendChild(el('div', 'fork-section-title', 'This device'));
@@ -395,12 +412,11 @@ async function refresh() {
     el(
       'div',
       'fork-note',
-      state.paired
+      state.serving
         ? `Listening on port ${state.port}. This device accepts transfers from paired devices for as long as the app is open.`
         : 'Not paired with anything yet.',
     ),
   );
-  body.appendChild(identity);
 
   // The devices.
   const devices = el('div', 'fork-section');
@@ -412,7 +428,7 @@ async function refresh() {
       el(
         'div',
         'fork-info-body',
-        'Pairing agrees one key between your devices, once. After that, sending is one click and there is nothing to do on the device receiving.',
+        'Pair two devices once — show a code on either one, scan or type it on the other. After that, sending is one click and there is nothing to do on the device receiving.',
       ),
     );
   } else {
@@ -420,15 +436,6 @@ async function refresh() {
       const live = lastScan.get(p.device_id);
       return live ? { ...p, ...live } : p;
     });
-    if (!merged.length) {
-      devices.appendChild(
-        el(
-          'div',
-          'fork-info-body',
-          'No devices found yet. Open the app on the other device and press “Look again”.',
-        ),
-      );
-    }
     for (const peer of merged) {
       const holder = el('div');
       holder.appendChild(peerRow(peer, sendTo));
@@ -436,7 +443,58 @@ async function refresh() {
       devices.appendChild(holder);
     }
   }
-  body.appendChild(devices);
+  return [identity, devices];
+}
+
+// ── The strip on the main page ────────────────────────────────────────────────────────────
+
+/** The Android pill's Wi-Fi mark, as the same path: a glyph the fonts cannot be relied on for. */
+const WIFI_PATH =
+  'M1,9l2,2c4.97,-4.97 13.03,-4.97 18,0l2,-2C16.93,2.93 7.08,2.93 1,9zM9,17l3,3 3,-3'
+  + 'c-1.65,-1.66 -4.34,-1.66 -6,0zM5,13l2,2c2.76,-2.76 7.24,-2.76 10,0l2,-2C15.14,9.14 8.87,9.14 5,13z';
+
+function wifiMark() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', WIFI_PATH);
+  svg.appendChild(path);
+  return svg;
+}
+
+function devicePill(onClick) {
+  const pill = el('button', 'fork-pill fork-device-pill');
+  pill.type = 'button';
+  pill.onclick = onClick;
+  return pill;
+}
+
+/**
+ * The paired devices as one click each, on the main page — the desktop end of the Android
+ * strip, and the same shape: a column per device, the network route on top and the hotspot
+ * route underneath. Drawn from the store alone, so it is there the moment the window is and
+ * does not wait for a scan; a device that turns out not to be on the network says so when
+ * it is clicked, as the panel's row does.
+ */
+function renderPills(state) {
+  const strip = document.getElementById('devicePills');
+  if (!strip) return;
+  const peers = state.paired ? state.peers : [];
+  strip.hidden = peers.length === 0;
+  const columns = peers.map((peer) => {
+    const name = peer.name || `(unnamed · ${shortId(peer.device_id)})`;
+    const column = el('div', 'fork-device-column');
+    const network = devicePill(() => sendTo(peer));
+    network.appendChild(wifiMark());
+    network.appendChild(document.createTextNode(name));
+    const hotspot = devicePill(() => sendOverHotspot(peer));
+    hotspot.appendChild(document.createTextNode(`⚡ ${name}`));
+    column.appendChild(network);
+    column.appendChild(hotspot);
+    return column;
+  });
+  strip.replaceChildren(...columns);
 }
 
 export function openDevicesPanel() {
@@ -481,70 +539,31 @@ export function openDevicesPanel() {
 
   const pair = el('button', 'fork-pill', 'Pair a device');
   pair.type = 'button';
-  pair.onclick = async () => {
-    const state = await status();
-    // Two different things wear the same word. Starting a group makes a key for the others
-    // to scan; joining one takes a key that already exists. Asking outright is shorter than
-    // any label that tries to explain the difference in place.
+  pair.onclick = () => {
+    // Either direction works; this PC has no camera, so its own code is the one that gets
+    // scanned, and a phone's code is typed.
     forkInfo(
       'Pair a device',
-      state.paired
-        ? 'This device already belongs to a group. Show its key so another device can join, or leave and join a different group.'
-        : 'Show a key for other devices to scan, or type in a key from a device that already has one.',
+      'Show a code for the other device to scan, or type in the code shown on it. Either way pairs just those two devices and changes nothing else.',
       [
         { label: 'Cancel', onClick: (c) => c() },
         {
-          label: 'Type a key',
+          label: 'Type a code',
           onClick: (c) => {
             c();
             askForPairCode();
           },
         },
-        ...(state.paired
-          ? [{
-              // A stable hotspot SSID is a broadcast identifier that follows the device
-              // around — a linkability leak, not a confidentiality one, since the payload
-              // stays behind the group key. Changing it means changing the key it derives
-              // from, and there is no channel through which to tell the other devices, so
-              // they have to be paired again.
-              label: 'New key',
-              onClick: (c) => {
-                c();
-                forkInfo(
-                  'Start a new key?',
-                  'This changes the key every paired device shares, and the hotspot name '
-                    + 'derived from it. Every other device stops being able to find or reach '
-                    + 'this one until it is paired again — there is no way to tell them, '
-                    + 'because the key was the only thing they had in common.',
-                  [
-                    { label: 'Cancel', onClick: (close) => close() },
-                    {
-                      label: 'New key',
-                      onClick: async (close) => {
-                        close();
-                        await core.invoke('paired_leave');
-                        showPairCode(await core.invoke('paired_create_group'));
-                      },
-                    },
-                  ],
-                );
-              },
-            }]
-          : []),
         {
-          label: state.paired ? 'Show my key' : 'Show a new key',
+          label: 'Show my code',
           onClick: async (c) => {
             c();
             try {
-              // Re-showing must never re-key: every device already paired would be
-              // stranded, silently, and the only symptom would be that nothing is ever
-              // found again.
-              const uri = state.paired
-                ? await core.invoke('paired_pair_code')
-                : await core.invoke('paired_create_group');
-              showPairCode(uri);
+              const uri = await core.invoke('paired_show_code');
+              const typed = await core.invoke('paired_typed_code', { uri });
+              showPairCode(uri, typed);
             } catch (e) {
-              forkAlert('Could not make a pairing key', String(e));
+              forkAlert('Could not make a pairing code', String(e));
             }
           },
         },
@@ -563,10 +582,19 @@ export function openDevicesPanel() {
 window.addEventListener('DOMContentLoaded', async () => {
   const appWindow = window.__TAURI__.window.getCurrentWindow();
   // The store changed under us — a scan learned a device, or the serve loop noted an
-  // address. Redraw only if the page is actually open.
-  await appWindow.listen('pairedChanged', () => {
-    if (document.getElementById('forkDevicesPage')) refresh();
+  // address. The strip on the main page follows every change; the panel only if it is open.
+  await appWindow.listen('pairedChanged', (event) => {
+    if (document.getElementById('forkDevicesPage')) {
+      refresh();
+    } else if (event.payload) {
+      renderPills(event.payload);
+    }
   });
+  try {
+    renderPills(await status());
+  } catch (e) {
+    console.warn('paired status unavailable at start', e);
+  }
   // An arriving transfer needs no separate channel: the serve loop's own lines already go
   // out as outputMsg, which main.js writes into the log like any other transfer's.
 });

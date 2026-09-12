@@ -448,9 +448,9 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/qrCodeView" />
 
-    <!-- Fork: the top of the screen is two columns — the title, version, Bluetooth switch and
-         its hint on the left; the logo, the Devices pill and the device strip on the right —
-         and either can be the taller one. The hint wraps to two lines on a narrow screen and
+    <!-- Fork: the top of the screen is two columns — the title, version, the two switches and
+         their hints on the left; the logo, the Devices pill and the device strip on the right —
+         and either can be the taller one. The hints wrap to two lines on a narrow screen and
          the strip appears and disappears with pairing, so neither can be assumed to win. A
          barrier takes whichever is lower, which is what stops "Select mode for this device"
          landing on top of one of them. -->
@@ -459,7 +459,16 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         app:barrierDirection="bottom"
-        app:constraint_referenced_ids="bluetoothHint,devicePills" />
+        app:constraint_referenced_ids="reachableHint,devicePills" />
+
+    <!-- The device strip spans the full width, so it has to clear both columns: the UI pill on
+         the right and the reachable hint on the left, whichever ends lower. -->
+    <androidx.constraintlayout.widget.Barrier
+        android:id="@+id/pillsTopBarrier"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:barrierDirection="bottom"
+        app:constraint_referenced_ids="uiButton,reachableHint" />
 
     <!-- Fork: the paired devices, as one tap each. Two rows in one HorizontalScrollView — a
          column per device, top pill for this network and bottom pill over a hotspot — so the
@@ -476,7 +485,7 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/uiButton">
+        app:layout_constraintTop_toBottomOf="@+id/pillsTopBarrier">
 
         <LinearLayout
             android:id="@+id/devicePillRows"
@@ -551,5 +560,37 @@
         app:layout_constraintTop_toBottomOf="@+id/textView"
         app:srcCompat="@android:drawable/stat_sys_data_bluetooth"
         app:tint="@color/bluetoothColor" />
+
+    <!-- Fork: "Stay reachable", the switch that lets a paired device send to this phone without
+         it being opened. It is the most consequential switch in the app and the one with a
+         real battery cost, so it sits right under "Use Bluetooth" in the same dress rather
+         than three taps deep in the UI page (白い熊, 2026-09-11). Same state as the UI page's
+         row; the hint under it turns red while it is on, like that row's summary. -->
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/reachableSwitch"
+        style="@style/Widget.Material3.CompoundButton.MaterialSwitch"
+        android:layout_width="wrap_content"
+        android:layout_height="48dp"
+        android:layout_marginStart="8dp"
+        android:text="@string/reachable"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/bluetoothHint"
+        app:thumbTint="@color/bluetooth_switch_thumb"
+        app:trackTint="@color/bluetooth_switch_track" />
+
+    <!-- What the switch above costs and buys. Text and colour set in
+         MainActivity.refreshReachableSwitch(). -->
+    <TextView
+        android:id="@+id/reachableHint"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:alpha="0.85"
+        android:textSize="12sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/reachableSwitch" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

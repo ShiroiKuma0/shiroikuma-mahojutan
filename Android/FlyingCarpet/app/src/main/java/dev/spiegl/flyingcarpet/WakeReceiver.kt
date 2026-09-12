@@ -13,10 +13,11 @@ import android.util.Log
 // than a callback.
 //
 // Everything it is handed comes off the air, so nothing here is trusted: the payload has to
-// carry a tag that only a holder of the group key can produce, the advertiser has to already
-// be a paired device, and what it can ask for is exactly one thing — that this device take its
-// half of a paired hotspot transfer, which then has to pass the Noise handshake like any
-// other. There is no path from an advertisement to anything being read, written or sent.
+// carry a tag that only a holder of one of this device's pair keys can produce, the advertiser
+// has to already be a paired device, and what it can ask for is exactly one thing — that this
+// device take its half of a paired hotspot transfer, which then has to pass the Noise
+// handshake like any other. There is no path from an advertisement to anything being read,
+// written or sent.
 class WakeReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -25,23 +26,31 @@ class WakeReceiver : BroadcastReceiver() {
         // Two independent switches, both of which must be on. A wake is only meaningful for a
         // device that is trying to be reachable in the first place.
         if (!pairing.bleWake || !pairing.stayReachable) return
-        val groupKey = pairing.groupKey ?: return
-        val presenceKey = derivePresenceKey(groupKey)
+        val peers = pairing.peers()
+        if (peers.isEmpty()) return
 
         val results = readResults(intent)
         for (result in results) {
             val data = result.scanRecord?.getManufacturerSpecificData(COMPANY_ID)
-            val parsed = parseWake(data, presenceKey) ?: continue
-            val (role, idPrefix) = parsed
             // Two bytes of a device id is not an identity and is not treated as one: it
-            // narrows the paired list, and the Noise handshake decides the rest. If it is
-            // ambiguous, nothing is woken — guessing which device rang would be worse than
-            // the tap this was saving.
-            val candidates = pairing.peers().filter {
+            // narrows the paired list, and the tag — keyed per pair — plus the Noise
+            // handshake decide the rest. Every peer whose id starts that way is tried under
+            // its own key; the one whose key verifies the tag is the one that rang.
+            val idPrefix = wakeIdPrefix(data) ?: continue
+            val candidates = peers.filter {
                 val id = base32Decode(it.deviceId) ?: return@filter false
                 id.size >= 2 && id[0] == idPrefix[0] && id[1] == idPrefix[1]
             }
-            val peer = candidates.singleOrNull() ?: continue
+            var role: Byte? = null
+            var peer: PairedPeer? = null
+            for (candidate in candidates) {
+                val key = candidate.keyBytes ?: continue
+                val parsed = parseWake(data, derivePresenceKey(key)) ?: continue
+                role = parsed.first
+                peer = candidate
+                break
+            }
+            if (peer == null || role == null) continue
             if (!peer.autoAccept) {
                 Log.i(TAG, "${peer.displayName} rang, but it is set to ask first; ignoring")
                 continue

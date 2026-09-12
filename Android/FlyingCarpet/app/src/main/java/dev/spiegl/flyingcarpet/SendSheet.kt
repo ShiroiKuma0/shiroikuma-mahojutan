@@ -216,9 +216,12 @@ object SendSheet {
             peer.lastIp != null
         val name = peer.displayName
         column.addView(
+            // As wide as its name and no wider — the same pill as on the main page. Stretched
+            // across the sheet it stopped reading as a device and started reading as a bar
+            // (白い熊, 2026-09-11).
             ForkDialog.pill(context, if (overHotspot) "⚡ $name" else name, onClick).apply {
                 layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 )
                 if (!overHotspot) {

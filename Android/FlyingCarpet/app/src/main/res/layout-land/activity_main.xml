@@ -34,6 +34,30 @@
         app:srcCompat="@android:drawable/stat_sys_data_bluetooth"
         app:tint="@color/bluetoothColor" />
 
+    <!-- Fork: "Stay reachable" — see the portrait layout. Under the Bluetooth switch, with no
+         hint: landscape has no room for one, and MainActivity tolerates the missing id. -->
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/reachableSwitch"
+        style="@style/Widget.Material3.CompoundButton.MaterialSwitch"
+        android:layout_width="wrap_content"
+        android:layout_height="48dp"
+        android:layout_marginStart="22dp"
+        android:text="@string/reachable"
+        android:textSize="14sp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/bluetoothSwitch"
+        app:thumbTint="@color/bluetooth_switch_thumb"
+        app:trackTint="@color/bluetooth_switch_track" />
+
+    <!-- The two switches stacked are taller than the start row beside them, so what follows
+         has to clear whichever of the two ends lower. -->
+    <androidx.constraintlayout.widget.Barrier
+        android:id="@+id/topRowBarrier"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:barrierDirection="bottom"
+        app:constraint_referenced_ids="startButton,reachableSwitch" />
+
     <!-- Version + About moved onto the top row (right-justified, above the Receive button). -->
     <TextView
         android:id="@+id/aboutButton"
@@ -112,7 +136,7 @@
         android:visibility="gone"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/startButton">
+        app:layout_constraintTop_toBottomOf="@+id/topRowBarrier">
 
         <LinearLayout
             android:id="@+id/devicePillRows"
