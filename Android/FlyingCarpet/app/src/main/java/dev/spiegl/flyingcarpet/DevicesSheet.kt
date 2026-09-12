@@ -69,24 +69,14 @@ object DevicesSheet {
                 box.addView(
                     ForkDialog.label(
                         context,
-                        "Pairing agrees one key between your devices, once. After that, "
-                            + "sending is one tap and there is nothing to do on the device "
-                            + "receiving.",
+                        "Pair two devices once — show a code on either one, scan or type it "
+                            + "on the other. After that, sending is one tap and there is "
+                            + "nothing to do on the device receiving.",
                         13f,
                     )
                 )
             } else {
                 val peers = controller.pairing.peers()
-                if (peers.isEmpty()) {
-                    box.addView(
-                        ForkDialog.label(
-                            context,
-                            "No devices found yet. Open the app on the other device and tap "
-                                + "“Look again”.",
-                            13f,
-                        )
-                    )
-                }
                 for (peer in peers) {
                     box.addView(
                         peerRow(
@@ -145,7 +135,7 @@ object DevicesSheet {
         box.addView(
             ForkDialog.label(
                 context,
-                if (controller.isPaired) {
+                if (controller.pairing.shouldServe) {
                     "Listening on port $PRESENCE_PORT while this app is open."
                 } else {
                     "Not paired with anything yet."
@@ -187,7 +177,9 @@ object DevicesSheet {
             else -> "○ ${whenSeen(peer.lastSeen)}"
         }
         row.addView(
-            ForkDialog.label(context, "${peer.os} · $state", 12f).apply { alpha = 0.8f }
+            ForkDialog.label(
+                context, "${peer.os.ifEmpty { "not yet heard from" }} · $state", 12f
+            ).apply { alpha = 0.8f }
         )
         // Where files from THIS device land, on its own line and clickable on its own, so the
         // row's tap can stay "send" while the folder is still one tap away. Red when unset —
@@ -281,41 +273,22 @@ object DevicesSheet {
         sheet: Dialog,
         refresh: () -> Unit,
     ) {
-        // Two different things wear the same word. Starting a group makes a key for other
-        // devices to scan; joining one takes a key that already exists. Asking outright is
-        // shorter than any label that tries to explain the difference in place.
-        val paired = controller.isPaired
+        // Pairwise, no group (白い熊, 2026-09-11): either device can show the code, the
+        // other scans or types it, and a third pairing never touches the first.
         ForkDialog.chooser(
             activity,
             "Pair a device",
-            buildList {
-                add(if (paired) "Show my key" else "Show a new key")
-                add("Scan another device’s key")
-                add("Type a key")
-                // A stable hotspot SSID is a broadcast identifier that follows the device
-                // around — not a confidentiality problem, since the payload stays behind the
-                // group key, but a linkability one. Changing it means changing the key it is
-                // derived from, which is a re-key of the whole group: there is no channel
-                // through which to tell the other devices, so they have to be paired again.
-                if (paired) add("Start a new key (re-pairs every device)")
-            },
+            listOf("Show my code", "Scan a code", "Type a code"),
         ) { index ->
             when (index) {
                 0 -> {
-                    // Re-showing must never re-key: every device already paired would be
-                    // stranded, and the only symptom would be that nothing is found again.
-                    val uri = controller.pairing.pairUri()
-                        ?: run {
-                            controller.pairing.createGroup()
-                            controller.pairing.pairUri()
-                        }
-                    if (uri != null) {
-                        // Started before the code goes up, not after: the scanning device
-                        // probes the moment it has the key, and nothing answers a probe that
-                        // arrives before this side is listening.
-                        controller.start()
-                        showPairCode(activity, uri) { refresh() }
-                    }
+                    val uri = controller.pairing.newCode()
+                    // Started before the code goes up, not after: the scanning device
+                    // introduces itself the moment it has the key, and nothing answers a
+                    // probe that arrives before this side is listening. The "Stay reachable"
+                    // service reads the keys afresh per packet, so it needs no restart.
+                    if (!PresenceService.running) controller.start()
+                    showPairCode(activity, uri) { refresh() }
                     refresh()
                 }
                 1 -> {
@@ -326,63 +299,21 @@ object DevicesSheet {
                     (activity as? MainActivity)?.scanPairingCode()
                 }
                 2 -> typePairCode(activity, controller, refresh)
-                3 -> confirmRekey(activity, controller, refresh)
             }
         }.show()
     }
 
-    /**
-     * Re-keys the group. Every device paired against the old key is stranded by this — it
-     * cannot be told, because the key is the only thing they had in common — so it asks
-     * first and says exactly what will happen.
-     */
-    private fun confirmRekey(
-        activity: Activity,
-        controller: PairedController,
-        refresh: () -> Unit,
-    ) {
-        val context = activity
-        val box = ForkDialog.box(context)
-        box.addView(ForkDialog.heading(context, "Start a new key?"))
-        box.addView(
-            ForkDialog.label(
-                context,
-                "This changes the key every paired device shares, and the hotspot name derived "
-                    + "from it. Every other device stops being able to find or reach this one "
-                    + "until it is paired again — there is no way to tell them, because the key "
-                    + "was the only thing they had in common.",
-                13f,
-            )
-        )
-        box.addView(ForkDialog.spacer(context, 12))
-        val dialog = ForkDialog.wrap(context, box)
-        val bar = LinearLayout(context).apply { gravity = Gravity.END }
-        bar.addView(ForkDialog.pill(context, "Cancel") { dialog.dismiss() })
-        bar.addView(
-            ForkDialog.pill(context, "New key") {
-                controller.pairing.leaveGroup()
-                controller.pairing.createGroup()
-                controller.start()
-                dialog.dismiss()
-                controller.pairing.pairUri()?.let { showPairCode(activity, it) }
-                refresh()
-            }
-        )
-        box.addView(bar)
-        dialog.show()
-    }
-
-    /** The QR and, underneath it, the same string in a form a person can read across. */
+    /** The QR and, underneath it, the same code in a form a person can read across. */
     fun showPairCode(activity: Activity, uri: String, onClosed: () -> Unit = {}) {
         val context = activity
-        val key = uri.substringAfter(PAIR_URI_PREFIX).substringBefore(':')
+        val typed = typedCode(uri)
         val box = ForkDialog.box(context)
         box.addView(ForkDialog.heading(context, "Pair a device"))
         box.addView(
             ForkDialog.label(
                 context,
-                "On the other device, open Devices → Pair and scan this code — or type the "
-                    + "key underneath it.",
+                "On the other device, open Devices ＋ → Pair and scan this code — or type "
+                    + "what is underneath it. The two are paired the moment it answers.",
                 13f,
             )
         )
@@ -406,7 +337,7 @@ object DevicesSheet {
             }
         )
         holder.addView(
-            ForkDialog.label(context, grouped(key), 12f, color = Color.BLACK, bold = true).apply {
+            ForkDialog.label(context, typed, 12f, color = Color.BLACK, bold = true).apply {
                 gravity = Gravity.CENTER
                 setPadding(0, ForkDialog.dp(context, 8), 0, 0)
             }
@@ -416,7 +347,7 @@ object DevicesSheet {
         box.addView(
             ForkDialog.label(
                 context,
-                "Anyone who has this key can send files to your devices. Show it, don’t send it.",
+                "Whoever uses this code first becomes paired with this phone. Show it, don’t send it.",
                 12f,
                 color = Color.parseColor("#FFFF5252"),
             )
@@ -440,19 +371,19 @@ object DevicesSheet {
     ) {
         val context = activity
         val box = ForkDialog.box(context)
-        box.addView(ForkDialog.heading(context, "Join a device"))
+        box.addView(ForkDialog.heading(context, "Type a code"))
         box.addView(
             ForkDialog.label(
                 context,
-                "Type the key shown under the QR code on the other device. Spaces and "
-                    + "capitals do not matter.",
+                "Type the 78 characters shown under the QR code on the other device. Spaces "
+                    + "and capitals do not matter.",
                 13f,
             )
         )
         val field = EditText(context).apply {
             setTextColor(ForkDialog.accent(context))
             setHintTextColor(ForkDialog.accent(context) and 0x66FFFFFF)
-            hint = "Pairing key"
+            hint = "Pairing code"
         }
         box.addView(field)
         box.addView(ForkDialog.spacer(context, 12))
@@ -461,20 +392,28 @@ object DevicesSheet {
         val bar = LinearLayout(context).apply { gravity = Gravity.END }
         bar.addView(ForkDialog.pill(context, "Cancel") { dialog.dismiss() })
         bar.addView(
-            ForkDialog.pill(context, "Join") {
-                val parsed = parsePairUri(field.text.toString())
+            ForkDialog.pill(context, "Pair") {
+                val text = field.text.toString()
+                val parsed = parsePairUri(text)
                 if (parsed == null) {
                     ForkDialog.alert(
                         context,
-                        "That is not a pairing key",
-                        "A pairing key is 52 characters. Check it against the one shown "
-                            + "under the QR code on the other device.",
+                        "That is not a pairing code",
+                        if (isOldPairUri(text)) {
+                            "That code is from an older version of this app. Update the app on " +
+                                "the other device and show the code again."
+                        } else {
+                            "A pairing code is 78 characters. Check it against the one shown " +
+                                "under the QR code on the other device."
+                        },
                     )
                     return@pill
                 }
-                controller.pairing.joinGroup(parsed.first)
-                controller.start()
                 dialog.dismiss()
+                (activity as? MainActivity)?.pairFromCode(parsed) ?: run {
+                    controller.pairing.addPeerFromCode(parsed)
+                    controller.start()
+                }
                 refresh()
             }
         )
@@ -491,9 +430,6 @@ object DevicesSheet {
     } catch (e: Exception) {
         uri
     }
-
-    private fun grouped(key: String): String =
-        key.chunked(5).joinToString(" ")
 
     internal fun whenSeen(seconds: Long): String {
         if (seconds == 0L) return "never seen on a network"

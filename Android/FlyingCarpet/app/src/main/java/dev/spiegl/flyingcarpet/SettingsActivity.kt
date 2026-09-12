@@ -668,7 +668,10 @@ class SettingsActivity : AppCompatActivity() {
         )
 
         val reachable = SwitchCompat(this).apply {
-            isChecked = pairing.stayReachable && PresenceService.running
+            // The setting alone, as on the main page: the service follows it (MainActivity
+            // restarts a killed one on resume), so "on but not running" is a moment, not a
+            // state worth a different switch position.
+            isChecked = pairing.stayReachable
             setOnCheckedChangeListener { _, checked ->
                 if (checked) requestReachable() else stopReachable()
             }

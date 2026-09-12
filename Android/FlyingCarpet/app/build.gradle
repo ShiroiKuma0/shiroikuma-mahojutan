@@ -25,7 +25,7 @@ plugins {
 // still, the counter continues instead. upstreamVersionCode always mirrors upstream verbatim.
 def releaseVersionName = "10.0.4"   // = latest upstream `v*` tag
 def upstreamVersionCode = 24        // = upstream Android defaultConfig.versionCode
-def buildNumber = 75                // fork build; reset to 1 each upstream bump (see NB2)
+def buildNumber = 78                // fork build; reset to 1 each upstream bump (see NB2)
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"

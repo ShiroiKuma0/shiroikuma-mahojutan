@@ -41,7 +41,7 @@ import android.util.Log
 //     exchange is one advertisement and one scan result — a doorbell, not a conversation.
 //   * **No device name in the advertisement.** That is what overran the 31-byte budget, and
 //     there is nothing here that needs one: the payload is 8 bytes of manufacturer data.
-//   * **Nothing is trusted from the air.** The tag is an HMAC of the group key over a rolling
+//   * **Nothing is trusted from the air.** The tag is an HMAC of the pair key over a rolling
 //     minute, so a stranger cannot ring the bell and a recording of one stops working within
 //     two minutes. What it triggers is the ordinary paired hotspot route, which then has to
 //     pass the Noise handshake like anything else.
@@ -88,9 +88,16 @@ private fun wakeTag(presenceKey: ByteArray, deviceId: ByteArray, role: Byte, min
 
 private fun currentMinute(): Long = System.currentTimeMillis() / 60_000
 
+/** The two id bytes off a payload, before anything is verified — to choose the key with. */
+fun wakeIdPrefix(data: ByteArray?): ByteArray? {
+    if (data == null || data.size < 8) return null
+    return byteArrayOf(data[1], data[2])
+}
+
 /**
  * Reads a wake payload, or returns null. Accepts the previous, current and next minute, so a
  * clock a little out of step still works while a recording made three minutes ago does not.
+ * [presenceKey] is the presence key of the pair the caller belongs to.
  */
 fun parseWake(data: ByteArray?, presenceKey: ByteArray): Pair<Byte, ByteArray>? {
     if (data == null || data.size < 8) return null

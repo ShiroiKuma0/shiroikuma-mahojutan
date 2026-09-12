@@ -188,7 +188,23 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     // Fork: called when a Bluetooth peer makes contact while no transfer is running. Returns
     // true if this device armed itself to answer. Set by PairedController.
-    var onIdlePeerContact: ((String) -> Boolean)? = null
+    /**
+     * A paired device has made contact over Bluetooth while nothing was running: its OS, and
+     * — when it said so — its device id. The id is what picks the pair key, and without it a
+     * hotspot cannot be raised for it, because the credentials are derived per pair.
+     */
+    var onIdlePeerContact: ((String, String?) -> Boolean)? = null
+
+    /**
+     * What this device says it is over Bluetooth. In a paired session the device id rides
+     * along after a bar, so the far end can pick the pair key; every other transfer says the
+     * bare OS the stock app expects. Stock devices never see the long form — a paired session
+     * only ever targets a device running this fork.
+     */
+    override fun osValue(): String {
+        val id = pairedSession?.localId
+        return if (id.isNullOrEmpty()) "android" else "android|$id"
+    }
 
     // How many times to ask for the peer's hotspot before giving up, so a first look that lands
     // before the AP is beaconing costs a few seconds rather than a manual retry.
@@ -499,7 +515,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
             // low-entropy password and buy nothing against a random key.
             val paired = pairedSession
             if (paired != null && paired.overHotspot) {
-                psk = derivePairedPsk(paired.groupKey)
+                psk = derivePairedPsk(
+                    paired.key ?: throw Exception("No pairing key for that device; pair it again.")
+                )
             } else {
                 withContext(Dispatchers.IO) { psk = derivePsk(password) }
             }
@@ -514,18 +532,22 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         outputStream = recordingOut
         confirmVersion()
         confirmMode()
-        inputStream = recordingIn.inner
-        outputStream = recordingOut.inner
-        // Establish the Noise encrypted transport over the same connection, for both modes,
-        // with the preamble transcript bound in as the prologue. The Noise initiator is the
-        // TCP client, the responder is the TCP server. Everything after this — file count,
-        // metadata, and file data — is confidential and tamper-evident. A wrong password
-        // (or a tampered preamble) fails the handshake with a clear message.
+        // The Noise initiator is the TCP client, the responder is the TCP server.
         val role = if (connectionMode == ConnectionMode.SharedNetwork) {
             if (mode == Mode.Sending) NoiseRole.INITIATOR else NoiseRole.RESPONDER
         } else {
             if (isHosting()) NoiseRole.RESPONDER else NoiseRole.INITIATOR
         }
+        // Fork: between paired devices the hello goes here, still in the clear and still on
+        // the recording streams — who is calling and under which key — so the listening
+        // side can pick its pair key before the handshake, and say so in words if it cannot.
+        pairedSession?.let { exchangePairedHello(it, role) }
+        inputStream = recordingIn.inner
+        outputStream = recordingOut.inner
+        // Establish the Noise encrypted transport over the same connection, for both modes,
+        // with the preamble transcript bound in as the prologue. Everything after this —
+        // file count, metadata, and file data — is confidential and tamper-evident. A wrong
+        // password (or a tampered preamble) fails the handshake with a clear message.
         val prologue = if (role == NoiseRole.INITIATOR) {
             buildPrologue(recordingOut.transcript(), recordingIn.transcript())
         } else {
@@ -719,8 +741,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // handshake are simply skipped: this device raises or joins, and the other one has
         // already worked out what to look for.
         val pairedHotspot = pairedSession
-        if (pairedHotspot != null && pairedHotspot.overHotspot) {
-            password = deriveHotspotPassword(pairedHotspot.groupKey)
+        val pairedHotspotKey = pairedHotspot?.takeIf { it.overHotspot }?.key
+        if (pairedHotspot != null && pairedHotspotKey != null) {
+            password = deriveHotspotPassword(pairedHotspotKey)
             ssid = if (isHosting()) {
                 getSsidAndKey(password).first
             } else {
@@ -1216,8 +1239,9 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // — the joiner computes "DIRECT-fc-<password>" for itself and needs to be told
         // nothing. Every other transfer still gets a fresh single-use password.
         val paired = pairedSession
-        val generated = if (paired != null && paired.overHotspot) {
-            deriveHotspotPassword(paired.groupKey)
+        val pairedKey = paired?.takeIf { it.overHotspot }?.key
+        val generated = if (pairedKey != null) {
+            deriveHotspotPassword(pairedKey)
         } else {
             generatePassword()
         }
@@ -1536,7 +1560,10 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         connectivityManager.requestNetwork(request, callback)
     }
 
-    override fun gotPeer(peerOS: String) {
+    override fun gotPeer(peerOSValue: String) {
+        // "android|<device id>" from a paired device, or the bare OS from anything else.
+        val peerOS = peerOSValue.substringBefore('|')
+        val peerId = peerOSValue.substringAfter('|', "").takeIf { it.isNotEmpty() }
         peer = when (peerOS) {
             "android" -> Peer.Android
             "ios" -> Peer.iOS
@@ -1553,7 +1580,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // half here; the existing logic below then drives it exactly as a normal transfer
         // would, because by this point it *is* one.
         if (!transferIsRunning) {
-            if (onIdlePeerContact?.invoke(peerOS) != true) {
+            if (onIdlePeerContact?.invoke(peerOS, peerId) != true) {
                 outputText(
                     "A device made contact over Bluetooth, but nothing is set up to receive " +
                         "from it here."
@@ -1569,7 +1596,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         // grace ran out -- while this side had already read the password and gone looking for it on
         // the network it had not reached yet.
         if (bluetooth.weAreCentral) {
-            bluetooth.bluetoothReceiver.write(OS_CHARACTERISTIC_UUID, "android".toByteArray())
+            bluetooth.bluetoothReceiver.write(OS_CHARACTERISTIC_UUID, osValue().toByteArray())
         } else {
             connectToPeer()
         }

@@ -47,10 +47,11 @@ import kotlin.coroutines.coroutineContext
 const val PRESENCE_PORT = 3291
 const val PRESENCE_MULTICAST_ADDR = "239.255.73.68"
 val PRESENCE_MAGIC = byteArrayOf(0x46, 0x43, 0x50, 0x52) // "FCPR"
-const val PRESENCE_VERSION = 1
+/** Version 2 adds the key id after the device id — see presence.rs. */
+const val PRESENCE_VERSION = 2
 
-/** magic(4) version(2) flags(2) os(1) deviceId(16) ip(4) port(2) timestamp(8) nameLen(1) */
-const val PRESENCE_HEADER_SIZE = 40
+/** magic(4) version(2) flags(2) os(1) deviceId(16) keyId(4) ip(4) port(2) timestamp(8) nameLen(1) */
+const val PRESENCE_HEADER_SIZE = 44
 const val PRESENCE_HMAC_SIZE = 32
 const val PRESENCE_MIN_SIZE = PRESENCE_HEADER_SIZE + PRESENCE_HMAC_SIZE
 const val PRESENCE_MAX_SIZE = PRESENCE_HEADER_SIZE + MAX_NAME_BYTES + PRESENCE_HMAC_SIZE
@@ -104,6 +105,7 @@ data class LocalIdentity(
             unattended.hashCode()
 }
 
+/** A device we have just heard from, and the presence key the exchange was verified under. */
 data class DiscoveredPeer(
     val deviceId: String,
     val name: String,
@@ -111,12 +113,14 @@ data class DiscoveredPeer(
     val ip: String,
     val port: Int,
     val unattended: Boolean,
+    val presenceKey: ByteArray = ByteArray(0),
 )
 
 class PresenceAnnouncement(
     val flags: Int,
     val os: PeerOs,
     val deviceId: ByteArray,
+    val keyId: ByteArray,
     val ipAddress: ByteArray,
     val port: Int,
     val timestamp: Long,
@@ -135,6 +139,7 @@ class PresenceAnnouncement(
         buffer.putShort(flags.toShort())
         buffer.put(os.value.toByte())
         buffer.put(deviceId)
+        buffer.put(keyId)
         buffer.put(ipAddress)
         buffer.putShort(port.toShort())
         buffer.putLong(timestamp)
@@ -155,7 +160,12 @@ class PresenceAnnouncement(
     }
 
     companion object {
-        fun create(identity: LocalIdentity, ip: InetAddress, probe: Boolean): PresenceAnnouncement {
+        fun create(
+            identity: LocalIdentity,
+            key: PairKey,
+            ip: InetAddress,
+            probe: Boolean,
+        ): PresenceAnnouncement {
             var flags = 0
             if (probe) flags = flags or FLAG_PROBE
             if (identity.unattended) flags = flags or FLAG_UNATTENDED
@@ -163,11 +173,37 @@ class PresenceAnnouncement(
                 flags = flags,
                 os = identity.os,
                 deviceId = identity.deviceId,
+                keyId = key.keyId,
                 ipAddress = ip.address,
                 port = PRESENCE_PORT,
                 timestamp = System.currentTimeMillis() / 1000,
                 name = identity.name,
             )
+        }
+
+        /**
+         * Who sent this and under which key, read off the header before anything is checked.
+         * Only ever used to *choose* the key to verify with.
+         */
+        fun peek(data: ByteArray, length: Int): Pair<ByteArray, ByteArray>? {
+            if (length < PRESENCE_MIN_SIZE) return null
+            for (i in PRESENCE_MAGIC.indices) if (data[i] != PRESENCE_MAGIC[i]) return null
+            val version = ((data[4].toInt() and 0xff) shl 8) or (data[5].toInt() and 0xff)
+            if (version != PRESENCE_VERSION) return null
+            return Pair(data.copyOfRange(9, 25), data.copyOfRange(25, 29))
+        }
+
+        /**
+         * [deserialize] against whichever of the ring's keys could have signed this. Returns
+         * the announcement and the key that verified it.
+         */
+        fun open(data: ByteArray, length: Int, ring: KeyRing): Pair<PresenceAnnouncement, PairKey>? {
+            val (deviceId, keyId) = peek(data, length) ?: return null
+            for (candidate in ring.candidates(deviceId, keyId)) {
+                val announcement = deserialize(data, length, candidate.key) ?: continue
+                return Pair(announcement, candidate)
+            }
+            return null
         }
 
         /**
@@ -193,6 +229,7 @@ class PresenceAnnouncement(
             val flags = buffer.short.toInt() and 0xffff
             val os = PeerOs.fromByte(buffer.get().toInt() and 0xff) ?: return null
             val deviceId = ByteArray(16).also { buffer.get(it) }
+            val keyId = ByteArray(4).also { buffer.get(it) }
             val ipAddress = ByteArray(4).also { buffer.get(it) }
             val port = buffer.short.toInt() and 0xffff
             val timestamp = buffer.long
@@ -202,7 +239,7 @@ class PresenceAnnouncement(
             } catch (e: Exception) {
                 return null
             }
-            return PresenceAnnouncement(flags, os, deviceId, ipAddress, port, timestamp, name)
+            return PresenceAnnouncement(flags, os, deviceId, keyId, ipAddress, port, timestamp, name)
         }
     }
 }
@@ -307,20 +344,24 @@ fun presenceEndpoint(context: Context): LocalEndpoint? {
 }
 
 /**
- * Sends one announcement everywhere it might be heard. [sweep] walks the subnet host by
- * host and is the fallback that rescues a network dropping both multicast and broadcast.
+ * Sends the announcements everywhere they might be heard — one per key, because a peer can
+ * only read the one signed under its own, and all of them per address so a sweep costs one
+ * pass. [sweep] walks the subnet host by host and is the fallback that rescues a network
+ * dropping both multicast and broadcast.
  */
 private suspend fun shout(
     socket: DatagramSocket,
-    payload: ByteArray,
+    payloads: List<ByteArray>,
     endpoint: LocalEndpoint,
     sweep: Boolean,
 ) {
     fun sendTo(address: InetAddress) {
-        try {
-            socket.send(DatagramPacket(payload, payload.size, address, PRESENCE_PORT))
-        } catch (e: Exception) {
-            // An unreachable host on a sweep is the normal case, not an error.
+        for (payload in payloads) {
+            try {
+                socket.send(DatagramPacket(payload, payload.size, address, PRESENCE_PORT))
+            } catch (e: Exception) {
+                // An unreachable host on a sweep is the normal case, not an error.
+            }
         }
     }
     sendTo(InetAddress.getByName(PRESENCE_MULTICAST_ADDR))
@@ -335,28 +376,38 @@ private suspend fun shout(
     }
 }
 
+/** One announcement per key, signed under it. */
+private fun payloadsFor(
+    keys: List<PairKey>,
+    identity: LocalIdentity,
+    ip: InetAddress,
+    probe: Boolean,
+): List<ByteArray> = keys.map { PresenceAnnouncement.create(identity, it, ip, probe).serialize(it.key) }
+
 /**
  * Asks who is there and collects the answers, from an ephemeral port so it works on a device
- * that is also running a [PresenceResponder].
+ * that is also running a [PresenceResponder]. [keys] are presence keys, one per peer.
  */
 suspend fun presenceProbe(
-    key: ByteArray,
+    keys: List<PairKey>,
     identity: LocalIdentity,
     endpoint: LocalEndpoint,
     listenForMs: Long,
     sweep: Boolean,
 ): List<DiscoveredPeer> = withContext(Dispatchers.IO) {
     val found = LinkedHashMap<String, DiscoveredPeer>()
+    if (keys.isEmpty()) return@withContext emptyList()
+    val ring = KeyRing(keys)
     val socket = DatagramSocket()
     try {
         socket.broadcast = true
         socket.soTimeout = 200
-        val payload = PresenceAnnouncement.create(identity, endpoint.ip, probe = true).serialize(key)
+        val payloads = payloadsFor(keys, identity, endpoint.ip, probe = true)
         coroutineScope {
             // Shout on another coroutine and listen here at the same time: a /21 sweep
             // spends ~320 ms in chunk delays alone, and the first replies land long before
             // it has finished going out.
-            val shouting = launch { shout(socket, payload, endpoint, sweep) }
+            val shouting = launch { shout(socket, payloads, endpoint, sweep) }
             val deadline = System.currentTimeMillis() + listenForMs
             val buffer = ByteArray(PRESENCE_MAX_SIZE)
             while (System.currentTimeMillis() < deadline && isActive) {
@@ -368,8 +419,8 @@ suspend fun presenceProbe(
                 } catch (e: Exception) {
                     break
                 }
-                val announcement =
-                    PresenceAnnouncement.deserialize(packet.data, packet.length, key) ?: continue
+                val (announcement, key) =
+                    PresenceAnnouncement.open(packet.data, packet.length, ring) ?: continue
                 if (announcement.deviceId.contentEquals(identity.deviceId)) continue
                 if (!announcement.isFresh()) continue
                 val id = base32Encode(announcement.deviceId)
@@ -385,6 +436,7 @@ suspend fun presenceProbe(
                     ).hostAddress.orEmpty(),
                     port = announcement.port,
                     unattended = announcement.isUnattended,
+                    presenceKey = key.key,
                 )
             }
             shouting.cancel()
@@ -397,16 +449,15 @@ suspend fun presenceProbe(
 
 /** Announces once and returns: the burst a device sends when its own address has changed. */
 suspend fun presenceAnnounceOnce(
-    key: ByteArray,
+    keys: List<PairKey>,
     identity: LocalIdentity,
     endpoint: LocalEndpoint,
 ) = withContext(Dispatchers.IO) {
+    if (keys.isEmpty()) return@withContext
     val socket = DatagramSocket()
     try {
         socket.broadcast = true
-        val payload =
-            PresenceAnnouncement.create(identity, endpoint.ip, probe = false).serialize(key)
-        shout(socket, payload, endpoint, sweep = false)
+        shout(socket, payloadsFor(keys, identity, endpoint.ip, probe = false), endpoint, sweep = false)
     } catch (e: Exception) {
         Log.w("Presence", "Could not announce: ${e.message}")
     } finally {
@@ -426,7 +477,12 @@ suspend fun presenceAnnounceOnce(
  */
 class PresenceResponder(
     private val context: Context,
-    private val key: ByteArray,
+    /**
+     * The presence keys, asked for afresh on every packet: a code shown while this is
+     * already running has to be answerable at once, and one just claimed has to stop being
+     * so. Packets are rare, so the read costs nothing.
+     */
+    private val keys: () -> KeyRing,
     private val identity: LocalIdentity,
 ) {
     @Volatile
@@ -468,8 +524,9 @@ class PresenceResponder(
 
                 // One burst on entry. This is the whole beacon: it exists so that a device
                 // whose address has just changed is not silently unreachable at every peer
-                // that cached the old one.
-                presenceAnnounceOnce(key, identity, endpoint)
+                // that cached the old one. Under the peers' keys only; a pending code is
+                // for the device that scanned it to speak first.
+                presenceAnnounceOnce(keys().keys.filter { !it.isPending }, identity, endpoint)
 
                 val buffer = ByteArray(PRESENCE_MAX_SIZE)
                 while (!cancelled && coroutineContext.isActive) {
@@ -481,8 +538,8 @@ class PresenceResponder(
                     } catch (e: Exception) {
                         if (cancelled) break else continue
                     }
-                    val announcement =
-                        PresenceAnnouncement.deserialize(packet.data, packet.length, key)
+                    val (announcement, key) =
+                        PresenceAnnouncement.open(packet.data, packet.length, keys())
                             ?: continue
                     if (announcement.deviceId.contentEquals(identity.deviceId)) continue
                     if (!announcement.isFresh()) continue
@@ -494,12 +551,15 @@ class PresenceResponder(
                             ip = packet.address.hostAddress.orEmpty(),
                             port = announcement.port,
                             unattended = announcement.isUnattended,
+                            presenceKey = key.key,
                         )
                     )
                     if (announcement.isProbe) {
+                        // Answered under the key the probe came in on — the only one the
+                        // prober can read, and, for a pending code, the one now theirs.
                         val reply = PresenceAnnouncement
-                            .create(identity, endpoint.ip, probe = false)
-                            .serialize(key)
+                            .create(identity, key, endpoint.ip, probe = false)
+                            .serialize(key.key)
                         try {
                             socket.send(
                                 DatagramPacket(reply, reply.size, packet.address, packet.port)
