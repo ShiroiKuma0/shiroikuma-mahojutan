@@ -93,7 +93,18 @@ object ForkDialog {
     }
 
     /** An ArcaneChat-style round pill: black fill, thin accent stroke, accent text, accent ripple. */
-    fun pill(context: Context, s: String, onClick: () -> Unit): Button = Button(context).apply {
+    /** The width of a pill's outline, in pixels — what two halves of a split pill overlap by. */
+    fun strokePx(context: Context): Int = dpF(context, 1.5f).toInt()
+
+    /** Which corners a pill rounds: all of them, or only one end of a pill split in two. */
+    enum class Corners { ALL, START, END }
+
+    fun pill(
+        context: Context,
+        s: String,
+        corners: Corners = Corners.ALL,
+        onClick: () -> Unit,
+    ): Button = Button(context).apply {
         text = s
         isAllCaps = false
         setTextColor(accent(context))
@@ -101,8 +112,14 @@ object ForkDialog {
             ColorStateList.valueOf((accent(context) and 0x00FFFFFF) or 0x33000000),
             GradientDrawable().apply {
                 setColor(surface(context))
-                setStroke(dpF(context, 1.5f).toInt(), accent(context))
-                cornerRadius = dpF(context, 50f)   // > half the height → a pill
+                setStroke(strokePx(context), accent(context))
+                val r = dpF(context, 50f)   // > half the height → a pill
+                when (corners) {
+                    Corners.ALL -> cornerRadius = r
+                    // top-left, top-right, bottom-right, bottom-left — two floats each
+                    Corners.START -> cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
+                    Corners.END -> cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+                }
             },
             null,
         )

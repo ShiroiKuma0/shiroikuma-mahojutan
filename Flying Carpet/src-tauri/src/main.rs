@@ -436,6 +436,7 @@ async fn main() {
             fork_paired::paired_set_receive_dir,
             fork_paired::paired_forget,
             fork_paired::paired_set_auto_accept,
+            fork_paired::paired_reorder,
             fork_paired::paired_scan,
             fork_paired::paired_send,
         ])

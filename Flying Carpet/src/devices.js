@@ -300,16 +300,32 @@ async function overHotspot(peer, mode, fileList, receiveDir) {
   }
 }
 
-async function sendOverHotspot(peer) {
-  const picked = await dialog.open({ multiple: true, directory: false });
-  if (!picked) return;
+/**
+ * What either half of a pill picks: files, or one folder. Both go through the same
+ * expand_files as the main page's buttons do — a folder's files come back named relative to
+ * its parent, which is what makes the far device recreate the folder rather than flatten it.
+ * Null when there is nothing to send, and the reason has already been said.
+ */
+async function pickToSend(folder) {
+  const picked = await dialog.open(
+    folder ? { multiple: false, directory: true } : { multiple: true, directory: false },
+  );
+  if (!picked) return null;
   const paths = Array.isArray(picked) ? picked : [picked];
   const fileList = await core.invoke('expand_files', { paths });
   if (!fileList.length) {
-    forkAlert('Nothing to send', 'None of what you picked could be read.');
-    return;
+    forkAlert(
+      'Nothing to send',
+      folder ? 'That folder is empty.' : 'None of what you picked could be read.',
+    );
+    return null;
   }
-  await overHotspot(peer, 'send', fileList, null);
+  return fileList;
+}
+
+async function sendOverHotspot(peer, folder = false) {
+  const fileList = await pickToSend(folder);
+  if (fileList) await overHotspot(peer, 'send', fileList, null);
 }
 
 async function receiveOverHotspot(peer) {
@@ -320,16 +336,9 @@ async function receiveOverHotspot(peer) {
   await overHotspot(peer, 'receive', null, folder);
 }
 
-async function sendTo(peer) {
-  const picked = await dialog.open({ multiple: true, directory: false });
-  if (!picked) return;
-  const paths = Array.isArray(picked) ? picked : [picked];
-  const fileList = await core.invoke('expand_files', { paths });
-  if (!fileList.length) {
-    forkAlert('Nothing to send', 'None of what you picked could be read.');
-    return;
-  }
-  await sendFilesTo(peer, fileList);
+async function sendTo(peer, folder = false) {
+  const fileList = await pickToSend(folder);
+  if (fileList) await sendFilesTo(peer, fileList);
 }
 
 /**
@@ -453,45 +462,180 @@ const WIFI_PATH =
   'M1,9l2,2c4.97,-4.97 13.03,-4.97 18,0l2,-2C16.93,2.93 7.08,2.93 1,9zM9,17l3,3 3,-3'
   + 'c-1.65,-1.66 -4.34,-1.66 -6,0zM5,13l2,2c2.76,-2.76 7.24,-2.76 10,0l2,-2C15.14,9.14 8.87,9.14 5,13z';
 
-function wifiMark() {
+/** The folder half's glyph, the same way: Material's folder outline. */
+const FOLDER_PATH =
+  'M10,4H4C2.9,4 2.01,4.9 2.01,6L2,18c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8l-2,-2z';
+
+function mark(d) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', WIFI_PATH);
+  path.setAttribute('d', d);
   svg.appendChild(path);
   return svg;
 }
 
-function devicePill(onClick) {
-  const pill = el('button', 'fork-pill fork-device-pill');
-  pill.type = 'button';
-  pill.onclick = onClick;
-  return pill;
+function wifiMark() {
+  return mark(WIFI_PATH);
+}
+
+function half(className, onClick, title) {
+  const button = el('button', `fork-device-pill ${className}`);
+  button.type = 'button';
+  button.title = title;
+  button.onclick = onClick;
+  return button;
+}
+
+/**
+ * One row of a device column: a pill with two targets. The name half sends files, exactly
+ * the one click it always was; the folder half sends one folder. It is the strip's version
+ * of the main page's "Files to send | Directory to send" twins — a choice made by where the
+ * click lands rather than by a mode set beforehand or a question asked afterwards.
+ */
+function splitPill(name, route, onFiles, onFolder) {
+  const row = el('div', 'fork-split-pill');
+  const files = half('fork-pill-files', onFiles, `Send files to ${name} ${route}`);
+  const folder = half('fork-pill-folder', onFolder, `Send a folder to ${name} ${route}`);
+  folder.appendChild(mark(FOLDER_PATH));
+  row.appendChild(files);
+  row.appendChild(folder);
+  return files;
+}
+
+/** A column is being dragged; the strip must not be redrawn out from under it. */
+let dragging = null;
+
+/**
+ * Press a column and move it, and it is dragged: the desktop's version of Android's
+ * hold-to-move. Reorders on the fly as the pointer crosses another column, so the order is
+ * visible while choosing it, and is saved when the button is let go. Pointer events rather
+ * than HTML5 drag-and-drop, because the window's native drop handler — the one that takes
+ * files dropped onto the app — is exactly the machinery HTML5 drags go through, and the two
+ * were not written to share it.
+ *
+ * A press that never moves is a click and is left alone; one that does is not allowed to
+ * become a click afterwards, or letting go of a dragged pill would open a file picker.
+ */
+function draggable(column, strip) {
+  let pressed = null;
+  let ghost = null;
+  let moved = false;
+
+  column.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || dragging) return;
+    pressed = { x: event.clientX, y: event.clientY, id: event.pointerId };
+    moved = false;
+  });
+
+  column.addEventListener('pointermove', (event) => {
+    if (!pressed || event.pointerId !== pressed.id) return;
+    if (!dragging) {
+      // A few pixels of slack, so a slightly unsteady click stays a click.
+      if (Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 6) return;
+      dragging = column;
+      column.setPointerCapture(event.pointerId);
+      const rect = column.getBoundingClientRect();
+      pressed.dx = pressed.x - rect.left;
+      pressed.dy = pressed.y - rect.top;
+      ghost = column.cloneNode(true);
+      ghost.className = 'fork-device-column fork-drag-ghost';
+      ghost.style.width = `${rect.width}px`;
+      document.body.appendChild(ghost);
+      column.classList.add('fork-dragging');
+    }
+    event.preventDefault();
+    ghost.style.transform =
+      `translate(${event.clientX - pressed.dx}px, ${event.clientY - pressed.dy}px)`;
+    // The ghost lets pointer events through, and the dragged column is found only once it
+    // has already taken the slot the pointer is over — which is what stops the swapping.
+    const under = document.elementFromPoint(event.clientX, event.clientY);
+    const target = under && under.closest('.fork-device-column');
+    if (!target || target === column || target.parentElement !== strip) return;
+    const columns = [...strip.children];
+    const from = columns.indexOf(column);
+    const to = columns.indexOf(target);
+    strip.insertBefore(column, from < to ? target.nextSibling : target);
+    moved = true;
+  });
+
+  const release = async (event) => {
+    if (!pressed || event.pointerId !== pressed.id) return;
+    pressed = null;
+    if (dragging !== column) return;
+    dragging = null;
+    if (ghost) ghost.remove();
+    ghost = null;
+    column.classList.remove('fork-dragging');
+    if (column.hasPointerCapture(event.pointerId)) column.releasePointerCapture(event.pointerId);
+    swallowNextClick();
+    if (moved) {
+      const order = [...strip.children].map((c) => c.dataset.deviceId);
+      try {
+        await core.invoke('paired_reorder', { order });
+      } catch (e) {
+        forkAlert('Could not save the order', String(e));
+      }
+    }
+    // Whatever changed under the drag — a scan finishing, say — was held back; draw it now.
+    try {
+      renderPills(await status());
+    } catch (e) {
+      console.warn('paired status unavailable after a drag', e);
+    }
+  };
+  column.addEventListener('pointerup', release);
+  column.addEventListener('pointercancel', release);
+}
+
+/** The click a browser makes out of the pointer-up that ended a drag. */
+function swallowNextClick() {
+  const swallow = (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+    window.removeEventListener('click', swallow, true);
+  };
+  window.addEventListener('click', swallow, true);
+  // No click comes when the button was released off the pills; then nothing must be eaten.
+  setTimeout(() => window.removeEventListener('click', swallow, true), 0);
 }
 
 /**
  * The paired devices as one click each, on the main page — the desktop end of the Android
  * strip, and the same shape: a column per device, the network route on top and the hotspot
- * route underneath. Drawn from the store alone, so it is there the moment the window is and
- * does not wait for a scan; a device that turns out not to be on the network says so when
- * it is clicked, as the panel's row does.
+ * route underneath, each a split pill of files | folder. Drawn from the store alone, so it
+ * is there the moment the window is and does not wait for a scan; a device that turns out
+ * not to be on the network says so when it is clicked, as the panel's row does. Columns are
+ * dragged to reorder, and the store's order is the order.
  */
 function renderPills(state) {
   const strip = document.getElementById('devicePills');
-  if (!strip) return;
+  if (!strip || dragging) return;
   const peers = state.paired ? state.peers : [];
   strip.hidden = peers.length === 0;
   const columns = peers.map((peer) => {
     const name = peer.name || `(unnamed · ${shortId(peer.device_id)})`;
     const column = el('div', 'fork-device-column');
-    const network = devicePill(() => sendTo(peer));
+    column.dataset.deviceId = peer.device_id;
+    const network = splitPill(
+      name,
+      'over this network',
+      () => sendTo(peer, false),
+      () => sendTo(peer, true),
+    );
     network.appendChild(wifiMark());
     network.appendChild(document.createTextNode(name));
-    const hotspot = devicePill(() => sendOverHotspot(peer));
+    const hotspot = splitPill(
+      name,
+      'over a hotspot',
+      () => sendOverHotspot(peer, false),
+      () => sendOverHotspot(peer, true),
+    );
     hotspot.appendChild(document.createTextNode(`⚡ ${name}`));
-    column.appendChild(network);
-    column.appendChild(hotspot);
+    column.appendChild(network.parentElement);
+    column.appendChild(hotspot.parentElement);
+    draggable(column, strip);
     return column;
   });
   strip.replaceChildren(...columns);

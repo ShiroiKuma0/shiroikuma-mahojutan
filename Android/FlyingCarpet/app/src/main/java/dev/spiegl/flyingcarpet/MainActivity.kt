@@ -87,6 +87,12 @@ class MainActivity : AppCompatActivity() {
     // picker returning.
     private var hotspotPeerForPicker: PairedPeer? = null
 
+    // Fork: the folder half of a device pill — which device the folder picker is choosing a
+    // folder to *send* for, by the network route and by the hotspot route. Claimed and
+    // cleared by the picker's callback exactly as the two above are.
+    private var folderPickerSendPeer: PairedPeer? = null
+    private var folderPickerHotspotPeer: PairedPeer? = null
+
     // Fork: which device the folder picker is choosing a receive directory for.
     private var folderPickerForPeer: PairedPeer? = null
 
@@ -540,37 +546,33 @@ class MainActivity : AppCompatActivity() {
 
     private fun getFolderPicker(): ActivityResultLauncher<Uri?> {
         return registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+            // Fork: claimed up front, as the file picker claims its peers, so a cancelled
+            // picker cannot leave a device armed for the next, unrelated, folder choice.
+            val peer = folderPickerSendPeer
+            folderPickerSendPeer = null
+            val hotspotPeer = folderPickerHotspotPeer
+            folderPickerHotspotPeer = null
             uri?.let {
-                if (viewModel.mode == Mode.Sending) {
-                    viewModel.files = mutableListOf()
-                    viewModel.fileStreams = mutableListOf()
-                    viewModel.filePaths = mutableListOf()
-                    val dir = DocumentFile.fromTreeUri(applicationContext, it) ?: run {
-                        viewModel.outputText("Could not get DocumentFile from selected directory.")
-                        viewModel.cleanUpTransfer()
-                        return@registerForActivityResult
-                    }
-                    // seed with the folder's own name so the receiving device recreates the
-                    // folder and puts the files inside it
-                    val filesAndPaths = getFilesInDir(dir, dir.name ?: "")
-                    for (fileAndPath in filesAndPaths) {
-                        val file = fileAndPath.first
-                        val path = fileAndPath.second
-                        viewModel.files.add(file)
-                        viewModel.filePaths.add(path)
-                        val stream = applicationContext.contentResolver.openInputStream(file.uri)
-                        if (stream != null) {
-                            viewModel.fileStreams.add(stream)
-                        } else {
-                            viewModel.outputText("Could not open file stream")
-                            viewModel.cleanUpTransfer()
-                            return@registerForActivityResult
-                        }
-                    }
-                    viewModel.sendDir = it
+                if (peer != null || hotspotPeer != null || viewModel.mode == Mode.Sending) {
+                    if (!loadFolderToSend(it)) return@registerForActivityResult
                 } else {
                     viewModel.receiveDir = it
                     rememberReceiveDir(it)
+                }
+                // Fork: the folder half of a device pill — the folder goes straight to that
+                // device, by whichever route the pill was on. Same two branches, in the same
+                // order, as the file picker's.
+                if (hotspotPeer != null) {
+                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                    toggleUI(false)
+                    pairedController.overHotspot(hotspotPeer, sending = true, receiveDir = null) { }
+                    return@registerForActivityResult
+                }
+                if (peer != null) {
+                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                    toggleUI(false)
+                    pairedController.sendTo(peer) { }
+                    return@registerForActivityResult
                 }
                 // If using bluetooth, start the process of exchanging OS and wifi information --
                 // through the shared function, not a copy of its body. This block used to repeat
@@ -587,6 +589,47 @@ class MainActivity : AppCompatActivity() {
                 return@registerForActivityResult
             }
         }
+    }
+
+    /**
+     * Loads a picked folder as the selection to send: every file under it, each with its
+     * path relative to the folder's parent. False when it could not be, with the reason
+     * already in the log and the transfer already cleaned up. The classic send-folder button
+     * and the folder half of a device pill share this; only what happens next differs.
+     */
+    private fun loadFolderToSend(uri: Uri): Boolean {
+        viewModel.files = mutableListOf()
+        viewModel.fileStreams = mutableListOf()
+        viewModel.filePaths = mutableListOf()
+        val dir = DocumentFile.fromTreeUri(applicationContext, uri) ?: run {
+            viewModel.outputText("Could not get DocumentFile from selected directory.")
+            viewModel.cleanUpTransfer()
+            return false
+        }
+        // seed with the folder's own name so the receiving device recreates the
+        // folder and puts the files inside it
+        val filesAndPaths = getFilesInDir(dir, dir.name ?: "")
+        for (fileAndPath in filesAndPaths) {
+            val file = fileAndPath.first
+            val path = fileAndPath.second
+            viewModel.files.add(file)
+            viewModel.filePaths.add(path)
+            val stream = applicationContext.contentResolver.openInputStream(file.uri)
+            if (stream != null) {
+                viewModel.fileStreams.add(stream)
+            } else {
+                viewModel.outputText("Could not open file stream")
+                viewModel.cleanUpTransfer()
+                return false
+            }
+        }
+        if (viewModel.files.isEmpty()) {
+            viewModel.outputText("That folder is empty.")
+            viewModel.cleanUpTransfer()
+            return false
+        }
+        viewModel.sendDir = uri
+        return true
     }
 
     private fun getRequestPermissionLauncher(): ActivityResultLauncher<String> {
@@ -808,7 +851,8 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Fork: the paired devices as two rows of pills under the settings pill — the top pill of
-     * each column sends over this network, the bottom one over a hotspot.
+     * each column sends over this network, the bottom one over a hotspot, and each is split
+     * into a files half and a folder half.
      *
      * One HorizontalScrollView holding a column per device rather than two scroll views: the
      * two rows then line up by construction and scroll together, which two independent scroll
@@ -822,7 +866,6 @@ class MainActivity : AppCompatActivity() {
         scroll.isVisible = peers.isNotEmpty()
         if (peers.isEmpty()) return
 
-        val fresh = System.currentTimeMillis() / 1000
         for (peer in peers) {
             val column = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -834,31 +877,102 @@ class MainActivity : AppCompatActivity() {
                 tag = peer.deviceId
             }
             val name = peer.displayName
-            val here = fresh - peer.lastSeen < 60 && peer.lastIp != null
             column.addView(
-                ForkDialog.pill(this, name) {
-                    filePickerForPeer = peer
-                    filePicker.launch(arrayOf("*/*"))
-                }.also {
-                    // The Wi-Fi mark says which route this pill takes; its weight says whether
-                    // the device has actually been heard from, which the dot used to carry.
-                    ForkDialog.icon(it, R.drawable.ic_wifi)
-                    stretch(it)
-                    holdToMoveOrEdit(it, column, rows, peer)
-                }
+                splitPill(
+                    ForkDialog.pill(this, name, ForkDialog.Corners.START) {
+                        pickForPeer(peer, folder = false)
+                    }.also {
+                        // The Wi-Fi mark says which route this pill takes.
+                        ForkDialog.icon(it, R.drawable.ic_wifi)
+                    },
+                    folderHalf("Send a folder to $name over this network") {
+                        pickForPeer(peer, folder = true)
+                    },
+                    column, rows, peer,
+                )
             )
             column.addView(
-                ForkDialog.pill(this, "⚡ $name") {
-                    pairedOverHotspot(peer, sending = true)
-                }.also {
-                    stretch(it)
+                splitPill(
+                    ForkDialog.pill(this, "⚡ $name", ForkDialog.Corners.START) {
+                        pairedOverHotspot(peer, sending = true)
+                    },
+                    folderHalf("Send a folder to $name over a hotspot") {
+                        pairedOverHotspot(peer, sending = true, folder = true)
+                    },
+                    column, rows, peer,
+                ).also {
                     (it.layoutParams as LinearLayout.LayoutParams).topMargin =
                         ForkDialog.dp(this, 6)
-                    holdToMoveOrEdit(it, column, rows, peer)
                 }
             )
             rows.addView(column)
             column.setOnDragListener(columnDragListener(rows))
+        }
+    }
+
+    /**
+     * One row of a device column: a pill with two targets. The name half sends files, the
+     * one tap it always was; the folder half sends one folder. It is the strip's version of
+     * the main page's "Files to send | Directory to send" twins — a choice made by where the
+     * tap lands rather than by a mode set beforehand or a question asked afterwards.
+     *
+     * Two buttons under one outline: the halves round only their outer ends, and the folder
+     * half is pulled back over the name half's stroke by exactly that stroke, so the two
+     * outlines meet as one hairline rather than doubling up.
+     */
+    private fun splitPill(
+        files: Button,
+        folder: Button,
+        column: View,
+        rows: LinearLayout,
+        peer: PairedPeer,
+    ): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        files.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        folder.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.MATCH_PARENT,
+        ).apply { marginStart = -ForkDialog.strokePx(this@MainActivity) }
+        row.addView(files)
+        row.addView(folder)
+        // Held anywhere on the row, the column moves or the menu opens — both halves alike.
+        holdToMoveOrEdit(files, column, rows, peer)
+        holdToMoveOrEdit(folder, column, rows, peer)
+        return row
+    }
+
+    /** The folder half of a split pill: the glyph alone, with the words on a long press. */
+    private fun folderHalf(what: String, onClick: () -> Unit): Button =
+        ForkDialog.pill(this, "", ForkDialog.Corners.END, onClick).apply {
+            ForkDialog.icon(this, R.drawable.ic_folder, sizeDp = 18)
+            compoundDrawablePadding = 0
+            setPadding(
+                ForkDialog.dp(this@MainActivity, 14),
+                ForkDialog.dp(this@MainActivity, 8),
+                ForkDialog.dp(this@MainActivity, 14),
+                ForkDialog.dp(this@MainActivity, 8),
+            )
+            contentDescription = what
+            tooltipText = what
+        }
+
+    /**
+     * The network route's pickers: files, or one folder — then straight to the device, by
+     * way of the picker's callback finding the peer armed here.
+     */
+    private fun pickForPeer(peer: PairedPeer, folder: Boolean) {
+        if (folder) {
+            folderPickerSendPeer = peer
+            folderPicker.launch(Uri.EMPTY)
+        } else {
+            filePickerForPeer = peer
+            filePicker.launch(arrayOf("*/*"))
         }
     }
 
@@ -955,24 +1069,22 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Both pills in a column take the width of the wider one, so the rows stay aligned. */
-    private fun stretch(view: View) {
-        view.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        )
-    }
-
     /**
-     * Fork: the hotspot route to a paired device. Sending picks files first; receiving uses
-     * the directory the last receive used, and asks for one only if there isn't one.
+     * Fork: the hotspot route to a paired device. Sending picks files — or, from the folder
+     * half of the pill, one folder — first; receiving uses the directory the last receive
+     * used, and asks for one only if there isn't one.
      */
-    private fun pairedOverHotspot(peer: PairedPeer, sending: Boolean) {
+    private fun pairedOverHotspot(peer: PairedPeer, sending: Boolean, folder: Boolean = false) {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
         if (sending) {
-            hotspotPeerForPicker = peer
             toggleUI(false)
-            filePicker.launch(arrayOf("*/*"))
+            if (folder) {
+                folderPickerHotspotPeer = peer
+                folderPicker.launch(Uri.EMPTY)
+            } else {
+                hotspotPeerForPicker = peer
+                filePicker.launch(arrayOf("*/*"))
+            }
             return
         }
         val dir = lastReceiveDir()

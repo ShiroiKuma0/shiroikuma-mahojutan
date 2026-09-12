@@ -309,6 +309,17 @@ pub fn paired_forget(
     state.update(&app, |store| store.forget_peer(&device_id))
 }
 
+/// Saves the order the strip on the main page was dragged into. The store's array order
+/// is the order everything lists peers in, so this is all a reorder amounts to.
+#[tauri::command]
+pub fn paired_reorder(
+    app: AppHandle,
+    state: State<PairedState>,
+    order: Vec<String>,
+) -> Result<(), String> {
+    state.update(&app, |store| store.reorder(&order))
+}
+
 #[tauri::command]
 pub fn paired_set_auto_accept(
     app: AppHandle,
