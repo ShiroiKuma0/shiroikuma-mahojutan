@@ -35,19 +35,67 @@ body {
 .fork-device-column {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  /* Both rows take the width of the wider one, so the folder halves line up. */
+  align-items: stretch;
   gap: 6px;
+  user-select: none;
+  touch-action: none;
+}
+/* A pill with two targets: the name half sends files, the folder half sends a folder. One
+   outline round both, a hairline between — the same 1.5 px as the outline. */
+.fork-split-pill {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 999px;
+  border: 1.5px solid #ffff00;
+  background-color: #000000;
+  overflow: hidden;
 }
 .fork-device-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  border: none;
+  background-color: transparent;
+  color: #ffff00;
+  padding: 7px 16px 7px 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.fork-device-pill:hover {
+  background-color: rgba(255, 255, 0, 0.12);
+}
+.fork-pill-files {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.fork-pill-folder {
+  border-left: 1.5px solid #ffff00;
+  padding: 7px 14px 7px 12px;
 }
 .fork-device-pill svg {
   width: 16px;
   height: 16px;
   fill: currentColor;
+}
+.fork-pill-folder svg {
+  width: 18px;
+  height: 18px;
+}
+/* While a column is dragged: the column itself fades in the slot it is being moved to, and a
+   copy of it rides under the pointer. The copy is see-through to hit-testing, so the column
+   under the pointer is found through it. */
+.fork-device-column.fork-dragging {
+  opacity: 0.4;
+}
+.fork-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.85;
 }
 
 /* ── Overlays ── */

@@ -336,6 +336,30 @@ impl PairingStore {
         self.peers.retain(|p| p.device_id != device_id);
     }
 
+    /// Rewrites the stored order. The array's order *is* the order — everything that lists
+    /// peers reads it back as it was written — so reordering is a rewrite and needs no
+    /// index field that could drift out of step with the list. Byte-for-byte the rule of
+    /// `Pairing.reorder` on Android: ids that are not stored are ignored, and stored peers
+    /// the caller left out keep their places at the end, so an order built from a stale
+    /// view of the list can never silently drop a device.
+    pub fn reorder(&mut self, device_ids: &[String]) {
+        let mut ordered: Vec<PairedPeer> = Vec::with_capacity(self.peers.len());
+        for id in device_ids {
+            if ordered.iter().any(|p| &p.device_id == id) {
+                continue;
+            }
+            if let Some(peer) = self.find_peer(id) {
+                ordered.push(peer.clone());
+            }
+        }
+        for peer in &self.peers {
+            if !ordered.iter().any(|p| p.device_id == peer.device_id) {
+                ordered.push(peer.clone());
+            }
+        }
+        self.peers = ordered;
+    }
+
     pub fn find_peer(&self, device_id: &str) -> Option<&PairedPeer> {
         self.peers.iter().find(|p| p.device_id == device_id)
     }
@@ -703,6 +727,26 @@ mod tests {
         assert_eq!(code.device_id, store.device_id_bytes());
         assert_eq!(base32_encode(&code.key), store.pending[0].key);
         assert_eq!(code.name, None);
+    }
+
+    #[test]
+    fn reorder_keeps_every_peer_and_ignores_strangers() {
+        let mut store = PairingStore::fresh("desk".to_string());
+        for id in ["A", "B", "C", "D"] {
+            store.upsert_peer(PairedPeer {
+                device_id: id.to_string(),
+                key: String::new(),
+                name: id.to_string(),
+                os: String::new(),
+                last_ip: None,
+                last_seen: 0,
+                auto_accept: true,
+            });
+        }
+        // C dragged to the front, B named twice, a device that is not stored, D left out.
+        store.reorder(&["C".to_string(), "B".to_string(), "X".to_string(), "B".to_string(), "A".to_string()]);
+        let order: Vec<&str> = store.peers.iter().map(|p| p.device_id.as_str()).collect();
+        assert_eq!(order, ["C", "B", "A", "D"]);
     }
 
     #[test]
