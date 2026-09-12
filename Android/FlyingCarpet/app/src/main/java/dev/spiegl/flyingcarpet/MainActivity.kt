@@ -40,7 +40,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isInvisible
 import androidx.core.view.isVisible
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.ResultPoint
@@ -51,6 +53,7 @@ import com.journeyapps.barcodescanner.DefaultDecoderFactory
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import dev.spiegl.flyingcarpet.R.id
+import kotlinx.coroutines.launch
 import dev.spiegl.flyingcarpet.R.layout
 
 // Where the Bluetooth switch state is kept between runs.
@@ -107,6 +110,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var connectionGroup: MaterialButtonToggleGroup
     private lateinit var bluetoothSwitch: SwitchCompat
     private lateinit var bluetoothIcon: ImageView
+    // Fork: "Stay reachable" on the main page. Same setting as the UI page's row; the switch
+    // shows the promise (pairing.stayReachable), and onResume() is what keeps the promise —
+    // it restarts the service if this phone has killed it.
+    private lateinit var reachableSwitch: SwitchCompat
+    private var settingReachableSwitch = false
+    private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private var bluetoothAvailable = false
     // true when Bluetooth initialization failed only because runtime permissions are
     // missing — recoverable by granting them, unlike missing hardware support. keeps the
@@ -697,17 +706,41 @@ class MainActivity : AppCompatActivity() {
             if (parsed == null) {
                 ForkDialog.alert(
                     this,
-                    "That is not a pairing key",
-                    "Scan the code shown by Devices \u2192 Pair on the other device.",
+                    "That is not a pairing code",
+                    if (isOldPairUri(contents)) {
+                        "That code is from an older version of this app. Update the app on " +
+                            "the other device and show the code again."
+                    } else {
+                        "Scan the code shown by Devices \u2192 Pair on the other device."
+                    },
                 )
                 return@registerForActivityResult
             }
-            pairedController.pairing.joinGroup(parsed.first)
-            pairedController.start()
-            viewModel.outputText(
-                "Paired. Looking for " + (parsed.second ?: "the other device") + "..."
-            )
+            pairFromCode(parsed)
             openDevicesSheet()
+        }
+    }
+
+    /**
+     * Fork: takes a scanned or typed code — the other device becomes a peer here at once —
+     * then introduces this device to it, which is what makes it a peer over there too. The
+     * introduction is a scan under the new key, so it happens now rather than at some later
+     * opening of the list.
+     */
+    fun pairFromCode(code: PairCode) {
+        if (code.deviceIdText == pairedController.pairing.deviceId) {
+            ForkDialog.alert(this, "That is this phone's own code", "Show it on the other device instead.")
+            return
+        }
+        pairedController.pairing.addPeerFromCode(code)
+        // The listener must know the new key before the other side answers.
+        if (!PresenceService.running) pairedController.start()
+        viewModel.outputText(
+            "Paired with " + (code.name ?: "the other device") + ". Looking for it..."
+        )
+        lifecycleScope.launch {
+            pairedController.scan()
+            refreshDevicePills()
         }
     }
 
@@ -1032,6 +1065,32 @@ class MainActivity : AppCompatActivity() {
         pairedController.receiveDirProvider = { lastReceiveDir() }
         peerFolderPicker = getPeerFolderPicker()
         findViewById<Button>(id.devicesButton)?.setOnClickListener { openDevicesSheet() }
+        // Fork: the "Stay reachable" switch. A foreground service whose notification cannot
+        // be shown is a service Android will not let run, so on 13+ the permission comes
+        // first; the switch is put back to off until it is granted.
+        notificationPermissionLauncher =
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+                if (granted) {
+                    requestReachable()
+                } else {
+                    refreshReachableSwitch()
+                    AlertDialog.Builder(this)
+                        .setTitle("Cannot stay reachable")
+                        .setMessage(
+                            "Android only lets an app keep running in the background while " +
+                                "it shows a notification, and notifications were declined. " +
+                                "Allow them for this app in Settings, then try again."
+                        )
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
+            }
+        reachableSwitch = findViewById(id.reachableSwitch)
+        reachableSwitch.setOnCheckedChangeListener { _, checked ->
+            if (settingReachableSwitch) return@setOnCheckedChangeListener
+            if (checked) requestReachable() else stopReachable()
+        }
+        refreshReachableSwitch()
         // The UI page's "Devices" row comes back here rather than growing a second, lesser
         // copy of the sheet on that screen.
         if (intent?.action == ACTION_OPEN_DEVICES) {
@@ -1237,9 +1296,85 @@ class MainActivity : AppCompatActivity() {
         // reachable" service already is. Both binding would not fail: the listener sets
         // SO_REUSEADDR, so the second bind succeeds and the two silently split the incoming
         // connections between them, which looks like "it works most of the time".
-        if (this::pairedController.isInitialized && !PresenceService.running) {
-            pairedController.start()
+        //
+        // With the switch on, the service is the one that listens, here as everywhere; if it
+        // is not running the phone has killed it, and coming back to the app is the moment to
+        // start it again. It is not started behind the user's back: the notification's Stop
+        // and the switch both clear the setting, so a service that is off stays off.
+        if (this::pairedController.isInitialized) {
+            refreshReachableSwitch()
+            if (pairedController.pairing.stayReachable) {
+                if (!PresenceService.running) PresenceService.start(this)
+            } else if (!PresenceService.running) {
+                pairedController.start()
+            }
         }
+    }
+
+    // ── Fork: "Stay reachable" on the main page ────────────────────────────────────────────
+
+    /** The switch and the line under it, from the stored setting. */
+    private fun refreshReachableSwitch() {
+        if (!this::reachableSwitch.isInitialized) return
+        val on = pairedController.pairing.stayReachable
+        settingReachableSwitch = true
+        reachableSwitch.isChecked = on
+        settingReachableSwitch = false
+        // Portrait only, like bluetoothHint: landscape has no room under the switch.
+        val hint = findViewById<TextView>(id.reachableHint) ?: return
+        hint.text = getString(if (on) R.string.reachableHintOn else R.string.reachableHintOff)
+        // Red while it is on, like the UI page's row: this is the one switch with a standing
+        // cost, and the colour says so every time the screen is looked at.
+        hint.setTextColor(
+            if (on) Defaults.RED else (settings.colorOrNull("bluetoothHint.color") ?: Defaults.YELLOW)
+        )
+    }
+
+    /**
+     * Turning the switch on. The notification permission first, then a group to be reachable
+     * for — a promise to nobody is not worth a notification — and then the service takes over
+     * the listening from this Activity, which must let go first or the two split the port.
+     */
+    private fun requestReachable() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        if (!pairedController.isPaired) {
+            refreshReachableSwitch()
+            AlertDialog.Builder(this)
+                .setTitle("Nothing to be reachable for")
+                .setMessage("Pair this phone with another device first; there is no one to receive from yet.")
+                .setPositiveButton("Pair…") { _, _ -> openDevicesSheet() }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+        pairedController.pairing.stayReachable = true
+        pairedController.stop()
+        PresenceService.start(this)
+        refreshReachableSwitch()
+    }
+
+    /**
+     * Turning it off. The service lets go of the port on its own thread a moment after
+     * stopService() returns, so this Activity's own listener is started a beat later — and
+     * only if the screen is still up and nothing turned the switch back on meanwhile.
+     */
+    private fun stopReachable() {
+        pairedController.pairing.stayReachable = false
+        PresenceService.stop(this)
+        refreshReachableSwitch()
+        window.decorView.postDelayed({
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                !pairedController.pairing.stayReachable && !PresenceService.running
+            ) {
+                pairedController.start()
+            }
+        }, 400)
     }
 
     override fun onPause() {

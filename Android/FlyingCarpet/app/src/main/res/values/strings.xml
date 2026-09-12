@@ -33,6 +33,12 @@
     <string name="bluetoothHintSending">No Bluetooth: when the transfer starts, scan the QR code shown on the receiving device, or type the password under it.</string>
     <string name="bluetoothHintReceiving">No Bluetooth: when the transfer starts, a QR code and password appear here for the sending device to scan or type.</string>
     <string name="bluetoothHintHotspot">No Bluetooth: one device shows a QR code and password when the transfer starts, and the other scans or types it.</string>
+    <!-- Fork: the "Stay reachable" switch on the main page. The most consequential switch in the
+         app — it is what lets a paired device send to this one without it being opened — so it
+         sits beside "Use Bluetooth" rather than three taps deep in the UI page. -->
+    <string name="reachable">Stay reachable</string>
+    <string name="reachableHintOn">On — paired devices can send to this phone without it being opened. A notification stays up and the Wi-Fi radio keeps listening, which costs battery.</string>
+    <string name="reachableHintOff">Off — paired devices can send to this phone only while the app is open.</string>
     <string name="uiSettingsTitle">白い熊 魔法絨毯 UI</string>
     <string name="uiSettingsLink">白い熊 魔法絨毯 UI</string>
     <!-- Fork: the send button's label while a shared selection is armed. It normally means

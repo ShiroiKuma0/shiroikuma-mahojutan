@@ -360,7 +360,7 @@ const DEFAULT_TEXTS = {
   'title.text': '白い熊 魔法絨毯',
   'about.text': 'About',
   'uiButton.text': '白い熊 魔法絨毯 UI',
-  'devicesButton.text': 'Devices',
+  'devicesButton.text': 'Devices ＋',
   'bluetooth.text': 'Use Bluetooth',
   'modeInstruction.text': 'Select File Mode',
   'connectionInstruction.text': 'Select Connection Mode',

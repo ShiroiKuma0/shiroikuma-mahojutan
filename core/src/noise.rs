@@ -66,8 +66,8 @@ pub fn derive_discovery_key(psk: &[u8; 32]) -> [u8; 32] {
 // ---------------------------------------------------------------------------------------
 // Fork: paired devices.
 //
-// A paired group shares one 32-byte random group key instead of a per-transfer password.
-// Everything below is one HMAC-SHA256 of that key under a distinct label, exactly the
+// Every pair of paired devices shares one 32-byte random key instead of a per-transfer
+// password. Everything below is one HMAC-SHA256 of that key under a distinct label, exactly the
 // domain-separation shape derive_discovery_key already uses. There is no PBKDF2 anywhere
 // on this path and there must not be: PBKDF2 exists to slow a dictionary attack on a
 // low-entropy password, and a 256-bit random key has no dictionary. Stretching it would
@@ -82,14 +82,14 @@ pub const PAIRED_HOTSPOT_INFO: &[u8] = b"mahojutan hotspot v1";
 
 /// Authenticates presence announcements (see presence.rs). Separate from the Noise PSK so
 /// that a captured announcement reveals nothing usable against the transport.
-pub fn derive_presence_key(group_key: &[u8; 32]) -> [u8; 32] {
-    crate::utils::compute_hmac(group_key, PAIRED_PRESENCE_INFO)
+pub fn derive_presence_key(pair_key: &[u8; 32]) -> [u8; 32] {
+    crate::utils::compute_hmac(pair_key, PAIRED_PRESENCE_INFO)
 }
 
 /// The Noise pre-shared key for a transfer between paired devices. Completing the
 /// handshake with it *is* the authentication: only a group member can.
-pub fn derive_paired_psk(group_key: &[u8; 32]) -> [u8; 32] {
-    crate::utils::compute_hmac(group_key, PAIRED_PSK_INFO)
+pub fn derive_paired_psk(pair_key: &[u8; 32]) -> [u8; 32] {
+    crate::utils::compute_hmac(pair_key, PAIRED_PSK_INFO)
 }
 
 /// The Wi-Fi credential for a hotspot raised between paired devices, so neither side has
@@ -104,12 +104,12 @@ pub fn derive_paired_psk(group_key: &[u8; 32]) -> [u8; 32] {
 /// almost always yields the 10 symbols needed; the counter suffix exists for the rounds
 /// that don't, and makes the function total rather than fallible.
 ///
-/// This credential is *stable* for the life of the group key, unlike the single-use
+/// This credential is *stable* for the life of the pair key, unlike the single-use
 /// generated password. That is a deliberate trade — it is the only way the joiner can know
 /// the credential without being told — and it is safe because the AP password protects
 /// only radio access here, never the payload: the transfer itself is still behind the
-/// Noise handshake keyed by `derive_paired_psk`. Rotating it means re-keying the group.
-pub fn derive_hotspot_password(group_key: &[u8; 32]) -> String {
+/// Noise handshake keyed by `derive_paired_psk`. Rotating it means pairing the two again.
+pub fn derive_hotspot_password(pair_key: &[u8; 32]) -> String {
     const ALPHABET: &[u8] = b"23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
     const PASSWORD_LENGTH: usize = 10;
     // 4 * 57 = 228. Bytes >= this are rejected so the modulo below stays uniform.
@@ -121,7 +121,7 @@ pub fn derive_hotspot_password(group_key: &[u8; 32]) -> String {
         let mut labelled = Vec::with_capacity(PAIRED_HOTSPOT_INFO.len() + 1);
         labelled.extend_from_slice(PAIRED_HOTSPOT_INFO);
         labelled.push(counter);
-        let block = crate::utils::compute_hmac(group_key, &labelled);
+        let block = crate::utils::compute_hmac(pair_key, &labelled);
         for byte in block {
             if byte >= REJECT_AT {
                 continue;

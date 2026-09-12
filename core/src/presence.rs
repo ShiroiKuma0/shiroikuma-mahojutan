@@ -27,7 +27,7 @@
 // below is the vector both sides are tested against.
 
 use crate::error::{fc_error, FCError};
-use crate::pairing::{clamp_name, MAX_NAME_BYTES};
+use crate::pairing::{clamp_name, KeyRing, PairKey, MAX_NAME_BYTES};
 use crate::utils::{compute_hmac, verify_hmac};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
@@ -45,17 +45,20 @@ use tokio::net::UdpSocket;
 pub const PRESENCE_PORT: u16 = 3291;
 pub const PRESENCE_MULTICAST_ADDR: &str = "239.255.73.68";
 pub const PRESENCE_MAGIC: [u8; 4] = *b"FCPR";
-pub const PRESENCE_VERSION: u16 = 1;
+/// Version 2 adds the key id after the device id, which is what lets a device holding one
+/// key per peer pick the right one without trying them all. Version 1 was the group model
+/// and is not accepted: two devices on different models cannot pair anyway.
+pub const PRESENCE_VERSION: u16 = 2;
 
-/// Everything before the name: magic(4) version(2) flags(2) os(1) device_id(16) ip(4)
-/// port(2) timestamp(8) name_len(1).
-pub const PRESENCE_HEADER_SIZE: usize = 40;
+/// Everything before the name: magic(4) version(2) flags(2) os(1) device_id(16) key_id(4)
+/// ip(4) port(2) timestamp(8) name_len(1).
+pub const PRESENCE_HEADER_SIZE: usize = 44;
 pub const PRESENCE_HMAC_SIZE: usize = 32;
 pub const PRESENCE_MIN_SIZE: usize = PRESENCE_HEADER_SIZE + PRESENCE_HMAC_SIZE;
 pub const PRESENCE_MAX_SIZE: usize = PRESENCE_HEADER_SIZE + MAX_NAME_BYTES + PRESENCE_HMAC_SIZE;
 
 const _: () = assert!(
-    4 + 2 + 2 + 1 + 16 + 4 + 2 + 8 + 1 == PRESENCE_HEADER_SIZE,
+    4 + 2 + 2 + 1 + 16 + 4 + 4 + 2 + 8 + 1 == PRESENCE_HEADER_SIZE,
     "PRESENCE_HEADER_SIZE does not match the sum of the fixed field sizes"
 );
 
@@ -120,7 +123,7 @@ pub struct LocalIdentity {
     pub unattended: bool,
 }
 
-/// A device we have just heard from.
+/// A device we have just heard from, and the key it proved it holds.
 #[derive(Clone, Debug)]
 pub struct DiscoveredPeer {
     pub device_id: [u8; 16],
@@ -129,6 +132,9 @@ pub struct DiscoveredPeer {
     pub ip: Ipv4Addr,
     pub port: u16,
     pub unattended: bool,
+    /// The pair key the exchange was authenticated under. For a code that was pending
+    /// this is the moment it becomes that device's key.
+    pub key: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
@@ -136,6 +142,7 @@ pub struct PresenceAnnouncement {
     pub flags: u16,
     pub os: PeerOs,
     pub device_id: [u8; 16],
+    pub key_id: [u8; 4],
     pub ip_address: [u8; 4],
     pub port: u16,
     pub timestamp: u64,
@@ -143,7 +150,7 @@ pub struct PresenceAnnouncement {
 }
 
 impl PresenceAnnouncement {
-    pub fn new(identity: &LocalIdentity, ip: Ipv4Addr, probe: bool) -> Self {
+    pub fn new(identity: &LocalIdentity, key: &PairKey, ip: Ipv4Addr, probe: bool) -> Self {
         let mut flags = 0u16;
         if probe {
             flags |= FLAG_PROBE;
@@ -155,11 +162,41 @@ impl PresenceAnnouncement {
             flags,
             os: identity.os,
             device_id: identity.device_id,
+            key_id: key.key_id,
             ip_address: ip.octets(),
             port: PRESENCE_PORT,
             timestamp: now_secs(),
             name: clamp_name(&identity.name),
         }
+    }
+
+    /// Who sent this and under which key, read off the header before anything is checked.
+    /// Only ever used to *choose* the key to verify with; nothing is trusted until
+    /// `deserialize` has checked the HMAC under it.
+    pub fn peek(buf: &[u8]) -> Option<([u8; 16], [u8; 4])> {
+        if buf.len() < PRESENCE_MIN_SIZE || buf[0..4] != PRESENCE_MAGIC {
+            return None;
+        }
+        if u16::from_be_bytes([buf[4], buf[5]]) != PRESENCE_VERSION {
+            return None;
+        }
+        let mut device_id = [0u8; 16];
+        device_id.copy_from_slice(&buf[9..25]);
+        let mut key_id = [0u8; 4];
+        key_id.copy_from_slice(&buf[25..29]);
+        Some((device_id, key_id))
+    }
+
+    /// `deserialize` against whichever of the ring's keys could have signed this. Returns
+    /// the announcement and the key that verified it.
+    pub fn open(buf: &[u8], ring: &KeyRing) -> Option<(PresenceAnnouncement, PairKey)> {
+        let (device_id, key_id) = Self::peek(buf)?;
+        for candidate in ring.candidates(&device_id, &key_id) {
+            if let Some(announcement) = Self::deserialize(buf, &candidate.key) {
+                return Some((announcement, candidate.clone()));
+            }
+        }
+        None
     }
 
     pub fn is_probe(&self) -> bool {
@@ -185,6 +222,7 @@ impl PresenceAnnouncement {
         buf.extend_from_slice(&self.flags.to_be_bytes());
         buf.push(self.os as u8);
         buf.extend_from_slice(&self.device_id);
+        buf.extend_from_slice(&self.key_id);
         buf.extend_from_slice(&self.ip_address);
         buf.extend_from_slice(&self.port.to_be_bytes());
         buf.extend_from_slice(&self.timestamp.to_be_bytes());
@@ -230,16 +268,19 @@ impl PresenceAnnouncement {
         let os = PeerOs::from_byte(buf[8])?;
         let mut device_id = [0u8; 16];
         device_id.copy_from_slice(&buf[9..25]);
+        let mut key_id = [0u8; 4];
+        key_id.copy_from_slice(&buf[25..29]);
         let mut ip_address = [0u8; 4];
-        ip_address.copy_from_slice(&buf[25..29]);
-        let port = u16::from_be_bytes([buf[29], buf[30]]);
-        let timestamp = u64::from_be_bytes(buf[31..39].try_into().ok()?);
+        ip_address.copy_from_slice(&buf[29..33]);
+        let port = u16::from_be_bytes([buf[33], buf[34]]);
+        let timestamp = u64::from_be_bytes(buf[35..43].try_into().ok()?);
         let name = String::from_utf8(body[PRESENCE_HEADER_SIZE..].to_vec()).ok()?;
 
         Some(PresenceAnnouncement {
             flags,
             os,
             device_id,
+            key_id,
             ip_address,
             port,
             timestamp,
@@ -354,24 +395,29 @@ fn bind_ephemeral_socket() -> Result<UdpSocket, FCError> {
         .map_err(|e| FCError { message: format!("Could not adopt the probe socket: {}", e) })
 }
 
-/// Sends one announcement everywhere it might be heard: multicast, the subnet broadcast
+/// Sends the announcements everywhere they might be heard: multicast, the subnet broadcast
 /// address, and — when the subnet is small enough and `sweep` is set — every host on it.
+/// One payload per key, because a peer can only read the one signed under its own key;
+/// the payloads go out together per address so a sweep costs one pass, not one per key.
 async fn shout(
     socket: &UdpSocket,
-    payload: &[u8],
+    payloads: &[Vec<u8>],
     local_ip: Ipv4Addr,
     prefix_len: u8,
     sweep: bool,
 ) {
+    async fn send_all(socket: &UdpSocket, payloads: &[Vec<u8>], target: Ipv4Addr) {
+        for payload in payloads {
+            let _ = socket
+                .send_to(payload, SocketAddr::V4(SocketAddrV4::new(target, PRESENCE_PORT)))
+                .await;
+        }
+    }
     if let Ok(group) = PRESENCE_MULTICAST_ADDR.parse::<Ipv4Addr>() {
-        let _ = socket
-            .send_to(payload, SocketAddr::V4(SocketAddrV4::new(group, PRESENCE_PORT)))
-            .await;
+        send_all(socket, payloads, group).await;
     }
     if let Some(broadcast) = subnet_broadcast_address(local_ip, prefix_len) {
-        let _ = socket
-            .send_to(payload, SocketAddr::V4(SocketAddrV4::new(broadcast, PRESENCE_PORT)))
-            .await;
+        send_all(socket, payloads, broadcast).await;
     }
     if !sweep {
         return;
@@ -379,27 +425,36 @@ async fn shout(
     if let Some(targets) = unicast_scan_targets(local_ip, prefix_len) {
         for chunk in targets.chunks(UNICAST_SCAN_CHUNK) {
             for &target in chunk {
-                let _ = socket
-                    .send_to(payload, SocketAddr::V4(SocketAddrV4::new(target, PRESENCE_PORT)))
-                    .await;
+                send_all(socket, payloads, target).await;
             }
             tokio::time::sleep(Duration::from_millis(UNICAST_SCAN_CHUNK_DELAY_MS)).await;
         }
     }
 }
 
+/// One announcement per key this device shares with a peer.
+fn payloads_for(keys: &[PairKey], identity: &LocalIdentity, ip: Ipv4Addr, probe: bool) -> Vec<Vec<u8>> {
+    keys.iter()
+        .map(|k| PresenceAnnouncement::new(identity, k, ip, probe).serialize(&k.key))
+        .collect()
+}
+
 /// The responder half: hold the presence port and answer probes. This is what "stay
 /// reachable" runs, and what the app runs while it is open.
+///
+/// The keys are asked for afresh on every packet rather than copied in once: a code shown
+/// while this is already running has to be answerable at once, and a code that has just
+/// been claimed has to stop being one. Packets are rare, so the snapshot costs nothing.
 pub struct PresenceResponder {
-    key: [u8; 32],
+    keys: Arc<dyn Fn() -> KeyRing + Send + Sync>,
     identity: LocalIdentity,
     cancel: Arc<AtomicBool>,
 }
 
 impl PresenceResponder {
-    pub fn new(key: [u8; 32], identity: LocalIdentity) -> Self {
+    pub fn new(keys: Arc<dyn Fn() -> KeyRing + Send + Sync>, identity: LocalIdentity) -> Self {
         PresenceResponder {
-            key,
+            keys,
             identity,
             cancel: Arc::new(AtomicBool::new(false)),
         }
@@ -427,8 +482,12 @@ impl PresenceResponder {
         F: FnMut(DiscoveredPeer),
     {
         let socket = bind_presence_socket(local_ip)?;
-        let hello =
-            PresenceAnnouncement::new(&self.identity, local_ip, false).serialize(&self.key);
+        let bound: Vec<PairKey> = (self.keys)()
+            .keys
+            .into_iter()
+            .filter(|k| !k.is_pending())
+            .collect();
+        let hello = payloads_for(&bound, &self.identity, local_ip, false);
         shout(&socket, &hello, local_ip, prefix_len, false).await;
 
         let mut buf = [0u8; PRESENCE_MAX_SIZE];
@@ -447,7 +506,8 @@ impl PresenceResponder {
                     Err(_) => continue,
                 };
             let (len, src) = received;
-            let Some(announcement) = PresenceAnnouncement::deserialize(&buf[..len], &self.key)
+            let ring = (self.keys)();
+            let Some((announcement, key)) = PresenceAnnouncement::open(&buf[..len], &ring)
             else {
                 continue;
             };
@@ -471,11 +531,14 @@ impl PresenceResponder {
                 ip: source_ip,
                 port: announcement.port,
                 unattended: announcement.is_unattended(),
+                key: key.key,
             });
 
             if announcement.is_probe() {
-                let reply =
-                    PresenceAnnouncement::new(&self.identity, local_ip, false).serialize(&self.key);
+                // Answered under the key the probe came in on — the only one the prober
+                // can read, and, for a pending code, the one that has just become theirs.
+                let reply = PresenceAnnouncement::new(&self.identity, &key, local_ip, false)
+                    .serialize(&key.key);
                 let _ = socket.send_to(&reply, src).await;
             }
         }
@@ -488,26 +551,30 @@ impl PresenceResponder {
 /// `sweep` decides whether to fall back to walking the subnet — worth it when the list
 /// came back empty, wasteful when a broadcast already answered.
 pub async fn probe(
-    key: &[u8; 32],
+    keys: &[PairKey],
     identity: &LocalIdentity,
     local_ip: Ipv4Addr,
     prefix_len: u8,
     listen_for: Duration,
     sweep: bool,
 ) -> Result<Vec<DiscoveredPeer>, FCError> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
     let socket = bind_ephemeral_socket()?;
     if let Ok(group) = PRESENCE_MULTICAST_ADDR.parse::<Ipv4Addr>() {
         let _ = socket.set_multicast_loop_v4(false);
         let _ = socket.join_multicast_v4(group, local_ip);
     }
-    let payload = PresenceAnnouncement::new(identity, local_ip, true).serialize(key);
+    let payloads = payloads_for(keys, identity, local_ip, true);
+    let ring = KeyRing { keys: keys.to_vec() };
 
     let mut found: HashMap<[u8; 16], DiscoveredPeer> = HashMap::new();
     let deadline = tokio::time::Instant::now() + listen_for;
 
     // Shout and listen at once: a sweep of a /21 takes ~320 ms of chunk delays on its own,
     // and the first replies arrive long before it finishes.
-    let shouting = shout(&socket, &payload, local_ip, prefix_len, sweep);
+    let shouting = shout(&socket, &payloads, local_ip, prefix_len, sweep);
     tokio::pin!(shouting);
     let mut still_shouting = true;
     let mut buf = [0u8; PRESENCE_MAX_SIZE];
@@ -524,8 +591,8 @@ pub async fn probe(
             result = tokio::time::timeout(remaining, socket.recv_from(&mut buf)) => {
                 match result {
                     Ok(Ok((len, src))) => {
-                        let Some(announcement) =
-                            PresenceAnnouncement::deserialize(&buf[..len], key) else { continue };
+                        let Some((announcement, key)) =
+                            PresenceAnnouncement::open(&buf[..len], &ring) else { continue };
                         if announcement.device_id == identity.device_id || !announcement.is_fresh() {
                             continue;
                         }
@@ -542,6 +609,7 @@ pub async fn probe(
                                 ip,
                                 port: announcement.port,
                                 unattended: announcement.is_unattended(),
+                                key: key.key,
                             },
                         );
                     }
@@ -559,14 +627,14 @@ pub async fn probe(
 /// has just been given a new address says so unprompted, because every cached address its
 /// peers hold for it is now wrong and nothing else would tell them.
 pub async fn announce_once(
-    key: &[u8; 32],
+    keys: &[PairKey],
     identity: &LocalIdentity,
     local_ip: Ipv4Addr,
     prefix_len: u8,
 ) -> Result<(), FCError> {
     let socket = bind_ephemeral_socket()?;
-    let payload = PresenceAnnouncement::new(identity, local_ip, false).serialize(key);
-    shout(&socket, &payload, local_ip, prefix_len, false).await;
+    let payloads = payloads_for(keys, identity, local_ip, false);
+    shout(&socket, &payloads, local_ip, prefix_len, false).await;
     Ok(())
 }
 
@@ -593,14 +661,19 @@ mod tests {
         }
     }
 
+    fn pk(seed: u8) -> PairKey {
+        PairKey::bound([seed; 32], [0xEEu8; 16])
+    }
+
     #[test]
     fn round_trips() {
-        let key = [0x5au8; 32];
+        let key = pk(0x5a);
         let announcement =
-            PresenceAnnouncement::new(&identity(), Ipv4Addr::new(192, 168, 128, 7), true);
-        let bytes = announcement.serialize(&key);
-        let parsed = PresenceAnnouncement::deserialize(&bytes, &key).unwrap();
+            PresenceAnnouncement::new(&identity(), &key, Ipv4Addr::new(192, 168, 128, 7), true);
+        let bytes = announcement.serialize(&key.key);
+        let parsed = PresenceAnnouncement::deserialize(&bytes, &key.key).unwrap();
         assert_eq!(parsed.device_id, [7u8; 16]);
+        assert_eq!(parsed.key_id, key.key_id);
         assert_eq!(parsed.name, "白い熊二代目");
         assert_eq!(parsed.os, PeerOs::Android);
         assert_eq!(parsed.get_ip_address(), Ipv4Addr::new(192, 168, 128, 7));
@@ -611,51 +684,78 @@ mod tests {
     #[test]
     fn a_wrong_key_is_rejected() {
         let announcement =
-            PresenceAnnouncement::new(&identity(), Ipv4Addr::new(10, 0, 0, 1), false);
+            PresenceAnnouncement::new(&identity(), &pk(1), Ipv4Addr::new(10, 0, 0, 1), false);
         let bytes = announcement.serialize(&[0x01u8; 32]);
         assert!(PresenceAnnouncement::deserialize(&bytes, &[0x02u8; 32]).is_none());
     }
 
+    /// The ring picks the key by id, and a key bound to another device never verifies a
+    /// packet from this one — a peer's key vouches for that peer alone.
+    #[test]
+    fn the_ring_opens_only_with_the_right_key_for_the_right_device() {
+        let me = identity();
+        let mine = PairKey::bound([0x10u8; 32], me.device_id);
+        let someone_elses = PairKey::bound([0x20u8; 32], [3u8; 16]);
+        let pending = PairKey::pending([0x30u8; 32]);
+        let ring = KeyRing {
+            keys: vec![mine.clone(), someone_elses.clone(), pending.clone()],
+        };
+        let ip = Ipv4Addr::new(10, 0, 0, 1);
+
+        let under_mine = PresenceAnnouncement::new(&me, &mine, ip, true).serialize(&mine.key);
+        let (_, key) = PresenceAnnouncement::open(&under_mine, &ring).unwrap();
+        assert_eq!(key, mine);
+
+        let under_pending =
+            PresenceAnnouncement::new(&me, &pending, ip, true).serialize(&pending.key);
+        let (_, key) = PresenceAnnouncement::open(&under_pending, &ring).unwrap();
+        assert!(key.is_pending());
+
+        let under_theirs = PresenceAnnouncement::new(&me, &someone_elses, ip, true)
+            .serialize(&someone_elses.key);
+        assert!(PresenceAnnouncement::open(&under_theirs, &ring).is_none());
+    }
+
     #[test]
     fn a_tampered_name_is_rejected() {
-        let key = [0x33u8; 32];
+        let key = pk(0x33);
         let mut bytes =
-            PresenceAnnouncement::new(&identity(), Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key);
+            PresenceAnnouncement::new(&identity(), &key, Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key.key);
         let last_name_byte = PRESENCE_HEADER_SIZE;
         bytes[last_name_byte] ^= 0xff;
-        assert!(PresenceAnnouncement::deserialize(&bytes, &key).is_none());
+        assert!(PresenceAnnouncement::deserialize(&bytes, &key.key).is_none());
     }
 
     // A forged length byte must be rejected on the length check, before anything is
     // allocated or indexed from it.
     #[test]
     fn a_lying_length_byte_is_rejected() {
-        let key = [0x44u8; 32];
+        let key = pk(0x44);
         let mut bytes =
-            PresenceAnnouncement::new(&identity(), Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key);
+            PresenceAnnouncement::new(&identity(), &key, Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key.key);
         bytes[PRESENCE_HEADER_SIZE - 1] = 200;
-        assert!(PresenceAnnouncement::deserialize(&bytes, &key).is_none());
+        assert!(PresenceAnnouncement::deserialize(&bytes, &key.key).is_none());
     }
 
     #[test]
     fn truncated_and_oversized_packets_are_rejected() {
-        let key = [0x55u8; 32];
+        let key = pk(0x55);
         let bytes =
-            PresenceAnnouncement::new(&identity(), Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key);
-        assert!(PresenceAnnouncement::deserialize(&bytes[..PRESENCE_MIN_SIZE - 1], &key).is_none());
+            PresenceAnnouncement::new(&identity(), &key, Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key.key);
+        assert!(PresenceAnnouncement::deserialize(&bytes[..PRESENCE_MIN_SIZE - 1], &key.key).is_none());
         let mut oversized = bytes.clone();
         oversized.resize(PRESENCE_MAX_SIZE + 1, 0);
-        assert!(PresenceAnnouncement::deserialize(&oversized, &key).is_none());
+        assert!(PresenceAnnouncement::deserialize(&oversized, &key.key).is_none());
     }
 
     #[test]
     fn an_empty_name_is_legal() {
-        let key = [0x66u8; 32];
+        let key = pk(0x66);
         let mut id = identity();
         id.name = String::new();
-        let bytes = PresenceAnnouncement::new(&id, Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key);
+        let bytes = PresenceAnnouncement::new(&id, &key, Ipv4Addr::new(10, 0, 0, 1), false).serialize(&key.key);
         assert_eq!(bytes.len(), PRESENCE_MIN_SIZE);
-        assert_eq!(PresenceAnnouncement::deserialize(&bytes, &key).unwrap().name, "");
+        assert_eq!(PresenceAnnouncement::deserialize(&bytes, &key.key).unwrap().name, "");
     }
 
     #[test]
@@ -694,6 +794,7 @@ mod tests {
                 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
                 0xee, 0xff,
             ],
+            key_id: crate::pairing::key_id(&key),
             ip_address: [192, 168, 128, 7],
             port: PRESENCE_PORT,
             timestamp: 1_700_000_000,
@@ -711,16 +812,17 @@ mod tests {
 
     const PRESENCE_KAT_HEX: &str = concat!(
         "46435052",                         // "FCPR"
-        "0001",                             // version 1
+        "0002",                             // version 2
         "0003",                             // FLAG_PROBE | FLAG_UNATTENDED
         "02",                               // PeerOs::Linux
         "00112233445566778899aabbccddeeff", // device id
+        "c179cecd",                         // key id: HMAC(key, "mahojutan key id v1")[..4]
         "c0a88007",                         // 192.168.128.7
         "0cdb",                             // port 3291
         "000000006553f100",                 // timestamp 1700000000
         "09",                               // name length, in BYTES not characters
         "e799bde38184e7868a",               // 白い熊
         // HMAC-SHA256 of everything above, keyed by 32 bytes of 0xAB
-        "986b7e88c6db87d391d6cc85b7557f04902daaf5a216cd72a3b8be8b3c721e34",
+        "24899f92f07f9065baa4562e1d61ca584c5c29e847b0e9bd3b9c2669b29fdcfe",
     );
 }
