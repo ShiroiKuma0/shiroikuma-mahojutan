@@ -8,6 +8,45 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+079 — 2026-09-12
+
+Built on upstream release 10.0.4. One delivered build, shipping both artifacts. Nothing on the wire
+changed: a `+079` device pairs and transfers with a `+078` one.
+
+### Files or a folder, from every device pill (both apps)
+
+A device pill opened the file picker and nothing else; sending a *folder* to a paired device meant
+falling back to the classic route with its mode and password. Now **each pill is split in two under
+one outline**: the name half sends files — exactly the one tap it always was — and a folder-glyph
+half on its right sends one folder. Both rows of a column have it, so a device reads
+`[ ᯤ Name | 📁 ]` over this network and `[ ⚡ Name | 📁 ]` over a hotspot. It is the strip's version
+of the main page's *Files to send | Directory to send* twins: the choice is made by where the tap
+lands, with no mode set beforehand and no question asked afterwards.
+
+- **The glyph is a tinted vector on both platforms**, like the Wi-Fi mark, so it follows the UI
+  page's colours rather than being the one full-colour emoji on a yellow-on-black screen. A tooltip
+  on the desktop, and the long-press label on Android, says what it does.
+- **Android:** the folder picker now knows about paired devices exactly as the file picker does, for
+  both the network and the hotspot route; the folder-loading code is shared with the classic
+  *Directory to send* button; and **an empty folder is refused** with a line in the log rather than
+  sent as nothing. The two halves round only their outer ends and overlap by exactly one stroke, so
+  they meet as a single hairline. Holding either half still drags the column or opens the menu.
+- **Desktop:** a folder goes through the same expansion as the main page's directory button, so it
+  is recreated on the far end with its name rather than flattened into loose files.
+
+### Drag to reorder on the desktop
+
+- **Press a column and move it.** It reorders live as it crosses the others — as the Android strip
+  has since `+075` — and the order is saved on release. The store's array order *is* the order,
+  on both platforms, with the same rules: unknown ids are ignored and peers left out keep their
+  places at the end, so a stale view of the list can never silently drop a device.
+- Written with pointer events rather than HTML5 drag-and-drop, because the window's native drop
+  handler — the one that takes files dropped onto the app — is the machinery HTML5 drags go through.
+  A press that never moves is still a click; one that did is not allowed to become a click
+  afterwards, so letting go of a dragged pill never opens a file picker. A copy of the column rides
+  under the pointer while the column itself fades in the slot it is being moved to, and a scan
+  finishing mid-drag no longer redraws the strip out from under it.
+
 ## 10.0.4+078 — 2026-09-12
 
 Built on upstream release 10.0.4. Three delivered builds (`+076` … `+078`), each shipping both

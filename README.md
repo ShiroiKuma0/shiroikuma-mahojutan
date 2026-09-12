@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+078`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+079`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -58,11 +58,13 @@ standing cost; a **Stay reachable** switch — sitting right under *Use Bluetoot
 because it is the one toggle here with a real battery cost — keeps a phone answering paired devices
 after the app is closed, behind a foreground notification you can stop from itself.
 
-**Two rows of pills, two routes.** The top row sends over the network you are both on. The bottom
-row raises a hotspot — for a network that will not pass traffic between its clients, or no network
-at all — and it *also* needs nothing tapped over there: the sender asks over the LAN when it can and
-over Bluetooth when it cannot, and the other device raises its access point on its own. Hold a pill
-to rename, re-home or forget a device; drag it to reorder.
+**Two rows of pills, two routes — and files or a folder from each.** The top row sends over the
+network you are both on. The bottom row raises a hotspot — for a network that will not pass traffic
+between its clients, or no network at all — and it *also* needs nothing tapped over there: the
+sender asks over the LAN when it can and over Bluetooth when it cannot, and the other device raises
+its access point on its own. Every pill is split under one outline: its name sends files, the
+folder glyph beside it sends a whole folder, recreated by name on the far end. Hold a pill to
+rename, re-home or forget a device; drag it to reorder — on the phone and on the desktop alike.
 
 **Built for a real network rather than a textbook one.** The receiver never beacons — it answers, and
 only the device whose screen is lit does any shouting. Each peer's last address is tried before
