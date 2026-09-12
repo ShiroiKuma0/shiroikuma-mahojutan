@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+075`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+078`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -35,19 +35,28 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 
 ## 👥 Paired devices — one tap, and nothing to do over there
 
-Pair two devices once, by showing a QR code and scanning it. From then on each one carries a name
-and appears on the other as a pill: **tap it and the files go.** No mode to choose, no password to
-agree, no arming the far device within the same minute — the thing that made sending a file a
-ceremony rather than an action.
+Pair two devices once, by showing a code on **either** one and scanning or typing it on the other.
+From then on each carries a name and appears on the other as a pill: **tap it and the files go.** No
+mode to choose, no password to agree, no arming the far device within the same minute — the thing
+that made sending a file a ceremony rather than an action.
 
-It works because a paired device **runs a server while its app is open**. One 32-byte key, agreed at
-pairing, is all either side needs: the presence key, the encryption key and the Wi-Fi credential are
-all derived from it, so nothing is ever exchanged again.
+**Pairing is between two devices, and each pair has its own key.** There is no group and no
+direction: pairing a third device *adds* a key and never touches the first pairing, so nothing you
+already set can be silently stranded by pairing something new. The code the shower displays carries a
+fresh 32-byte key and its own identity; the device that scans it is paired at once, and it introduces
+itself back over the network so both ends learn each other. From that one key each pair derives
+everything — the presence key that finds a device, the encryption key that protects the transfer, and
+the Wi-Fi credential a hotspot uses — so nothing is ever exchanged again.
 
 **This is stronger than the password it replaces, not weaker.** A single-use ten-character password
 is about 58 bits, and an attacker who completes one handshake can crack it offline at leisure —
 stated plainly in the fork's own crypto design notes. A 256-bit random key has no dictionary to
 attack, so that gap simply does not exist.
+
+**Reachable with the app closed, if you ask.** A paired device answers while its app is open at no
+standing cost; a **Stay reachable** switch — sitting right under *Use Bluetooth* on the main screen,
+because it is the one toggle here with a real battery cost — keeps a phone answering paired devices
+after the app is closed, behind a foreground notification you can stop from itself.
 
 **Two rows of pills, two routes.** The top row sends over the network you are both on. The bottom
 row raises a hotspot — for a network that will not pass traffic between its clients, or no network
