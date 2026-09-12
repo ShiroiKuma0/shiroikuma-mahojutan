@@ -8,6 +8,69 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+078 — 2026-09-12
+
+Built on upstream release 10.0.4. Three delivered builds (`+076` … `+078`), each shipping both
+artifacts. **Both ends must be on `+078`** — the presence record and a new pre-handshake hello
+changed the wire, so a `+078` device cannot pair or transfer with a `+075` one.
+
+### Pairwise pairing keys — no group, no direction
+
+The `+075` design shared **one** key between all of a person's devices. Pairing a third device by
+scanning *its* fresh code silently replaced the key on the phone that scanned it — stranding the
+device it had been paired with before, and leaving a stale, seemingly-reachable pill on screen. This
+replaces that model wholesale.
+
+- **Each pair of devices has its own 32-byte key.** A device holds one key per peer, plus the keys of
+  codes it has shown and nobody has claimed yet. Pairing is symmetric: either device shows a code,
+  the other scans or types it, and **a third pairing adds a key without touching the others**.
+- **How the two ends learn each other.** The shown code (pairing URI **v2**) carries the shower's
+  device id and a fresh key. The scanner stores the shower at once and introduces itself over
+  presence under that key; the shower — seeing a valid introduction under a code it showed — stores
+  the scanner and spends the code. One code, one pairing.
+- **Presence record v2** adds a 4-byte key id after the device id, so a device holding one key per
+  peer picks the right one to verify a packet with instead of trying each. New known-answer vector,
+  byte-identical in Rust and Kotlin.
+- **A hello before the handshake.** Between the plaintext preamble and the Noise handshake, a paired
+  connection now exchanges who is calling and under which key id — so the listener chooses its pair
+  key *before* the handshake, and answers **"not paired with you"** or **"different pairing key —
+  pair again"** in words rather than a bare handshake failure. Every hello byte is bound into the
+  Noise prologue, exactly like the preamble.
+- **Per-pair credentials throughout.** The Noise PSK, the presence HMAC key, the derived Wi-Fi
+  hotspot password and the Bluetooth doorbell tag all derive from the one pair key; the BLE OS
+  characteristic carries the caller's id in a paired session so a hotspot host can derive them.
+- **Existing pairings migrate.** Each peer known under the old shared key keeps it as the pair key
+  with that one device, so a pairing that already worked keeps working after the update.
+
+### "Stay reachable" on the main page
+
+- **The switch that lets a paired device reach a phone with the app closed now sits directly under
+  *Use Bluetooth*** on the main screen — it is the most consequential toggle in the app and the one
+  with a real battery cost, so it belongs in front of you rather than three taps deep in the UI page.
+  Same setting as the UI page's row; the line under it turns red while it is on.
+- **The notification's Stop clears the setting**, and returning to the app restarts a service the
+  phone has killed — but never one you turned off yourself.
+
+### Desktop
+
+- **"Devices ＋"** gains the ＋ to match the Android control.
+- **The Devices panel no longer renders its contents twice.** Opening it, a scan finishing and a
+  store change each redrew, and two overlapping refreshes both appended; the body is now built
+  off-screen and only the newest refresh is allowed to land.
+- **The main page gains the paired-device pill strip** — the desktop end of the Android strip: a
+  Wi-Fi pill to send over this network and a ⚡ pill over a hotspot, one column per device, drawn
+  from the store and refreshed on every change.
+
+### Fixes
+
+- **A second pairing no longer kills the desktop's listener** (the `+076`/`+077` regression). Pairing
+  called `restart_serving`, which tore down and immediately re-bound the TCP accept socket while the
+  old one was still in its 250 ms poll loop — hitting `EADDRINUSE` and leaving the port dead, so the
+  desktop silently stopped accepting connections (its `SO_REUSEADDR` UDP responder survived, so it
+  still *answered* presence but refused every transfer). `restart_serving` is now idempotent: the
+  serve loops read the keys afresh per connection, so a new pairing needs no rebind at all.
+- **The send sheet's device pill** is a normal wrap-content pill again, not a full-width bar.
+
 ## 10.0.4+075 — 2026-09-11
 
 Built on upstream release 10.0.4. Eight delivered builds (`+068` … `+075`), each shipping both
