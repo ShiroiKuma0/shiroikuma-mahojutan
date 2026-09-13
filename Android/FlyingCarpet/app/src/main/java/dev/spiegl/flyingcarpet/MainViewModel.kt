@@ -145,6 +145,49 @@ const val JOIN_AP_POLL_MS = 1_500L
 /** One line of transfer log, tagged with a monotonically increasing sequence number. */
 data class OutputLine(val seq: Long, val text: String)
 
+// Fork: what the screen shows of a transfer — the log and the progress bars — kept once per
+// process rather than once per ViewModel. There are two MainViewModels: the Activity's, and
+// the one PresenceService runs a "Stay reachable" transfer on, which by design has no screen.
+// While each owned its own LiveData, a transfer the service received posted into LiveData
+// nobody observed, and bringing the app to the front showed a still log and no bars over a
+// transfer that was in fact running (白い熊, 2026-09-13). The Activity observes all of this
+// through its own ViewModel exactly as before; the ViewModel's fields are now views onto it.
+//
+// The whole transcript is kept here, not in the Activity's saved-state Bundle. Bundles cross
+// Binder, whose transaction buffer is ~1MB for the whole process, so putString()ing a
+// many-file transfer's log risks TransactionTooLargeException on rotation. This object
+// outlives configuration changes — and, now, the Activity — so the log rides along whole: no
+// size cap, no serialization, nothing dropped. The log and its sequence number are touched
+// only from the main thread, by way of the Dispatchers.Main hop in outputText().
+object TransferFeed {
+    val output = MutableLiveData<OutputLine>()
+    private val outputLog = StringBuilder()
+    private var outputSeq = 0L
+
+    /** Main thread only. */
+    fun append(msg: String) {
+        outputLog.append(msg).append('\n')
+        outputSeq++
+        output.value = OutputLine(outputSeq, msg)
+    }
+
+    /**
+     * The transcript so far, paired with the sequence number of its last line. A recreated
+     * Activity seeds its fresh TextView with this, then ignores any [output] line at or below
+     * that sequence number — LiveData redelivers its most recent value to a newly registered
+     * observer, and that line is already in the seed.
+     */
+    fun snapshot(): Pair<String, Long> = outputLog.toString() to outputSeq
+
+    val progressBar = MutableLiveData(0)
+    // "123 MB / 1.2 GB · 8.7 MB/s · 2m 05s left", shown above the bar. Empty hides the line.
+    val progressDetails = MutableLiveData("")
+    // The same for the transfer as a whole; empty hides the second line and the second bar,
+    // which is what happens whenever there is only one file to move.
+    val progressTotalDetails = MutableLiveData("")
+    val totalProgressBar = MutableLiveData(0)
+}
+
 class MainViewModel(private val application: Application) : AndroidViewModel(application), BluetoothDelegate {
 
     lateinit var mode: Mode
@@ -247,26 +290,13 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     private var discoveryJob: Job? = null // receiver-role background discovery in shared network mode
     private var boundToWifiNetwork = false
     private val handler = Handler(Looper.getMainLooper())
-    private var _output = MutableLiveData<OutputLine>()
+    // The log is process-wide (TransferFeed), so a transfer the "Stay reachable" service is
+    // running shows on the screen that comes to the front over it. See the object's comment.
     val output: LiveData<OutputLine>
-        get() = _output
+        get() = TransferFeed.output
 
-    // The whole transcript is kept here, not in the Activity's saved-state Bundle. Bundles
-    // cross Binder, whose transaction buffer is ~1MB for the whole process, so putString()ing
-    // a many-file transfer's log risks TransactionTooLargeException on rotation. The ViewModel
-    // already outlives configuration changes, so the log rides along whole: no size cap, no
-    // serialization, nothing dropped. Both fields are touched only from the main thread, by
-    // way of the Dispatchers.Main hop in outputText().
-    private val outputLog = StringBuilder()
-    private var outputSeq = 0L
-
-    /**
-     * The transcript so far, paired with the sequence number of its last line. A recreated
-     * Activity seeds its fresh TextView with this, then ignores any [output] line at or below
-     * that sequence number — LiveData redelivers its most recent value to a newly registered
-     * observer, and that line is already in the seed.
-     */
-    fun outputSnapshot(): Pair<String, Long> = outputLog.toString() to outputSeq
+    /** The transcript so far and its last sequence number — see [TransferFeed.snapshot]. */
+    fun outputSnapshot(): Pair<String, Long> = TransferFeed.snapshot()
 
     // The transcript, also written to a file under the app's own external directory:
     //   /sdcard/Android/data/shiroikuma.mahojutan/files/logs/transcript.log
@@ -307,9 +337,7 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
         Log.i("FlyingCarpet", msg.trim())
         appendToTranscript(msg.trim())
         GlobalScope.launch(Dispatchers.Main) {
-            outputLog.append(msg).append('\n')
-            outputSeq++
-            _output.value = OutputLine(outputSeq, msg)
+            TransferFeed.append(msg)
         }
     }
 
@@ -323,22 +351,29 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
 
     var qrBitmap: Bitmap? = null
 
-    var progressBarMut = MutableLiveData(0)
+    // The bars are process-wide too (TransferFeed), for the same reason as the log: Send.kt
+    // and Receive.kt post into these through whichever ViewModel is running the transfer,
+    // and the Activity watches them through its own — the two must be the same LiveData.
+    val progressBarMut: MutableLiveData<Int>
+        get() = TransferFeed.progressBar
     val progressBar: LiveData<Int>
         get() = progressBarMut
 
     // "123 MB / 1.2 GB · 8.7 MB/s · 2m 05s left", shown above the bar. Empty hides the line.
-    var progressDetailsMut = MutableLiveData("")
+    val progressDetailsMut: MutableLiveData<String>
+        get() = TransferFeed.progressDetails
     val progressDetails: LiveData<String>
         get() = progressDetailsMut
 
     // The same for the transfer as a whole; empty hides the second line and the second bar, which
     // is what happens whenever there is only one file to move.
-    var progressTotalDetailsMut = MutableLiveData("")
+    val progressTotalDetailsMut: MutableLiveData<String>
+        get() = TransferFeed.progressTotalDetails
     val progressTotalDetails: LiveData<String>
         get() = progressTotalDetailsMut
 
-    var totalProgressBarMut = MutableLiveData(0)
+    val totalProgressBarMut: MutableLiveData<Int>
+        get() = TransferFeed.totalProgressBar
     val totalProgressBar: LiveData<Int>
         get() = totalProgressBarMut
 

@@ -53,7 +53,10 @@ class PresenceService : Service() {
         // Its own ViewModel, not the Activity's: there may not be an Activity, and reaching
         // for one would be the whole reason this cannot work. Safe because MainViewModel's
         // Bluetooth object does nothing until it is initialized, and a paired transfer over a
-        // network never initializes it — see the Bluetooth constructor.
+        // network never initializes it — see the Bluetooth constructor. What this ViewModel
+        // says and how far it has got still reach the screen: the log and the progress bars
+        // are process-wide (TransferFeed), so an Activity brought to the front over a running
+        // transfer shows it exactly as if it had started it.
         val model = MainViewModel(application)
         viewModel = model
         val paired = PairedController(applicationContext, model)
