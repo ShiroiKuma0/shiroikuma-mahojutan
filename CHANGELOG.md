@@ -8,6 +8,31 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+080 — 2026-09-13
+
+Built on upstream release 10.0.4. One delivered build, shipping both artifacts. Nothing on the wire
+changed: a `+080` device pairs and transfers with a `+079` one. The desktop app is unchanged — its
+`.deb` is built for the paired-artifact rule.
+
+### A “Stay reachable” transfer shows on the screen brought over it (Android)
+
+- **The log and the progress bars now show a transfer the background service is running.** With
+  the switch on, a paired device could send to the phone and the files landed — but opening the
+  app during the transfer showed a still log and no bars over a transfer that was in fact under
+  way. The service runs its transfers on a ViewModel of its own (there may be no screen to borrow
+  one from), and the log and bars were fields of *each* ViewModel, so the service's transfer posted
+  into LiveData nobody watched while the screen watched its own, identical but separate, fields.
+  They are now one per process: the transcript, its sequence number and the four progress LiveData
+  live in a single `TransferFeed`, and both ViewModels write into it. Bringing the app to the
+  front seeds the log from the shared transcript, picks up the current bar values at once, and
+  sees the bars go away when the service's transfer finishes — exactly as for a transfer started
+  on screen.
+- As a consequence, **lines the service logs while the app is closed** — a network it could not
+  listen on, a transfer it refused and why — are in the log the next time the app is opened,
+  rather than lost with the ViewModel nobody ever looked at.
+- Not changed: the Start button stays enabled and there is no Cancel for a service-run transfer;
+  the screen shows it, it does not yet drive it.
+
 ## 10.0.4+079 — 2026-09-12
 
 Built on upstream release 10.0.4. One delivered build, shipping both artifacts. Nothing on the wire

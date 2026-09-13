@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+079`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+080`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -56,7 +56,9 @@ attack, so that gap simply does not exist.
 **Reachable with the app closed, if you ask.** A paired device answers while its app is open at no
 standing cost; a **Stay reachable** switch — sitting right under *Use Bluetooth* on the main screen,
 because it is the one toggle here with a real battery cost — keeps a phone answering paired devices
-after the app is closed, behind a foreground notification you can stop from itself.
+after the app is closed, behind a foreground notification you can stop from itself. Open the app
+while such a transfer is running and it is on screen — the log and both progress bars — exactly as
+if you had started it.
 
 **Two rows of pills, two routes — and files or a folder from each.** The top row sends over the
 network you are both on. The bottom row raises a hotspot — for a network that will not pass traffic
