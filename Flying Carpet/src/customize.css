@@ -466,3 +466,49 @@ button:disabled,
 .form-check-input:disabled ~ .form-check-label {
   opacity: 0.35 !important;
 }
+
+/* ── A running transfer takes the screen ── */
+
+/* fork: while a transfer runs, the controls that cannot be touched anyway give up their space.
+   The main column is a fixed-height flex stack whose last children are the two progress bars,
+   so anything that does not fit is not merely cramped — it is pushed off the bottom of the
+   window and lost. Measured at the default 600×800: the stack wanted 783px with Bluetooth on
+   and 855px with it off (which adds the peer row), against 747px of viewport. Both bars fell
+   off, and #outputBox — the only item that can shrink — absorbed the whole deficit and
+   collapsed to its own border and padding, slicing the last log line in half (白い熊,
+   2026-09-18). The fork's own additions are what filled the column: the 150px logo block, the
+   device-pill strip, the Bluetooth hint, and the two-line readouts.
+
+   Collapsing the device-pill, Bluetooth, mode, connection-mode and peer rows returns ~320px —
+   both the overflow and the room the log needs to be worth reading. They come back when
+   enableUi() drops the class. The top bar stays: a hotspot transfer without Bluetooth shows
+   its QR code and password there, and that is needed most while the transfer is starting. */
+#mainContainer.fork-transferring #devicePills,
+#mainContainer.fork-transferring #bluetoothRow,
+#mainContainer.fork-transferring #bluetoothHint,
+#mainContainer.fork-transferring #modeInstruction,
+#mainContainer.fork-transferring #modeBox,
+#mainContainer.fork-transferring #connectionModeLabel,
+#mainContainer.fork-transferring #connectionModeBox,
+#mainContainer.fork-transferring #peerLabel,
+#mainContainer.fork-transferring #peerBox,
+#mainContainer.fork-transferring #startRow {
+  display: none !important;
+}
+
+/* The log keeps a floor. flex-shrink: 9 plus overflow-y: auto let it resolve a min-height of 0,
+   which is how it came to be the item that gave up every missing pixel — at its floor it was
+   border and padding alone, 16px, showing a single sliced line. Kept deliberately low, and in
+   em so it tracks the output font: idle with Bluetooth off is the tallest the column ever gets
+   (715px above the box on a 747px window), and a floor generous enough to be comfortable there
+   would buy a scrollbar for a state that does not need one. A running transfer, the state that
+   was actually unreadable, gets ~300px from the collapse above. */
+#outputBox {
+  min-height: 2em;
+}
+
+/* Last resort. Dragged shorter than even the collapsed stack needs, the column scrolls rather
+   than dropping its last children past the bottom edge with nothing to say it has. */
+#mainContainer {
+  overflow-y: auto;
+}
