@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+080`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.4+081`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -158,6 +158,13 @@ every clock measures the data phase, so waiting on a dialogue never counts as tr
 There is also a **second bar for the whole transfer**, so sending a folder no longer means watching
 the bar reset to zero twelve times with no idea how far along you are. The second row appears only
 when there is more than one file.
+
+On the desktop, **a running transfer takes the screen**: the device pills, the Bluetooth switch and
+the three mode rows — none of which can be touched once a transfer is under way — fold away for the
+duration and come back when it ends. They used to stay on screen, greyed out, and on a
+default-sized window the readout they crowded out was simply gone: both bars pushed off the bottom
+edge and the log squeezed to a single sliced line. The readout is the point of that screen, so it is
+what keeps the room.
 
 And the log now **says which device is being waited on**. Choosing the files to send — or the
 directory to receive into — arms this device and then goes quiet until the other one is armed too,
