@@ -895,6 +895,8 @@ let needPassword = async () => {
 
 let enableUi = async () => {
   transferState = 'idle';
+  // give the collapsed controls their space back (see .fork-transferring in customize.css)
+  document.getElementById('mainContainer').classList.remove('fork-transferring');
   // Clear the readout here rather than in the enableUi *event* handler, which is where it used
   // to live -- behind that handler's `transferState === 'cancelling'` early return. The guard is
   // right (it stops a stray click starting a second transfer while the cancel unwinds), but it
@@ -940,6 +942,9 @@ let enableUi = async () => {
 
 let disableUi = async () => {
   transferState = 'running';
+  // fork: collapse the rows a running transfer cannot use, so the progress readout and the log
+  // have room instead of being pushed off the bottom of the window (see customize.css)
+  document.getElementById('mainContainer').classList.add('fork-transferring');
   if (lastFolderButton) {
     lastFolderButton.style.display = 'none';
   }
