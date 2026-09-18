@@ -8,6 +8,32 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.4+081 — 2026-09-18
+
+Built on upstream release 10.0.4. One delivered build, shipping both artifacts. Nothing on the wire
+changed: a `+081` device pairs and transfers with a `+080` one. The Android app is unchanged — its
+APK is built for the paired-artifact rule.
+
+### A running transfer keeps its progress bars on screen (desktop)
+
+- **The readout was being pushed off the bottom of the window.** Sending from the desktop showed no
+  progress bars at all and the last log line sliced in half under the *Cancel Transfer* button. The
+  main page is a fixed-height flex column whose last two children are the two bars, so whatever does
+  not fit is not merely cramped — it is pushed past the bottom edge and lost. Measured at the default
+  600×800 with six files in flight, the column wanted 783px against 747px of viewport, and 855px with
+  Bluetooth off, which adds the peer row: the output box, the only item in the column that can shrink,
+  absorbed the whole deficit and collapsed to its own border and padding, and both bars fell off the
+  end. The fork's own additions are what filled the column — the logo block, the device-pill strip,
+  the Bluetooth hint and the two-line readouts.
+- **A transfer now takes the screen.** While one runs, the device-pill strip, the Bluetooth row and
+  its hint, and the file-mode, connection-mode and peer rows fold away — none of them can be touched
+  mid-transfer — and come back the moment it ends. That returns about 320px: the column fits the same
+  window with both bars on screen, and the log grows from 16px to 301px. The top bar stays, since a
+  hotspot transfer without Bluetooth shows its QR code and password there.
+- **The log also keeps a floor**, so it can never again collapse to a sliver, and the column now
+  scrolls rather than silently dropping its last children if the window is dragged shorter than even
+  the folded stack needs. Checked idle and running, Bluetooth on and off, at 747, 800 and 640px.
+
 ## 10.0.4+080 — 2026-09-13
 
 Built on upstream release 10.0.4. One delivered build, shipping both artifacts. Nothing on the wire
