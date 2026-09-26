@@ -14,22 +14,22 @@ plugins {
 // three digits — "+026", never "+26" — so builds sort correctly in ~/tmp, in the
 // phone's file manager and in the release list, where "+10" would otherwise land
 // before "+3". The versionCode keeps the plain integer; padding is text only.
-// NB since v10.0.3 the two upstream sources disagree: the release tag says 10.0.4 (only the
-// Apple apps were bumped for it) while the desktop crates still say 10.0.1 and Android's own
-// versionName says 10.0.3. The tag is the release, so both our artifacts carry 10.0.4 and keep
-// sharing one version string.
-// NB2 the buildNumber reset was SKIPPED for the 10.0.4 rebase (白い熊, 2026-08-12): upstream's
-// Android versionCode did NOT climb for that release — it stayed at 24 — so the reset the skill
-// prescribes would have produced versionCode 240001 against the installed 240058, i.e. an
-// uninstallable downgrade. The reset is only safe when the upstream code climbs; when it stands
-// still, the counter continues instead. upstreamVersionCode always mirrors upstream verbatim.
-def releaseVersionName = "10.0.4"   // = latest upstream `v*` tag
+// NB at v10.0.5 upstream's desktop crates finally caught up with the release tag (both say
+// 10.0.5), but Android's own versionName still lags at 10.0.3. The tag is the release, so both
+// our artifacts carry 10.0.5 and keep sharing one version string.
+// NB2 the buildNumber reset is SKIPPED whenever upstream's Android versionCode does not climb
+// with the release (白い熊, 2026-08-12 for 10.0.4; same again for 10.0.5 on 2026-09-26): the code
+// has stood at 24 since v10.0.3, so the reset the skill prescribes would have produced
+// versionCode 240001 against the installed 240081, i.e. an uninstallable downgrade. The reset is
+// only safe when the upstream code climbs; when it stands still, the counter continues instead.
+// upstreamVersionCode always mirrors upstream verbatim.
+def releaseVersionName = "10.0.5"   // = latest upstream `v*` tag
 def upstreamVersionCode = 24        // = upstream Android defaultConfig.versionCode
-def buildNumber = 81                // fork build; reset to 1 each upstream bump (see NB2)
+def buildNumber = 82                // fork build; reset to 1 each upstream bump (see NB2)
 
 def paddedBuildNumber = String.format("%03d", buildNumber)
 def forkVersionName = "${releaseVersionName}+${paddedBuildNumber}"
-def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240067
+def forkVersionCode = upstreamVersionCode * 10000 + buildNumber  // 240082
 
 // Release signing: read from a gitignored keystore.properties at the Gradle
 // project root, falling back to SIGNING_* env vars. Without either, the release
