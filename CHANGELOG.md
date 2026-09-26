@@ -8,6 +8,38 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.5+082 — 2026-09-26
+
+Built on upstream release 10.0.5, rebased from 10.0.4. One delivered build, shipping both artifacts.
+Nothing the fork does changed, and nothing on the wire changed: a `+082` device pairs and transfers
+with a `+081` one.
+
+### Upstream 10.0.5
+
+- **A version-bump release.** Upstream's whole delta is the three desktop version fields, the version
+  line in the About dialog, and a README paragraph about installing the official Windows build via
+  `winget`. The transfer engine, the Noise transport, the chunk format, the Bluetooth LE credential
+  exchange and the Android app are all untouched — so there was nothing to mirror into the Kotlin
+  reimplementation of the protocol, and no reason for a `+082` device to behave differently from a
+  `+081` one.
+- **The desktop crates caught up with their own release tag.** They had been reading `10.0.1` while
+  the tags moved on to 10.0.2, 10.0.3 and 10.0.4; at v10.0.5 they finally say `10.0.5`. Android's
+  `versionName` still lags at `10.0.3`, so the release tag remains the only honest source for the
+  version both our artifacts carry.
+- **All 76 fork commits replayed onto it.** Three files needed a hand: the desktop bundle config kept
+  our package and binary names either side of the version upstream bumped, the fork README replaces
+  upstream's wholesale, and the About dialog kept our fork header while taking upstream's new version
+  line — that line documents the release we are built on, and no fork commit owns it.
+
+### The build counter carried on instead of resetting
+
+- **This release is `+082`, not `+001`.** Upstream's Android `versionCode` has stood at `24` since
+  v10.0.3 — 10.0.4 bumped only the Apple apps, 10.0.5 only the desktop crates — and ours is derived
+  as `<upstream's> × 10000 + <build number>`. Resetting the counter would have built `240001` against
+  the `240081` already on the phone, which Android refuses as a downgrade. So the counter continues,
+  for the second upstream release in a row, and the skip is now written into `build.gradle` beside the
+  numbers themselves.
+
 ## 10.0.4+081 — 2026-09-18
 
 Built on upstream release 10.0.4. One delivered build, shipping both artifacts. Nothing on the wire

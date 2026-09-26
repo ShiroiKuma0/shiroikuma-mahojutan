@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.4+081`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.5+082`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -396,7 +396,8 @@ and every install lands as a clean upgrade.
 
 The reset has one condition. Android's `versionCode` is derived as `<upstream's own versionCode> ×
 10000 + <build number>`, so a reset only stays monotonic while upstream's number climbs alongside the
-release. When a release leaves it untouched — as `10.0.4` did, bumping only the Apple apps — the
+release. When a release leaves it untouched — as both `10.0.4` and `10.0.5` did, bumping only the
+Apple apps and then only the desktop crates — the
 counter **carries on instead of resetting**, since resetting would build a lower `versionCode` than
 the one already installed and Android would refuse the APK as a downgrade. Upgrades winning comes
 first; the tidy `+001` does not.
