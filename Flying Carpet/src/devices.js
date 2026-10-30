@@ -7,7 +7,7 @@
 // It reuses customize.js's dialog primitives rather than growing its own, because a second
 // set would drift out of step with the theme the first one follows.
 
-import { el, forkInfo, forkAlert } from './customize.js';
+import { el, forkInfo, forkAlert, forkChooser } from './customize.js';
 import { QRCode } from './deps/qrcode.js';
 
 const { core, dialog } = window.__TAURI__;
@@ -26,6 +26,11 @@ async function status() {
  */
 function shortId(deviceId) {
   return deviceId.slice(0, 6);
+}
+
+/** What to call a device: the name set here, then the one it announces, then its id. */
+function displayName(peer) {
+  return peer.alias || peer.name || `(unnamed · ${shortId(peer.device_id)})`;
 }
 
 function whenSeen(seconds) {
@@ -143,7 +148,7 @@ function peerRow(peer, onSend) {
   row.style.marginLeft = '0';
   row.style.cursor = peer.reachable || peer.last_ip ? 'pointer' : 'default';
 
-  const title = el('div', 'fork-setting-title', peer.name || `(unnamed · ${shortId(peer.device_id)})`);
+  const title = el('div', 'fork-setting-title', displayName(peer));
   row.appendChild(title);
 
   const state = peer.reachable
@@ -154,6 +159,10 @@ function peerRow(peer, onSend) {
   const summary = el('div', 'fork-setting-summary', `${peer.os || 'not yet heard from'} · ${state}`);
   if (!peer.reachable) summary.classList.add('fork-note');
   row.appendChild(summary);
+
+  if (peer.receive_dir) {
+    row.appendChild(el('div', 'fork-setting-summary', `Receives into ${peer.receive_dir}`));
+  }
 
   if (!peer.auto_accept) {
     row.appendChild(
@@ -166,7 +175,166 @@ function peerRow(peer, onSend) {
   }
 
   row.onclick = () => onSend(peer);
+  row.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    deviceMenu(peer);
+  });
   return row;
+}
+
+// ── One device's menu ─────────────────────────────────────────────────────────────────────
+//
+// Everything that can be done to one paired device, in one place — the desktop twin of
+// Android's DeviceMenu, reached by right-clicking a device the way Android holds one: on the
+// main page's strip or on a row of the Devices panel, so neither surface can drift into a
+// half-menu of its own. Same items, same order.
+
+function deviceMenu(peer) {
+  const items = [
+    'Rename…',
+    'Receive directory…',
+    peer.auto_accept ? 'Ask before accepting' : 'Accept without asking',
+    'Send over hotspot',
+    'Receive over hotspot',
+    'Forget this device',
+  ];
+  forkChooser(displayName(peer), items, (index) => {
+    switch (index) {
+      case 0: renameDevice(peer); break;
+      case 1: chooseDeviceReceiveDir(peer); break;
+      case 2: toggleAutoAccept(peer); break;
+      case 3: sendOverHotspot(peer); break;
+      case 4: receiveOverHotspot(peer); break;
+      case 5: confirmForget(peer); break;
+    }
+  });
+}
+
+/**
+ * Writes an alias, not the device's name: the name is refreshed from every announcement, so
+ * a rename stored there would be undone by the next scan.
+ */
+function renameDevice(peer) {
+  const overlay = el('div', 'fork-overlay');
+  const box = el('div', 'fork-info-box');
+  box.appendChild(el('div', 'fork-info-title', `Rename ${displayName(peer)}`));
+  box.appendChild(
+    el(
+      'div',
+      'fork-info-body',
+      'What this device is called here. The other device keeps its own name; leave this empty to go back to using it.',
+    ),
+  );
+  const input = el('input', 'fork-text-input');
+  input.type = 'text';
+  input.spellcheck = false;
+  input.style.width = '100%';
+  input.style.marginTop = '10px';
+  input.value = peer.alias || '';
+  input.placeholder = peer.name || 'Device name';
+  box.appendChild(input);
+
+  const row = el('div', 'fork-info-actions');
+  const cancel = el('button', 'fork-pill', 'Cancel');
+  cancel.type = 'button';
+  cancel.onclick = () => overlay.remove();
+  const set = el('button', 'fork-pill', 'Set');
+  set.type = 'button';
+  set.onclick = async () => {
+    try {
+      await core.invoke('paired_set_alias', { deviceId: peer.device_id, alias: input.value });
+      overlay.remove();
+      await refreshEverywhere();
+    } catch (e) {
+      forkAlert('Could not rename', String(e));
+    }
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') set.click();
+    if (event.key === 'Escape') cancel.click();
+  });
+  row.appendChild(cancel);
+  row.appendChild(set);
+  box.appendChild(row);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  input.focus();
+  input.select();
+}
+
+/** Where files from this one device land, or back to the directory shared by all of them. */
+async function chooseDeviceReceiveDir(peer) {
+  const shared = (await status()).receive_dir;
+  const current = peer.receive_dir
+    ? `Files from ${displayName(peer)} go into ${peer.receive_dir}.`
+    : shared
+      ? `Files from ${displayName(peer)} go into the directory shared by all paired devices: ${shared}.`
+      : `No directory is set, so transfers from ${displayName(peer)} are refused.`;
+  const pick = async (close) => {
+    close();
+    const dir = await dialog.open({
+      multiple: false,
+      directory: true,
+      defaultPath: peer.receive_dir || shared || undefined,
+    });
+    if (!dir) return;
+    await core.invoke('paired_set_peer_receive_dir', { deviceId: peer.device_id, dir });
+    await refreshEverywhere();
+  };
+  const actions = [{ label: 'Cancel', onClick: (close) => close() }];
+  if (peer.receive_dir) {
+    actions.push({
+      label: 'Use the shared one',
+      onClick: async (close) => {
+        close();
+        await core.invoke('paired_set_peer_receive_dir', { deviceId: peer.device_id, dir: null });
+        await refreshEverywhere();
+      },
+    });
+  }
+  actions.push({ label: 'Choose…', onClick: pick });
+  forkInfo('Receive directory', current, actions);
+}
+
+async function toggleAutoAccept(peer) {
+  await core.invoke('paired_set_auto_accept', {
+    deviceId: peer.device_id,
+    allow: !peer.auto_accept,
+  });
+  await refreshEverywhere();
+}
+
+/**
+ * Asks first. The device can be found again by scanning, as long as both ends still share a
+ * key — but its directory, its name here and its remembered address do not come back.
+ */
+function confirmForget(peer) {
+  const overlay = forkInfo(
+    `Forget ${displayName(peer)}?`,
+    'It disappears from the list, along with the directory and name set for it here. It can be found again by looking, as long as both devices still share the same pairing key — this does not un-pair anything.',
+    [
+      { label: 'Cancel', onClick: (close) => close() },
+      {
+        label: 'Forget',
+        onClick: async (close) => {
+          close();
+          await core.invoke('paired_forget', { deviceId: peer.device_id });
+          await refreshEverywhere();
+        },
+      },
+    ],
+  );
+  const buttons = overlay.querySelectorAll('.fork-pill');
+  buttons[buttons.length - 1].classList.add('fork-warn');
+}
+
+/** The panel if it is open, and the strip on the main page either way. */
+async function refreshEverywhere() {
+  if (document.getElementById('forkDevicesPage')) {
+    await refresh();
+  } else {
+    renderPills(await status());
+  }
 }
 
 /** Everything that can be done to one device, once it is in the list. */
@@ -180,34 +348,16 @@ function peerActions(peer, container) {
     peer.auto_accept ? 'Ask before accepting' : 'Accept without asking',
   );
   accept.type = 'button';
-  accept.onclick = async (event) => {
+  accept.onclick = (event) => {
     event.stopPropagation();
-    await core.invoke('paired_set_auto_accept', {
-      deviceId: peer.device_id,
-      allow: !peer.auto_accept,
-    });
-    await refresh();
+    toggleAutoAccept(peer);
   };
 
   const forget = el('button', 'fork-mini-btn', 'Forget');
   forget.type = 'button';
   forget.onclick = (event) => {
     event.stopPropagation();
-    forkInfo(
-      'Forget this device?',
-      `${peer.name || shortId(peer.device_id)} will disappear from the list. It can be found again by scanning, as long as both devices still share the same pairing key.`,
-      [
-        { label: 'Cancel', onClick: (close) => close() },
-        {
-          label: 'Forget',
-          onClick: async (close) => {
-            close();
-            await core.invoke('paired_forget', { deviceId: peer.device_id });
-            await refresh();
-          },
-        },
-      ],
-    );
+    confirmForget(peer);
   };
 
   const hotspotSend = el('button', 'fork-mini-btn', 'Send over hotspot');
@@ -275,7 +425,7 @@ async function overHotspot(peer, mode, fileList, receiveDir) {
     // on first contact over a network. Until then the pill is a promise, not a route.
     forkAlert(
       'Not yet heard from',
-      `${peer.name || 'That device'} has not answered on a network yet, so it is not known what kind of device it is. Open the app on it while both are on the same Wi-Fi and press “Look again” once.`,
+      `${displayName(peer)} has not answered on a network yet, so it is not known what kind of device it is. Open the app on it while both are on the same Wi-Fi and press “Look again” once.`,
     );
     return;
   }
@@ -330,7 +480,8 @@ async function sendOverHotspot(peer, folder = false) {
 
 async function receiveOverHotspot(peer) {
   const state = await status();
-  const folder = state.receive_dir
+  const folder = peer.receive_dir
+    || state.receive_dir
     || (await dialog.open({ multiple: false, directory: true }));
   if (!folder) return;
   await overHotspot(peer, 'receive', null, folder);
@@ -351,7 +502,7 @@ export async function sendFilesTo(peer, fileList) {
   try {
     await core.invoke('paired_send', { deviceId: peer.device_id, fileList });
   } catch (e) {
-    forkAlert(`Could not send to ${peer.name || 'that device'}`, String(e));
+    forkAlert(`Could not send to ${displayName(peer)}`, String(e));
   }
 }
 
@@ -615,7 +766,7 @@ function renderPills(state) {
   const peers = state.paired ? state.peers : [];
   strip.hidden = peers.length === 0;
   const columns = peers.map((peer) => {
-    const name = peer.name || `(unnamed · ${shortId(peer.device_id)})`;
+    const name = displayName(peer);
     const column = el('div', 'fork-device-column');
     column.dataset.deviceId = peer.device_id;
     const network = splitPill(
@@ -635,6 +786,11 @@ function renderPills(state) {
     hotspot.appendChild(document.createTextNode(`⚡ ${name}`));
     column.appendChild(network.parentElement);
     column.appendChild(hotspot.parentElement);
+    // Right-click is the desktop's hold: the same menu Android opens on a long press.
+    column.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      if (!dragging) deviceMenu(peer);
+    });
     draggable(column, strip);
     return column;
   });

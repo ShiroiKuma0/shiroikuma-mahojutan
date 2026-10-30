@@ -136,6 +136,29 @@ pub struct PairedPeer {
     /// key proves *who*, this decides *whether*.
     #[serde(default = "default_true")]
     pub auto_accept: bool,
+    /// Where files from *this* device land; `None` falls back to the store's
+    /// `receive_dir`. Per device, as on Android, because "photos from the phone" and
+    /// "documents from the other PC" rarely want the same directory.
+    #[serde(default)]
+    pub receive_dir: Option<String>,
+    /// A name chosen here, which wins over the one the device announces. It has to be a
+    /// field of its own: `name` is refreshed from every announcement, so a rename stored
+    /// there would be undone by the next scan. Android's `PairedPeer.alias`, the same rule.
+    #[serde(default)]
+    pub alias: Option<String>,
+}
+
+impl PairedPeer {
+    /// What to show: the local name if there is one, then the announced one, then the id.
+    pub fn display_name(&self) -> String {
+        if let Some(alias) = self.alias.as_deref().filter(|a| !a.is_empty()) {
+            return alias.to_string();
+        }
+        if !self.name.is_empty() {
+            return self.name.clone();
+        }
+        self.device_id.chars().take(6).collect()
+    }
 }
 
 fn default_true() -> bool {
@@ -288,6 +311,8 @@ impl PairingStore {
                 last_ip: None,
                 last_seen: 0,
                 auto_accept: true,
+                receive_dir: None,
+                alias: None,
             }),
         }
     }
@@ -334,6 +359,32 @@ impl PairingStore {
 
     pub fn forget_peer(&mut self, device_id: &str) {
         self.peers.retain(|p| p.device_id != device_id);
+    }
+
+    /// Sets the local name for a peer; empty goes back to the announced one.
+    pub fn set_alias(&mut self, device_id: &str, alias: Option<&str>) {
+        if let Some(peer) = self.peers.iter_mut().find(|p| p.device_id == device_id) {
+            peer.alias = alias
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(clamp_name);
+        }
+    }
+
+    /// Sets where files from one peer land; empty goes back to the store-wide directory.
+    pub fn set_peer_receive_dir(&mut self, device_id: &str, dir: Option<&str>) {
+        if let Some(peer) = self.peers.iter_mut().find(|p| p.device_id == device_id) {
+            peer.receive_dir = dir.filter(|d| !d.is_empty()).map(str::to_string);
+        }
+    }
+
+    /// Where a transfer from `device_id` lands: that peer's own directory, else the
+    /// store-wide one.
+    pub fn receive_dir_for(&self, device_id: &str) -> Option<String> {
+        self.find_peer(device_id)
+            .and_then(|p| p.receive_dir.clone())
+            .filter(|d| !d.is_empty())
+            .or_else(|| self.receive_dir.clone().filter(|d| !d.is_empty()))
     }
 
     /// Rewrites the stored order. The array's order *is* the order — everything that lists
@@ -741,6 +792,8 @@ mod tests {
                 last_ip: None,
                 last_seen: 0,
                 auto_accept: true,
+                receive_dir: None,
+                alias: None,
             });
         }
         // C dragged to the front, B named twice, a device that is not stored, D left out.
@@ -784,6 +837,8 @@ mod tests {
                 last_ip: Some("10.0.0.2".into()),
                 last_seen: 5,
                 auto_accept: true,
+                receive_dir: None,
+                alias: None,
             },
         );
         assert!(a.pending.is_empty());
@@ -824,6 +879,8 @@ mod tests {
             last_ip: None,
             last_seen: 0,
             auto_accept: true,
+            receive_dir: None,
+            alias: None,
         });
         assert!(migrate_group_key(&mut store));
         assert!(store.group_key.is_none());
@@ -857,6 +914,8 @@ mod tests {
             last_ip: None,
             last_seen: 0,
             auto_accept: false,
+            receive_dir: None,
+            alias: None,
         });
         store.upsert_peer(PairedPeer {
             device_id: "AAAA".into(),
@@ -866,6 +925,8 @@ mod tests {
             last_ip: Some("192.168.128.7".into()),
             last_seen: 100,
             auto_accept: true,
+            receive_dir: None,
+            alias: None,
         });
         let peer = store.find_peer("AAAA").unwrap();
         assert_eq!(peer.name, "phone renamed");

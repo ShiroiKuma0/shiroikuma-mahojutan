@@ -124,7 +124,7 @@ impl PairedState {
         Some(PairedHotspot {
             key: store.key_for(device_id)?,
             local_id: store.device_id_bytes(),
-            peer_name: peer.name.clone(),
+            peer_name: peer.display_name(),
         })
     }
 
@@ -156,6 +156,10 @@ impl PairedState {
 pub struct PeerView {
     pub device_id: String,
     pub name: String,
+    /// The name set here, if any — see `PairedPeer::alias`.
+    pub alias: Option<String>,
+    /// Where files from this device land, when it has a directory of its own.
+    pub receive_dir: Option<String>,
     pub os: String,
     pub last_ip: Option<String>,
     pub last_seen: u64,
@@ -187,6 +191,8 @@ fn status_of(store: &PairingStore) -> PairedStatus {
             .map(|p| PeerView {
                 device_id: p.device_id.clone(),
                 name: p.name.clone(),
+                alias: p.alias.clone(),
+                receive_dir: p.receive_dir.clone(),
                 os: p.os.clone(),
                 last_ip: p.last_ip.clone(),
                 last_seen: p.last_seen,
@@ -300,6 +306,28 @@ pub fn paired_set_receive_dir(
     })
 }
 
+/// The name this device goes by here. Empty or `None` goes back to the one it announces.
+#[tauri::command]
+pub fn paired_set_alias(
+    app: AppHandle,
+    state: State<PairedState>,
+    device_id: String,
+    alias: Option<String>,
+) -> Result<(), String> {
+    state.update(&app, |store| store.set_alias(&device_id, alias.as_deref()))
+}
+
+/// Where files from one device land. `None` goes back to the directory set for all of them.
+#[tauri::command]
+pub fn paired_set_peer_receive_dir(
+    app: AppHandle,
+    state: State<PairedState>,
+    device_id: String,
+    dir: Option<String>,
+) -> Result<(), String> {
+    state.update(&app, |store| store.set_peer_receive_dir(&device_id, dir.as_deref()))
+}
+
 #[tauri::command]
 pub fn paired_forget(
     app: AppHandle,
@@ -375,6 +403,8 @@ pub async fn paired_scan(
             PeerView {
                 device_id: p.device_id.clone(),
                 name: live.map(|f| f.name.clone()).unwrap_or_else(|| p.name.clone()),
+                alias: p.alias.clone(),
+                receive_dir: p.receive_dir.clone(),
                 os: p.os.clone(),
                 last_ip: live
                     .map(|f| f.ip.to_string())
@@ -439,6 +469,8 @@ fn remember(
                 // unattended receive the user has to go and switch on for each device is
                 // not the feature they asked for. Revocable per peer.
                 auto_accept: true,
+                receive_dir: None,
+                alias: None,
             },
         );
     }
@@ -490,11 +522,7 @@ pub async fn paired_send(
     let ui = BackgroundUi { app: app.clone() };
     let identity_id = store.device_id_bytes();
     let identity_name = store.name.clone();
-    let peer_name = if peer.name.is_empty() {
-        "That device".to_string()
-    } else {
-        peer.name.clone()
-    };
+    let peer_name = peer.display_name();
 
     let mut address: Option<IpAddr> = peer
         .last_ip
@@ -507,7 +535,7 @@ pub async fn paired_send(
     let Some(address) = address else {
         return Err(format!(
             "Could not find {} on this network. Open the app on it, or check both devices are on the same network.",
-            peer.name
+            peer_name
         ));
     };
 
@@ -633,9 +661,9 @@ fn decide(app: &AppHandle, offer: &PairedOffer) -> Verdict {
         // which of their own devices may write here unattended.
         _ => return Verdict::Refuse(Refusal::NotAllowed),
     }
-    match store.receive_dir.as_deref() {
-        Some(dir) if !dir.is_empty() => Verdict::Accept(PathBuf::from(dir)),
-        _ => Verdict::Refuse(Refusal::NoDestination),
+    match store.receive_dir_for(&id) {
+        Some(dir) => Verdict::Accept(PathBuf::from(dir)),
+        None => Verdict::Refuse(Refusal::NoDestination),
     }
 }
 
@@ -706,6 +734,8 @@ pub fn restart_serving(app: &AppHandle) {
                             last_ip: None,
                             last_seen: pairing::now_secs(),
                             auto_accept: true,
+                            receive_dir: None,
+                            alias: None,
                         },
                     );
                 },
@@ -794,6 +824,8 @@ pub fn restart_serving(app: &AppHandle) {
                             last_ip: Some(peer.ip.to_string()),
                             last_seen: pairing::now_secs(),
                             auto_accept: true,
+                            receive_dir: None,
+                            alias: None,
                         },
                     );
                 })
