@@ -8,6 +8,36 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.6+084 — 2026-10-30
+
+Built on upstream release 10.0.6, rebased from 10.0.5. One delivered build, shipping both artifacts.
+Nothing the fork does changed, and nothing on the wire changed: a `+084` device pairs and transfers
+with a `+083` one.
+
+### Upstream 10.0.6
+
+- **Linux release builds move to CI.** Upstream now builds its official Linux `.AppImage`, `.deb`
+  and `.rpm` in a GitHub Actions workflow, inside an Ubuntu 22.04 container, so the binaries run on
+  glibc 2.35 and newer. Their 10.0.5 AppImage was built on Mint 22, needed glibc 2.39, and failed
+  the AppImage catalog test. This changes how *upstream* ships, not what the app does. Our `.deb` is
+  still built locally for this machine.
+- **Everything else is version and docs.** The desktop version fields, the version line in the About
+  dialog, and README notes on the new `.rpm`, the glibc floor and the updated Ubuntu build
+  dependencies. The transfer engine, the encryption, the Bluetooth LE exchange and the Android app
+  are untouched, so there was nothing to mirror into the Kotlin reimplementation.
+- **All 80 fork commits replayed onto it.** Four files needed a hand, and each kept the fork's side.
+  Upstream's own `CLAUDE.md` and README are replaced by ours. The desktop bundle config keeps our
+  package and binary names either side of upstream's version bump. The About dialog keeps our fork
+  header and takes upstream's new version line. Apart from upstream's changes, the rebased code is
+  identical to `+083`.
+
+### The build counter carried on again
+
+- **This release is `+084`, not `+001`.** Upstream's Android `versionCode` has been `24` since
+  v10.0.3, and its Android `versionName` still reads `10.0.3`. Upstream has not shipped an Android
+  change since then. A reset would build `240001` against the `240083` already installed, which
+  Android refuses as a downgrade, so the counter continues for the third upstream release in a row.
+
 ## 10.0.5+083 — 2026-10-30
 
 Built on upstream release 10.0.5, like `+082`. One delivered build, shipping both artifacts. Nothing
