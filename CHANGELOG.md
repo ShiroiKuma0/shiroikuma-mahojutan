@@ -8,6 +8,36 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.5+083 — 2026-10-30
+
+Built on upstream release 10.0.5, like `+082`. One delivered build, shipping both artifacts. Nothing
+on the wire changed. A `+083` device pairs and transfers with a `+082` one.
+
+### Desktop: right-click a paired device for its menu
+
+- **The menu Android shows on a long press, now on the PC.** Right-clicking a paired device opens it,
+  either the device's pill on the main page or its row in the Devices panel. It has the same six
+  items in the same order: **Rename…**, **Receive directory…**, **Ask before accepting** /
+  **Accept without asking**, **Send over hotspot**, **Receive over hotspot** and **Forget this
+  device**. Before this, a device could only be forgotten from the small buttons in the Devices
+  panel, and right-click did nothing.
+- **Rename sets a name for this PC only.** It is stored apart from the name the device announces, so
+  the next scan cannot undo it. Leaving it empty goes back to the announced name. It works the same
+  way as Android's alias.
+- **Each device can have its own receive directory.** Files from that device land there, and
+  devices without one keep using the shared *Receive into* directory. Unattended transfers and
+  *Receive over hotspot* both follow it, and the device's panel row shows *Receives into …* when
+  one is set.
+- **Forget asks first.** The confirmation dialog explains what is lost: the device's name, its
+  directory and its remembered address. It can be found again by scanning, because forgetting does
+  not un-pair anything. The panel's small buttons now run the same actions as the menu.
+- **Existing pairings carry over.** The two new per-device settings are optional fields in the
+  pairing store, so a store written by `+082` loads unchanged.
+
+### Android
+
+- **No changes.** This APK is built only as the paired artifact for `+083`.
+
 ## 10.0.5+082 — 2026-09-26
 
 Built on upstream release 10.0.5, rebased from 10.0.4. One delivered build, shipping both artifacts.
