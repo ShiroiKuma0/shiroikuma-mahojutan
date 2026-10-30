@@ -915,7 +915,7 @@ export function forkAlert(title, body) {
 }
 
 /** A black/yellow chooser: one clickable row per item, plus a Cancel pill. */
-function forkChooser(title, items, onPick) {
+export function forkChooser(title, items, onPick) {
   const overlay = el('div', 'fork-overlay');
   const box = el('div', 'fork-info-box');
   box.appendChild(el('div', 'fork-info-title', title));
