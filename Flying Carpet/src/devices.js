@@ -82,7 +82,7 @@ function showPairCode(uri, typed) {
   box.appendChild(warn);
 
   const row = el('div', 'fork-info-actions');
-  const done = el('button', 'fork-pill', 'Done');
+  const done = el('button', 'fork-pill fork-main', 'Done');
   done.type = 'button';
   done.onclick = () => {
     overlay.remove();
@@ -117,7 +117,7 @@ function askForPairCode() {
   const cancel = el('button', 'fork-pill', 'Cancel');
   cancel.type = 'button';
   cancel.onclick = () => overlay.remove();
-  const join = el('button', 'fork-pill', 'Pair');
+  const join = el('button', 'fork-pill fork-main', 'Pair');
   join.type = 'button';
   join.onclick = async () => {
     const text = input.value.trim();
@@ -238,7 +238,7 @@ function renameDevice(peer) {
   const cancel = el('button', 'fork-pill', 'Cancel');
   cancel.type = 'button';
   cancel.onclick = () => overlay.remove();
-  const set = el('button', 'fork-pill', 'Set');
+  const set = el('button', 'fork-pill fork-main', 'Set');
   set.type = 'button';
   set.onclick = async () => {
     try {
@@ -466,7 +466,7 @@ async function pickToSend(folder) {
   if (!fileList.length) {
     forkAlert(
       'Nothing to send',
-      folder ? 'That folder is empty.' : 'None of what you picked could be read.',
+      folder ? 'That directory is empty.' : 'None of what you picked could be read.',
     );
     return null;
   }
@@ -560,7 +560,7 @@ function buildPanelBody(state) {
   const folderValue = el(
     'div',
     'fork-setting-summary',
-    state.receive_dir || 'No folder set — transfers from paired devices will be refused',
+    state.receive_dir || 'No directory set — transfers from paired devices will be refused',
   );
   if (!state.receive_dir) folderValue.classList.add('fork-warn');
   folderRow.appendChild(folderValue);
@@ -648,7 +648,7 @@ function half(className, onClick, title) {
 function splitPill(name, route, onFiles, onFolder) {
   const row = el('div', 'fork-split-pill');
   const files = half('fork-pill-files', onFiles, `Send files to ${name} ${route}`);
-  const folder = half('fork-pill-folder', onFolder, `Send a folder to ${name} ${route}`);
+  const folder = half('fork-pill-folder', onFolder, `Send a directory to ${name} ${route}`);
   folder.appendChild(mark(FOLDER_PATH));
   row.appendChild(files);
   row.appendChild(folder);
@@ -825,7 +825,7 @@ export function openDevicesPanel() {
   box.appendChild(bodyHolder);
 
   const bar = el('div', 'fork-pill-bar');
-  const close = el('button', 'fork-pill', 'Done');
+  const close = el('button', 'fork-pill fork-main', 'Done');
   close.type = 'button';
   close.onclick = () => page.remove();
   bar.appendChild(close);
@@ -837,7 +837,7 @@ export function openDevicesPanel() {
   scanButton.onclick = scan;
   bar.appendChild(scanButton);
 
-  const pair = el('button', 'fork-pill', 'Pair a device');
+  const pair = el('button', 'fork-pill fork-main', 'Pair a device');
   pair.type = 'button';
   pair.onclick = () => {
     // Either direction works; this PC has no camera, so its own code is the one that gets

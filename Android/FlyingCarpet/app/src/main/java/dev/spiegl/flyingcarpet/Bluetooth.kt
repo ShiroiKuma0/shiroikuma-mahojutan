@@ -998,7 +998,7 @@ class Bluetooth(val application: Application, private val delegate: BluetoothDel
             Log.e("Bluetooth", "Scan failed: $errorCode")
             super.onScanFailed(errorCode)
             outputText("Bluetooth scan failed: ${scanErrorName(errorCode)}")
-            outputText("Bluetooth turned off. Select the other device's OS, then pick your folder again.")
+            outputText("Bluetooth turned off. Select the other device's OS, then pick your directory again.")
             active = false
             bluetoothFailed()
         }

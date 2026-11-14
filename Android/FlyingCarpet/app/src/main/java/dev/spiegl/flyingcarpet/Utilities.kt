@@ -260,7 +260,7 @@ fun MainViewModel.makeParentDirectories(filename: String): DocumentFile? {
         if (existing != null && !existing.isDirectory) {
             // The old walk descended into whatever findFile() returned, so a file sharing a
             // folder's name became the destination directory and failed later, obscurely.
-            throw Exception("Cannot create folder \"$dir\": a file by that name already exists.")
+            throw Exception("Cannot create directory \"$dir\": a file by that name already exists.")
         }
         dirId = existing?.documentId ?: run {
             val parent = cache.documentFile(dirId)
@@ -276,7 +276,7 @@ fun MainViewModel.makeParentDirectories(filename: String): DocumentFile? {
     // filename has no parent directories", and would silently write the file to the top of
     // the receive directory instead of the folder it belongs in.
     return cache.documentFile(dirId)
-        ?: throw Exception("Could not open the destination folder for \"$filename\".")
+        ?: throw Exception("Could not open the destination directory for \"$filename\".")
 }
 
 // returns an array of tuples where the first item is the file and the second item is the path
@@ -398,7 +398,7 @@ fun expandSharedDirectory(context: Context, uri: Uri): Array<Pair<DocumentFile, 
     if (dir != null && hasAllFilesAccess()) {
         return getFilesInRawDir(dir, dir.name, 0)
     }
-    Log.i("Share", "No way in to shared folder $uri (all-files access: ${hasAllFilesAccess()})")
+    Log.i("Share", "No way in to shared directory $uri (all-files access: ${hasAllFilesAccess()})")
     // Neither route found anything. A tree URI we could open is trusted to mean an empty folder;
     // anything else we simply could not read.
     return if (treeUri != null && treeUri == uri) arrayOf() else null

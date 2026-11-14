@@ -32,9 +32,15 @@ const SCAN_WINDOW: Duration = Duration::from_millis(1500);
 /// the transfer's `GUI`, this must never `.expect()` on an emit, because it outlives the
 /// window it is emitting into — a serve loop that panics when someone closes the window
 /// would take the receiver down with it.
+///
+/// `receiver` marks the standing receiver's sink. Its `enable_ui` must not reset the window the
+/// way a finished send does — the window may be in the middle of a transfer of its own — so it
+/// sends `pairedReceiveEnded` instead, and the window clears the progress readout only if it is
+/// idle.
 #[derive(Clone)]
 pub struct BackgroundUi {
     app: AppHandle,
+    receiver: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -84,7 +90,8 @@ impl UI for BackgroundUi {
         );
     }
     fn enable_ui(&self) {
-        let _ = self.app.emit("enableUi", Value { value: 0 });
+        let event = if self.receiver { "pairedReceiveEnded" } else { "enableUi" };
+        let _ = self.app.emit(event, Value { value: 0 });
     }
     fn show_pin(&self, pin: &str) {
         let _ = self.app.emit(
@@ -519,7 +526,7 @@ pub async fn paired_send(
         *slot = Some(conflict_tx);
     }
 
-    let ui = BackgroundUi { app: app.clone() };
+    let ui = BackgroundUi { app: app.clone(), receiver: false };
     let identity_id = store.device_id_bytes();
     let identity_name = store.name.clone();
     let peer_name = peer.display_name();
@@ -708,7 +715,7 @@ pub fn restart_serving(app: &AppHandle) {
         let app = app.clone();
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            let ui = BackgroundUi { app: app.clone() };
+            let ui = BackgroundUi { app: app.clone(), receiver: true };
             let decider_app = app.clone();
             let ring_app = app.clone();
             let claim_app = app.clone();
@@ -760,7 +767,7 @@ pub fn restart_serving(app: &AppHandle) {
         let app = app.clone();
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            let ui = BackgroundUi { app: app.clone() };
+            let ui = BackgroundUi { app: app.clone(), receiver: true };
             let (_interface, ip, prefix) = match local_endpoint() {
                 Ok(endpoint) => endpoint,
                 Err(e) => {

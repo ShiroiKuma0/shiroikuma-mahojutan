@@ -11,7 +11,6 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 
 // A small ARGB colour picker: live preview, four 0–255 sliders, and an editable #AARRGGBB hex field.
 // OK returns the chosen colour; "Default" returns null (revert to the inherited look); Cancel does nothing.
@@ -25,7 +24,7 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
 
     val root = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(24), dp(16), dp(24), dp(8))
+        setPadding(0, dp(12), 0, 0)
     }
 
     val preview = View(context).apply {
@@ -37,6 +36,8 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
     val hex = EditText(context).apply {
         setText(String.format("#%08X", current))
         gravity = Gravity.CENTER
+        setTextColor(ForkDialog.accent(context))
+        backgroundTintList = android.content.res.ColorStateList.valueOf(ForkDialog.accent(context))
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             .apply { topMargin = dp(8) }
     }
@@ -46,6 +47,7 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
     fun addSlider(name: String, value: Int): SeekBar {
         val label = TextView(context).apply {
             text = name
+            setTextColor(ForkDialog.accent(context))
             layoutParams = LinearLayout.LayoutParams(dp(28), LinearLayout.LayoutParams.WRAP_CONTENT)
         }
         val bar = SeekBar(context).apply {
@@ -108,11 +110,14 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
         override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
     })
 
-    AlertDialog.Builder(context)
-        .setTitle("Pick a colour")
-        .setView(root)
-        .setPositiveButton("OK") { _, _ -> onResult(current) }
-        .setNeutralButton("Default") { _, _ -> onResult(null) }
-        .setNegativeButton("Cancel", null)
-        .show()
+    ForkDialog.custom(
+        context,
+        "Pick a colour",
+        root,
+        listOf(
+            "Cancel" to { d: android.app.Dialog -> d.dismiss() },
+            "Default" to { d: android.app.Dialog -> d.dismiss(); onResult(null) },
+            "OK" to { d: android.app.Dialog -> d.dismiss(); onResult(current) },
+        ),
+    )
 }

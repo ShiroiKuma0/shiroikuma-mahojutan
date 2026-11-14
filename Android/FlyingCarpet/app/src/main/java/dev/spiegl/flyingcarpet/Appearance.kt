@@ -18,12 +18,12 @@ import com.google.android.material.button.MaterialButtonToggleGroup
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 // The fork's baseline look is a high-contrast yellow-on-black theme: yellow text, yellow borders,
-// black backgrounds — everywhere, unless 白い熊 overrides a specific property. Borders default to a
-// 1 dp yellow line with a 10 dp corner radius; the sliders still start at 0, so a border can be removed.
+// black backgrounds — everywhere, unless 白い熊 overrides a specific property. Boxes and selectors
+// default to a 1 dp yellow line with a 10 dp corner radius; action buttons are the theme's pills
+// (Theme.kt). The sliders still start at 0, so a border can be removed.
 object Defaults {
     val YELLOW = 0xFFFFFF00.toInt()
     val BLACK = 0xFF000000.toInt()
-    val SWITCH_TRACK_OFF = 0xFF555555.toInt()
 
     // The one non-yellow accent in the fork: "you have to fix this" (no backup folder set). Used by
     // the Export/Import panel and by the UI page's export-folder row.
@@ -100,20 +100,22 @@ object FontUtil {
 object UiCatalog {
     // A Send/Receive/OS toggle button: label + per-button selected/unselected fill & text, border colour,
     // and border-width / corner-radius sliders — all separate per button, in that button's own element.
+    // Fork: a pill like every other button, and never filled — the selected one is told by its 3 dp
+    // frame and bold label (白い熊, 2026-11-14), so both backgrounds default to black.
     private fun toggleSurface(key: String, title: String) = TextSurface(
         key, title,
         listOf(LabelField("$key.text", "Button text")),
         hasTextColor = false,
         extraColors = listOf(
             ColorField("$key.unselFill", "Background (unselected)", Defaults.BLACK),
-            ColorField("$key.selFill", "Background (selected)", Defaults.YELLOW),
+            ColorField("$key.selFill", "Background (selected)", Defaults.BLACK),
             ColorField("$key.unselText", "Text (unselected)", Defaults.YELLOW),
-            ColorField("$key.selText", "Text (selected)", Defaults.BLACK),
+            ColorField("$key.selText", "Text (selected)", Defaults.YELLOW),
             ColorField("$key.stroke", "Border colour", Defaults.YELLOW),
         ),
         extraDims = listOf(
-            DimField("$key.strokeWidth", "Border width", 16, Defaults.BORDER_WIDTH),
-            DimField("$key.cornerRadius", "Corner radius", 60, Defaults.CORNER_RADIUS),
+            DimField("$key.strokeWidth", "Border width (unselected)", 16, Theme.PILL_REGULAR_DP),
+            DimField("$key.cornerRadius", "Corner radius", 60, Theme.PILL_RADIUS_DP),
         ),
     )
 
@@ -139,21 +141,21 @@ object UiCatalog {
                         ColorField("start.stroke", "Border colour", Defaults.YELLOW),
                     ),
                     extraDims = listOf(
-                        DimField("start.strokeWidth", "Border width", 16, Defaults.BORDER_WIDTH),
-                        DimField("start.cornerRadius", "Corner radius", 60, Defaults.CORNER_RADIUS),
+                        DimField("start.strokeWidth", "Border width", 16, Theme.PILL_MAIN_DP),
+                        DimField("start.cornerRadius", "Corner radius", 60, Theme.PILL_RADIUS_DP),
                     ),
                 ),
                 TextSurface("bluetooth", "“Use Bluetooth” label", listOf(LabelField("bluetooth.text", "Label text"))),
                 TextSurface("bluetoothHint", "Line under the Bluetooth switch", listOf()),
             ),
             colorGroups = listOf(
+                // Every switch in the app, here and on this page: an outline with a dot, so one
+                // colour for each state is all there is to set.
                 ColorGroup(
-                    "Bluetooth switch",
+                    "Switches",
                     listOf(
-                        ColorField("bt.thumbOn", "Thumb (on)", Defaults.BLACK),
-                        ColorField("bt.thumbOff", "Thumb (off)", Defaults.YELLOW),
-                        ColorField("bt.trackOn", "Track (on)", Defaults.YELLOW),
-                        ColorField("bt.trackOff", "Track (off)", Defaults.SWITCH_TRACK_OFF),
+                        ColorField("switch.on", "On", Defaults.YELLOW),
+                        ColorField("switch.off", "Off", Theme.SWITCH_OFF),
                     ),
                 ),
                 ColorGroup(
@@ -182,8 +184,8 @@ object UiCatalog {
                         ColorField("uiButton.stroke", "Border colour", Defaults.YELLOW),
                     ),
                     extraDims = listOf(
-                        DimField("uiButton.strokeWidth", "Border width", 16, Defaults.BORDER_WIDTH),
-                        DimField("uiButton.cornerRadius", "Corner radius", 60, Defaults.CORNER_RADIUS),
+                        DimField("uiButton.strokeWidth", "Border width", 16, Theme.PILL_REGULAR_DP),
+                        DimField("uiButton.cornerRadius", "Corner radius", 60, Theme.PILL_RADIUS_DP),
                     ),
                 ),
             ),
@@ -219,8 +221,8 @@ object UiCatalog {
                         ColorField("cancel.stroke", "Border colour", Defaults.YELLOW),
                     ),
                     extraDims = listOf(
-                        DimField("cancel.strokeWidth", "Border width", 16, Defaults.BORDER_WIDTH),
-                        DimField("cancel.cornerRadius", "Corner radius", 60, Defaults.CORNER_RADIUS),
+                        DimField("cancel.strokeWidth", "Border width", 16, Theme.PILL_REGULAR_DP),
+                        DimField("cancel.cornerRadius", "Corner radius", 60, Theme.PILL_RADIUS_DP),
                     ),
                 ),
             ),
@@ -282,7 +284,7 @@ object UiCatalog {
                 TextSurface("page.section", "Section headings", emptyList()),
                 TextSurface("page.element", "Element headings", emptyList()),
                 TextSurface("page.label", "Property labels", emptyList()),
-                TextSurface("page.note", "Notes & hints", emptyList()),
+                TextSurface("page.note", "Notes, hints and explanations", emptyList(), colorLabel = "Text colour (dim gold)"),
                 TextSurface(
                     "page.button", "Buttons (Done / Reset / Apply)", emptyList(),
                     extraColors = listOf(
@@ -290,8 +292,8 @@ object UiCatalog {
                         ColorField("page.button.stroke", "Border colour", Defaults.YELLOW),
                     ),
                     extraDims = listOf(
-                        DimField("page.button.strokeWidth", "Border width", 16, Defaults.BORDER_WIDTH),
-                        DimField("page.button.cornerRadius", "Corner radius", 60, Defaults.CORNER_RADIUS),
+                        DimField("page.button.strokeWidth", "Border width", 16, Theme.PILL_REGULAR_DP),
+                        DimField("page.button.cornerRadius", "Corner radius", 60, Theme.PILL_RADIUS_DP),
                     ),
                 ),
             ),
@@ -338,12 +340,12 @@ object Appearance {
         applyText(activity, s, R.id.aboutButton, "about", setText = true)
         applyText(activity, s, R.id.bluetoothSwitch, "bluetooth", setText = true)
         // portrait only, and its text is set by MainActivity, never from the catalog
-        applyText(activity, s, R.id.bluetoothHint, "bluetoothHint", setText = false)
+        applyText(activity, s, R.id.bluetoothHint, "bluetoothHint", setText = false, default = Theme.DIM_GOLD)
         // Fork: the "Stay reachable" switch wears the Bluetooth row's dress — same label
         // style, same hint style, same switch colours — so the two read as one block. Its
         // texts are fixed, and MainActivity paints the hint red while the switch is on.
         applyText(activity, s, R.id.reachableSwitch, "bluetooth", setText = false)
-        applyText(activity, s, R.id.reachableHint, "bluetoothHint", setText = false)
+        applyText(activity, s, R.id.reachableHint, "bluetoothHint", setText = false, default = Theme.DIM_GOLD)
         applyText(activity, s, R.id.modeInstruction, "modeInstruction", setText = true)
         applyText(activity, s, R.id.sendButton, "send", setText = true)
         applyText(activity, s, R.id.receiveButton, "receive", setText = true)
@@ -368,17 +370,10 @@ object Appearance {
         // this it inflated as a stock filled MaterialButton — a purple slab beside a yellow
         // pill, which is exactly how it looked on 白い熊's screen (2026-09-11).
         applyText(activity, s, R.id.devicesButton, "devicesButton", setText = true)
-        activity.findViewById<MaterialButton>(R.id.devicesButton)?.let { b ->
-            b.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("uiButton.bg") ?: Defaults.BLACK)
-            b.strokeColor = ColorStateList.valueOf(s.colorOrNull("uiButton.stroke") ?: Defaults.YELLOW)
-            b.strokeWidth = dpToPx(activity, s.sizeOrNull("uiButton.strokeWidth") ?: Defaults.BORDER_WIDTH)
-            b.cornerRadius = dpToPx(activity, s.sizeOrNull("uiButton.cornerRadius") ?: Defaults.CORNER_RADIUS)
-        }
-        activity.findViewById<MaterialButton>(R.id.uiButton)?.let { b ->
-            b.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("uiButton.bg") ?: Defaults.BLACK)
-            b.strokeColor = ColorStateList.valueOf(s.colorOrNull("uiButton.stroke") ?: Defaults.YELLOW)
-            b.strokeWidth = dpToPx(activity, s.sizeOrNull("uiButton.strokeWidth") ?: Defaults.BORDER_WIDTH)
-            b.cornerRadius = dpToPx(activity, s.sizeOrNull("uiButton.cornerRadius") ?: Defaults.CORNER_RADIUS)
+        for (buttonId in listOf(R.id.devicesButton, R.id.uiButton)) {
+            activity.findViewById<MaterialButton>(buttonId)?.let { b ->
+                applyPill(activity, s, b, "uiButton", bgKey = "uiButton.bg", textKey = "uiButton.color", main = false)
+            }
         }
 
         // Output log: theme the message text/font/size via applyText ("output.color" = message colour),
@@ -393,14 +388,13 @@ object Appearance {
         applyStartButton(activity, s)
         applyLastFolderButton(activity, s)
         // Both send buttons and the remembered-directory button share one dress, so the row reads
-        // as one control however many of them are showing.
-        for (buttonId in listOf(R.id.startButton, R.id.sendDirButton)) {
-            activity.findViewById<MaterialButton>(buttonId)?.let { start ->
-                start.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("start.fill") ?: Defaults.BLACK)
-                start.strokeColor = ColorStateList.valueOf(s.colorOrNull("start.stroke") ?: Defaults.YELLOW)
-                start.strokeWidth = dpToPx(activity, s.sizeOrNull("start.strokeWidth") ?: Defaults.BORDER_WIDTH)
-                start.cornerRadius = dpToPx(activity, s.sizeOrNull("start.cornerRadius") ?: Defaults.CORNER_RADIUS)
-            }
+        // as one control however many of them are showing. The start button is the one thing the
+        // page is for, so it is the main pill; the other two are regular ones beside it.
+        activity.findViewById<MaterialButton>(R.id.startButton)?.let { b ->
+            applyPill(activity, s, b, "start", bgKey = "start.fill", textKey = "start.color", main = true)
+        }
+        activity.findViewById<MaterialButton>(R.id.sendDirButton)?.let { b ->
+            applyPill(activity, s, b, "start", bgKey = "start.fill", textKey = "start.color", main = false, frameKey = null)
         }
 
         // Toggle buttons (Send/Receive + the five OS buttons), each styled independently.
@@ -408,15 +402,29 @@ object Appearance {
 
         // Cancel button background / border / corner radius (a <Button> inflates as a MaterialButton).
         activity.findViewById<MaterialButton>(R.id.cancelButton)?.let { cancel ->
-            cancel.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("cancel.fill") ?: Defaults.BLACK)
-            cancel.strokeColor = ColorStateList.valueOf(s.colorOrNull("cancel.stroke") ?: Defaults.YELLOW)
-            cancel.strokeWidth = dpToPx(activity, s.sizeOrNull("cancel.strokeWidth") ?: Defaults.BORDER_WIDTH)
-            cancel.cornerRadius = dpToPx(activity, s.sizeOrNull("cancel.cornerRadius") ?: Defaults.CORNER_RADIUS)
+            applyPill(activity, s, cancel, "cancel", bgKey = "cancel.fill", textKey = "cancel.color", main = false)
+        }
+
+        // "About" was a bare word you could tap; every action in the theme is a pill.
+        activity.findViewById<TextView>(R.id.aboutButton)?.let { about ->
+            val color = s.colorOrNull("about.color") ?: Defaults.YELLOW
+            about.background = android.graphics.drawable.RippleDrawable(
+                ColorStateList.valueOf(Theme.ripple(color)),
+                GradientDrawable().apply {
+                    cornerRadius = dpToPx(activity, Theme.PILL_RADIUS_DP).toFloat()
+                    setColor(android.graphics.Color.TRANSPARENT)
+                    setStroke(dpToPx(activity, Theme.PILL_REGULAR_DP).coerceAtLeast(1), color)
+                },
+                null,
+            )
+            val h = dpToPx(activity, 12f)
+            val v = dpToPx(activity, 3f)
+            about.setPadding(h, v, h, v)
         }
 
 
         // Bluetooth switch + idle icon tint.
-        applySwitch(activity, s)
+        applySwitch(activity)
         activity.findViewById<ImageView>(R.id.bluetoothIcon)?.drawable
             ?.setTint(bluetoothIconColor(activity, connected = false))
 
@@ -437,15 +445,19 @@ object Appearance {
 
     // Tints the main-page logo (qrCodeView while it shows the app icon). MainActivity clears this tint
     // before drawing a QR code there — a tinted QR would be unscannable — and calls this again after.
-    // Skipped while a transfer is running (startButton hidden), since the view may be showing a QR.
+    // Skipped while the view shows a QR code (tagged QR_TAG by MainActivity). It used to be skipped
+    // for the whole length of a transfer, judged by the hidden start button — so a transfer that
+    // never put up a code, a paired send for one, left the carpet untinted white (白い熊,
+    // 2026-11-14).
     //
     // Uses a luminance-preserving colorize (not a flat SRC_IN tint): each pixel keeps its brightness but
     // takes the tint's hue, so the carpet's internal detail — the "FC" letters — stays visible instead of
     // flattening into one solid yellow shape.
+    const val QR_TAG = "qr"
+
     fun applyLogoTint(activity: AppCompatActivity) {
-        val start = activity.findViewById<View>(R.id.startButton)
-        if (start != null && start.visibility != View.VISIBLE) return
         val iv = activity.findViewById<ImageView>(R.id.qrCodeView) ?: return
+        if (iv.tag == QR_TAG) return
         iv.imageTintList = null // ensure no leftover flat tint
         val c = Settings(activity).colorOrNull("logo.tint") ?: Defaults.YELLOW
         iv.colorFilter = luminanceColorize(c)
@@ -514,10 +526,13 @@ object Appearance {
         v.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
     }
 
-    private fun applyText(activity: AppCompatActivity, s: Settings, id: Int, key: String, setText: Boolean) {
+    private fun applyText(
+        activity: AppCompatActivity, s: Settings, id: Int, key: String, setText: Boolean,
+        default: Int = Defaults.YELLOW,
+    ) {
         val v = activity.findViewById<TextView>(id) ?: return
         if (setText) s.text("$key.text").ifEmpty { null }?.let { v.text = it }
-        v.setTextColor(s.colorOrNull("$key.color") ?: Defaults.YELLOW)
+        v.setTextColor(s.colorOrNull("$key.color") ?: default)
         applyTypeface(s, v, key)
         s.size("$key.size").let { if (it > 0f) setTextSizeSp(v, it) }
     }
@@ -545,25 +560,46 @@ object Appearance {
 
     val toggleIds = toggleButtons.map { it.first }
 
-    private val CHECKED = intArrayOf(android.R.attr.state_checked)
-    private val UNCHECKED = intArrayOf(-android.R.attr.state_checked)
 
     private fun dpToPx(activity: AppCompatActivity, dp: Float) =
         (dp * activity.resources.displayMetrics.density).toInt()
 
+    // Each toggle is its own pill, as on the desktop: the group spaces them apart and rounds the
+    // inner corners too, where it would otherwise join them into one segmented bar. Nothing is
+    // filled; the selected button carries the main pill's 3 dp frame and bold label, the others the
+    // regular 1.25 dp one, so a group change restyles the whole group.
     private fun applyToggleButtons(activity: AppCompatActivity, s: Settings) {
+        val groups = toggleButtons.mapNotNull { (id, _) ->
+            activity.findViewById<MaterialButton>(id)?.parent as? MaterialButtonToggleGroup
+        }.distinct()
+        for (group in groups) {
+            group.spacing = dpToPx(activity, 8f)
+            group.innerCornerSize = com.google.android.material.shape.RelativeCornerSize(0.5f)
+            // Once per group, however often onResume re-applies the look.
+            if (group.getTag(R.id.toggleStyleListener) == null) {
+                group.setTag(R.id.toggleStyleListener, true)
+                group.addOnButtonCheckedListener { _, _, _ -> styleToggles(activity, Settings(activity)) }
+            }
+        }
+        styleToggles(activity, s)
+    }
+
+    private fun styleToggles(activity: AppCompatActivity, s: Settings) {
         for ((id, key) in toggleButtons) {
             val b = activity.findViewById<MaterialButton>(id) ?: continue
-            val selFill = s.colorOrNull("$key.selFill") ?: Defaults.YELLOW
-            val unselFill = s.colorOrNull("$key.unselFill") ?: Defaults.BLACK
-            val selText = s.colorOrNull("$key.selText") ?: Defaults.BLACK
-            val unselText = s.colorOrNull("$key.unselText") ?: Defaults.YELLOW
-            val stroke = s.colorOrNull("$key.stroke") ?: Defaults.YELLOW
-            b.backgroundTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(selFill, unselFill))
-            b.setTextColor(ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(selText, unselText)))
-            b.strokeColor = ColorStateList.valueOf(stroke)
-            b.strokeWidth = dpToPx(activity, s.sizeOrNull("$key.strokeWidth") ?: Defaults.BORDER_WIDTH)
-            b.cornerRadius = dpToPx(activity, s.sizeOrNull("$key.cornerRadius") ?: Defaults.CORNER_RADIUS)
+            val checked = b.isChecked
+            val fill = if (checked) s.colorOrNull("$key.selFill") else s.colorOrNull("$key.unselFill")
+            val text = if (checked) s.colorOrNull("$key.selText") else s.colorOrNull("$key.unselText")
+            Theme.pill(
+                b,
+                accent = s.colorOrNull("$key.stroke") ?: Defaults.YELLOW,
+                background = fill ?: Defaults.BLACK,
+                main = checked,
+                width = if (checked) null else s.sizeOrNull("$key.strokeWidth"),
+            )
+            b.setTextColor(Theme.enabledList(text ?: Defaults.YELLOW))
+            b.cornerRadius = dpToPx(activity, s.sizeOrNull("$key.cornerRadius") ?: Theme.PILL_RADIUS_DP)
+            applyTypeface(s, b, key)
         }
     }
 
@@ -586,18 +622,43 @@ object Appearance {
     // pair reads as one control rather than two unrelated ones.
     private fun applyLastFolderButton(activity: AppCompatActivity, s: Settings) {
         val b = activity.findViewById<MaterialButton>(R.id.lastFolderButton) ?: return
-        b.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
-        b.backgroundTintList = ColorStateList.valueOf(s.colorOrNull("start.fill") ?: Defaults.BLACK)
-        b.strokeColor = ColorStateList.valueOf(s.colorOrNull("start.stroke") ?: Defaults.YELLOW)
-        b.strokeWidth = dpToPx(activity, s.sizeOrNull("start.strokeWidth") ?: Defaults.BORDER_WIDTH)
-        b.cornerRadius = dpToPx(activity, s.sizeOrNull("start.cornerRadius") ?: Defaults.CORNER_RADIUS)
+        applyPill(activity, s, b, "start", bgKey = "start.fill", textKey = "start.color", main = false, frameKey = null)
         applyTypeface(s, b, "start")
         s.size("start.size").let { if (it > 0f) setTextSizeSp(b, it) }
     }
 
+    /**
+     * One of the page's action buttons as a theme pill (Theme.pill). The colours and the radius
+     * are still 白い熊's to set on the UI page under [key]; the frame follows "<key>.strokeWidth"
+     * when that is set, and the theme's main / regular weight when it is not. A button that only
+     * borrows another's colours passes frameKey = null, so it keeps its own weight.
+     */
+    private fun applyPill(
+        activity: AppCompatActivity,
+        s: Settings,
+        b: MaterialButton,
+        key: String,
+        bgKey: String,
+        textKey: String,
+        main: Boolean,
+        frameKey: String? = "$key.strokeWidth",
+    ) {
+        val accent = s.colorOrNull("$key.stroke") ?: Defaults.YELLOW
+        Theme.pill(
+            b,
+            accent = accent,
+            background = s.colorOrNull(bgKey) ?: Defaults.BLACK,
+            main = main,
+            width = frameKey?.let { s.sizeOrNull(it) },
+        )
+        // The label keeps its own colour where one is set; the frame's otherwise.
+        b.setTextColor(Theme.enabledList(s.colorOrNull(textKey) ?: accent))
+        b.cornerRadius = dpToPx(activity, s.sizeOrNull("$key.cornerRadius") ?: Theme.PILL_RADIUS_DP)
+        applyTypeface(s, b, key)
+    }
+
     private fun applyStartButton(activity: AppCompatActivity, s: Settings) {
         val start = activity.findViewById<MaterialButton>(R.id.startButton) ?: return
-        start.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
         applyTypeface(s, start, "start")
         s.size("start.size").let { if (it > 0f) setTextSizeSp(start, it) }
         // Pick the label matching the current mode selection (defaults match the XML).
@@ -609,23 +670,17 @@ object Appearance {
         }
         // The directory button says the same thing in either mode; it is only shown while sending.
         activity.findViewById<MaterialButton>(R.id.sendDirButton)?.let { dir ->
-            dir.setTextColor(s.colorOrNull("start.color") ?: Defaults.YELLOW)
             applyTypeface(s, dir, "start")
             s.size("start.size").let { if (it > 0f) setTextSizeSp(dir, it) }
             dir.text = s.textOr("start.dirText", activity.getString(R.string.directoryToSend))
         }
     }
 
-    private fun applySwitch(activity: AppCompatActivity, s: Settings) {
-        val thumbOn = s.colorOrNull("bt.thumbOn") ?: Defaults.BLACK
-        val thumbOff = s.colorOrNull("bt.thumbOff") ?: Defaults.YELLOW
-        val trackOn = s.colorOrNull("bt.trackOn") ?: Defaults.YELLOW
-        val trackOff = s.colorOrNull("bt.trackOff") ?: Defaults.SWITCH_TRACK_OFF
-
+    // The theme's switch — outline and dot, never filled (Theme.styleSwitch).
+    private fun applySwitch(activity: AppCompatActivity) {
         for (switchId in listOf(R.id.bluetoothSwitch, R.id.reachableSwitch)) {
-            val switch = activity.findViewById<androidx.appcompat.widget.SwitchCompat>(switchId) ?: continue
-            switch.thumbTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(thumbOn, thumbOff))
-            switch.trackTintList = ColorStateList(arrayOf(CHECKED, UNCHECKED), intArrayOf(trackOn, trackOff))
+            activity.findViewById<androidx.appcompat.widget.SwitchCompat>(switchId)
+                ?.let { Theme.styleSwitch(it) }
         }
     }
 }

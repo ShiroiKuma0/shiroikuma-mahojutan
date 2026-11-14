@@ -92,27 +92,37 @@ object ForkDialog {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(context, height))
     }
 
-    /** An ArcaneChat-style round pill: black fill, thin accent stroke, accent text, accent ripple. */
-    /** The width of a pill's outline, in pixels — what two halves of a split pill overlap by. */
-    fun strokePx(context: Context): Int = dpF(context, 1.5f).toInt()
+    /** The width of a regular pill's outline, in pixels — what two halves of a split pill overlap by. */
+    fun strokePx(context: Context): Int = dpF(context, Theme.PILL_REGULAR_DP).coerceAtLeast(1f).toInt()
 
     /** Which corners a pill rounds: all of them, or only one end of a pill split in two. */
     enum class Corners { ALL, START, END }
 
+    /**
+     * The theme's pill: never filled — the background shows through an accent outline. [main]
+     * marks the one action its block is for, with a 3 dp frame and a bold label; every other
+     * action has a 1.25 dp frame and a normal one. Disabled, frame and text drop to 38 %.
+     */
     fun pill(
         context: Context,
         s: String,
         corners: Corners = Corners.ALL,
+        main: Boolean = false,
         onClick: () -> Unit,
     ): Button = Button(context).apply {
         text = s
         isAllCaps = false
-        setTextColor(accent(context))
+        val accent = accent(context)
+        setTextColor(Theme.enabledList(accent))
+        typeface = if (main) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         background = RippleDrawable(
-            ColorStateList.valueOf((accent(context) and 0x00FFFFFF) or 0x33000000),
+            ColorStateList.valueOf(Theme.ripple(accent)),
             GradientDrawable().apply {
                 setColor(surface(context))
-                setStroke(strokePx(context), accent(context))
+                setStroke(
+                    if (main) dpF(context, Theme.PILL_MAIN_DP).toInt() else strokePx(context),
+                    Theme.enabledList(accent),
+                )
                 val r = dpF(context, 50f)   // > half the height → a pill
                 when (corners) {
                     Corners.ALL -> cornerRadius = r
@@ -185,10 +195,25 @@ object ForkDialog {
         bodyText: String,
         actions: List<Pair<String, (Dialog) -> Unit>>,
         cancelable: Boolean = false,
+    ): Dialog = custom(
+        context,
+        titleText,
+        label(context, bodyText).apply { setPadding(0, dp(context, 10), 0, 0) },
+        actions,
+        cancelable,
+    )
+
+    /** [info] with any view as its body — a text field, a colour picker. */
+    fun custom(
+        context: Context,
+        titleText: String,
+        body: View,
+        actions: List<Pair<String, (Dialog) -> Unit>>,
+        cancelable: Boolean = true,
     ): Dialog {
         val content = box(context)
         content.addView(heading(context, titleText))
-        content.addView(label(context, bodyText).apply { setPadding(0, dp(context, 10), 0, 0) })
+        content.addView(body)
         val dialog = wrap(context, content, cancelable)
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -199,7 +224,8 @@ object ForkDialog {
         }
         actions.forEachIndexed { i, (buttonLabel, action) ->
             row.addView(
-                pill(context, buttonLabel) { action(dialog) }.apply {
+                // The rightmost action is the one the dialog is for — OK, Save, Open settings.
+                pill(context, buttonLabel, main = i == actions.size - 1) { action(dialog) }.apply {
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                     ).apply { if (i < actions.size - 1) marginEnd = dp(context, 10) }

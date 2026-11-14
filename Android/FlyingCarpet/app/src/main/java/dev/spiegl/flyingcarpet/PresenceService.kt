@@ -229,7 +229,7 @@ class PresenceService : Service() {
     private fun notifyNoDestination(peer: PairedPeer) {
         postArrivalStyle(
             "${peer.displayName} is trying to send you something",
-            "No folder has been chosen to receive into yet. Open this app and pick one.",
+            "No directory has been chosen to receive into yet. Open this app and pick one.",
         )
     }
 

@@ -13,9 +13,23 @@ body {
   padding: 2px 12px;
   background-color: #000000;
   color: #ffff00;
-  border: 1px solid #ffff00;
-  border-radius: 10px;
+  border: 1.25px solid #ffff00;
+  border-radius: 999px;
   cursor: pointer;
+}
+
+/* fork: the theme's switch is 28 px tall, so its label is centred beside it rather than floated
+   against Bootstrap's 1 em one. */
+.form-switch:has(#bluetoothSwitch) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 0;
+}
+#bluetoothSwitch {
+  float: none !important;
+  margin: 0 !important;
+  flex-shrink: 0;
 }
 
 /* fork: the paired-device strip on the main page — a column per device, two pills each,
@@ -42,12 +56,12 @@ body {
   touch-action: none;
 }
 /* A pill with two targets: the name half sends files, the folder half sends a folder. One
-   outline round both, a hairline between — the same 1.5 px as the outline. */
+   outline round both, a hairline between — the same 1.25 px as the outline (a regular pill). */
 .fork-split-pill {
   display: inline-flex;
   align-items: stretch;
   border-radius: 999px;
-  border: 1.5px solid #ffff00;
+  border: 1.25px solid #ffff00;
   background-color: #000000;
   overflow: hidden;
 }
@@ -71,7 +85,7 @@ body {
   justify-content: center;
 }
 .fork-pill-folder {
-  border-left: 1.5px solid #ffff00;
+  border-left: 1.25px solid #ffff00;
   padding: 7px 14px 7px 12px;
 }
 .fork-device-pill svg {
@@ -196,7 +210,7 @@ body {
 
 .fork-note {
   font-size: 13px;
-  opacity: 0.8;
+  color: #c8c800;
   margin-left: 54px;
   margin-top: 6px;
   margin-bottom: 4px;
@@ -218,10 +232,10 @@ body {
 
 .fork-controls {
   margin-left: 72px;
-  margin-top: 6px;
+  margin-top: 4px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 }
 
 /* A kxkb settings row: title over summary at the control indent, optional widget on the right. */
@@ -245,7 +259,52 @@ body {
 
 .fork-setting-summary {
   font-size: 13px;
-  opacity: 0.75;
+  color: #c8c800;
+}
+
+/* A row that does something when pressed: an outlined pill as wide as its label, never filled,
+   its explanation beneath, aligned with the label (the pill's border + padding). 1.25 px frame
+   for an ordinary action, 3 px and bold for the main one of its section. */
+.fork-action-row {
+  margin-left: 72px;
+  padding: 7px 16px 7px 0;
+}
+
+.fork-action-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  border: 1.25px solid currentColor;
+  border-radius: 999px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+.fork-action-pill:hover {
+  background-color: rgba(255, 255, 0, 0.08);
+}
+
+.fork-action-main {
+  border-width: 3px;
+  font-weight: bold;
+}
+
+.fork-action-chevron {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.fork-action-summary {
+  margin-top: 4px;
+  padding-left: 15.25px;
+}
+
+.fork-action-row:has(.fork-action-main) .fork-action-summary {
+  padding-left: 17px;
 }
 
 /* "No backup folder set" — the one non-yellow accent in the fork, everywhere it appears. */
@@ -259,6 +318,8 @@ body {
   flex-direction: row;
   align-items: center;
   gap: 10px;
+  /* Minimal padding: a row is as tall as its content. */
+  padding: 2px 0;
 }
 
 .fork-row .fork-label {
@@ -286,8 +347,8 @@ body {
 .fork-mini-btn {
   background-color: #000000;
   color: #ffff00;
-  border: 1px solid #ffff00;
-  border-radius: 6px;
+  border: 1.25px solid #ffff00;
+  border-radius: 999px;
   padding: 1px 10px;
   font-size: 12px;
   cursor: pointer;
@@ -298,9 +359,44 @@ body {
   margin-top: 4px;
 }
 
+/* No white anywhere in the theme: WebKitGTK draws a range's thumb white and a select grey
+   whatever accent-color says, so both are drawn here instead. */
 input[type='range'] {
-  accent-color: #ffff00;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
   width: 220px;
+  height: 18px;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #8c8c00;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #ffff00;
+  border: none;
+}
+
+select.fork-select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: #000000 !important;
+  color: #ffff00 !important;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffff00' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+}
+select.fork-select option {
+  background-color: #000000;
+  color: #ffff00;
 }
 
 input[type='color'] {
@@ -339,7 +435,7 @@ input[type='color'] {
 
 .fork-panel-desc {
   font-size: 13px;
-  opacity: 0.85;
+  color: #c8c800;
   margin-bottom: 10px;
 }
 
@@ -391,10 +487,11 @@ input[type='color'] {
   height: 16px;
 }
 
-/* An ArcaneChat-style round pill: black fill, thin accent stroke, accent text. */
+/* The theme's pill: never filled — the background shows through an accent outline. 1.25 px for an
+   ordinary action; .fork-main (the one action its block is for) is 3 px and bold. */
 .fork-pill {
   border-radius: 999px;
-  border: 1.5px solid #ffff00;
+  border: 1.25px solid #ffff00;
   background-color: #000000;
   color: #ffff00;
   padding: 7px 20px;
@@ -404,6 +501,12 @@ input[type='color'] {
 
 .fork-pill:hover {
   background-color: rgba(255, 255, 0, 0.12);
+}
+
+.fork-pill.fork-main,
+.fork-btn.fork-main {
+  border-width: 3px;
+  font-weight: bold;
 }
 
 .fork-pill-bar {
@@ -444,7 +547,7 @@ input[type='color'] {
 /* The aside under a ticked "apply to all": present, but not competing with the question. */
 .fork-info-hint {
   font-size: 13px;
-  opacity: 0.7;
+  color: #c8c800;
   padding-left: 24px;
 }
 

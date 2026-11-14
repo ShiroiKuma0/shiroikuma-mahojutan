@@ -166,14 +166,19 @@ object SendSheet {
             this.text = text
             isAllCaps = false
             typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-            // Filled reads as "this is what will happen"; outlined as "this is available".
-            setTextColor(if (selected) surface else accent)
+            // Never filled (the theme's pill): the route that will be taken has the main pill's
+            // 3 dp frame and bold label, the other the regular 1.25 dp one.
+            setTextColor(accent)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             background = RippleDrawable(
-                ColorStateList.valueOf((accent and 0x00FFFFFF) or 0x33000000),
+                ColorStateList.valueOf(Theme.ripple(accent)),
                 GradientDrawable().apply {
-                    setColor(if (selected) accent else surface)
-                    setStroke(ForkDialog.dp(context, 1), accent)
+                    setColor(surface)
+                    setStroke(
+                        if (selected) (Theme.PILL_MAIN_DP * resources.displayMetrics.density).toInt()
+                        else ForkDialog.strokePx(context),
+                        accent,
+                    )
                     cornerRadius = ForkDialog.dp(context, 50).toFloat()
                 },
                 null,

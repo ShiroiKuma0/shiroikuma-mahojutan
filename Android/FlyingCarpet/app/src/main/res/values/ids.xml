@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fork: marks a toggle group whose checked-change listener restyles its pills, so
+         Appearance.apply() adds it only once however often the screen resumes. -->
+    <item name="toggleStyleListener" type="id" />
+</resources>

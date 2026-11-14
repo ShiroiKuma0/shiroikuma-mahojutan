@@ -117,7 +117,7 @@ impl Refusal {
                 "The other device does not accept a transfer this large without asking."
             }
             Refusal::NoDestination => {
-                "The other device has not been given a folder to receive into yet."
+                "The other device has not been given a directory to receive into yet."
             }
         }
     }
@@ -647,6 +647,10 @@ where
             // the hello without a key of ours, and this is where that surfaces.
             ui.output(&format!("Transfer from {} ended: {}", addr, e));
         }
+        // Fork: the session is over either way, so the window can put its progress
+        // readout away. Without this a received transfer left its bars full and its
+        // "0s left" lines up under "Transfer complete" for good (白い熊, 2026-11-14).
+        ui.enable_ui();
     }
 }
 

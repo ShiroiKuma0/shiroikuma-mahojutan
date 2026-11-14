@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -30,7 +32,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import com.google.android.material.button.MaterialButton
@@ -97,14 +98,14 @@ class SettingsActivity : AppCompatActivity() {
             val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "?" }
             text = "Build $ver"
             setPadding(0, dp(2), 0, 0)
-            alpha = 0.6f
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextColor(dimGold)
             applyKind(this, "page.note")
         })
         content.addView(TextView(this).apply {
             text = "Changes apply when you return to the main screen. Leave a field blank, or tap “Default” in a colour picker, to restore the yellow-on-black default. Border widths and corner radii are sliders that start at zero."
             setPadding(0, dp(8), 0, dp(8))
-            alpha = 0.7f
+            setTextColor(dimGold)
             applyKind(this, "page.note")
         })
 
@@ -112,7 +113,7 @@ class SettingsActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(4), 0, dp(8))
         }
-        topButtons.addView(pageButton("Done") { finish() })
+        topButtons.addView(pageButton("Done", main = true) { finish() })
         topButtons.addView(pageButton("Reset all to defaults") { confirmResetAll() }.apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -256,13 +257,18 @@ class SettingsActivity : AppCompatActivity() {
         }
 
     // The one-line explanation shown under some section titles.
+    // Dim gold, with no rule: it belongs to the section, not to any one row.
     private fun sectionNote(text: String) = TextView(this).apply {
         this.text = text
-        setPadding(elementIndent, dp(6), dp(16), dp(2))
-        alpha = 0.7f
+        setPadding(elementIndent, dp(4), dp(16), dp(2))
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        setTextColor(dimGold)
         applyKind(this, "page.note")
     }
+
+    // Explanations and the rule beside a described row: the theme's dim gold, which 白い熊 can
+    // change as "Notes, hints and explanations" under "This settings page".
+    private val dimGold: Int get() = Theme.dimGold(this)
 
     private fun dpPx(v: Float) = (v * resources.displayMetrics.density).toInt()
 
@@ -289,17 +295,29 @@ class SettingsActivity : AppCompatActivity() {
         })
     }
 
-    // The page's own buttons (Done / Reset / Apply). A MaterialButton so border + corner radius apply.
-    // Styled from "page.button.*", defaulting to black fill, yellow text + 1 dp border, 10 dp radius.
-    private fun pageButton(label: String, onClick: () -> Unit) = MaterialButton(this).apply {
-        text = label
-        isAllCaps = false
-        setOnClickListener { onClick() }
-        stylePageButton(this)
-    }
+    // The page's own buttons (Done / Reset / Apply): the theme's pills (Theme.pill), Done the main
+    // one. Colours, font, radius and — when set — the frame come from "page.button.*".
+    private fun pageButton(label: String, main: Boolean = false, onClick: () -> Unit) =
+        MaterialButton(this).apply {
+            text = label
+            setOnClickListener { onClick() }
+            stylePageButton(this, main)
+        }
 
-    private fun stylePageButton(b: MaterialButton) {
-        b.setTextColor(settings.colorOrNull("page.button.color") ?: Defaults.YELLOW)
+    private fun stylePageButton(b: MaterialButton, main: Boolean) {
+        Theme.pill(
+            b,
+            accent = settings.colorOrNull("page.button.stroke") ?: Defaults.YELLOW,
+            background = settings.colorOrNull("page.button.bg") ?: Defaults.BLACK,
+            main = main,
+            width = settings.sizeOrNull("page.button.strokeWidth"),
+        )
+        b.setTextColor(Theme.enabledList(settings.colorOrNull("page.button.color") ?: Defaults.YELLOW))
+        b.minHeight = 0
+        b.minimumHeight = 0
+        b.insetTop = 0
+        b.insetBottom = 0
+        b.setPadding(dp(16), dp(6), dp(16), dp(6))
         val family = settings.family("page.button.family")
         val style = settings.style("page.button.style")
         if (family.isNotEmpty() || style >= 0) {
@@ -307,10 +325,7 @@ class SettingsActivity : AppCompatActivity() {
             b.typeface = FontUtil.typeface(family, eff) ?: Typeface.create(b.typeface, eff)
         }
         settings.size("page.button.size").let { if (it > 0f) b.setTextSize(TypedValue.COMPLEX_UNIT_SP, it) }
-        b.backgroundTintList = ColorStateList.valueOf(settings.colorOrNull("page.button.bg") ?: Defaults.BLACK)
-        b.strokeColor = ColorStateList.valueOf(settings.colorOrNull("page.button.stroke") ?: Defaults.YELLOW)
-        b.strokeWidth = dpPx(settings.sizeOrNull("page.button.strokeWidth") ?: Defaults.BORDER_WIDTH)
-        b.cornerRadius = dpPx(settings.sizeOrNull("page.button.cornerRadius") ?: Defaults.CORNER_RADIUS)
+        b.cornerRadius = dpPx(settings.sizeOrNull("page.button.cornerRadius") ?: Theme.PILL_RADIUS_DP)
     }
 
     // Applies the settings page's own "page.<kind>.*" styling (colour / font / style / size) to one of
@@ -334,8 +349,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun propertyLabel(text: String) = TextView(this).apply {
         this.text = text
-        setPadding(0, dp(10), 0, dp(2))
-        alpha = 0.75f
+        setPadding(0, dp(4), 0, dp(2))
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         applyKind(this, "page.label")
     }
@@ -576,7 +590,7 @@ class SettingsActivity : AppCompatActivity() {
         val summaryView = rowSummary(summary, ExportImportStatus.color(this, warn))
         exportSummaryView = summaryView
         parent.addView(
-            settingRow("Export / Import…", summaryView) {
+            actionRow("Export / Import…", summaryView, main = true) {
                 val panel = ExportImportPanel(this) { finish() }
                 exportPanel = panel
                 panel.show(onDismiss = { exportPanel = null; refreshExportSummary() })
@@ -587,9 +601,8 @@ class SettingsActivity : AppCompatActivity() {
         // removed because it is the only way to close this app off, and a feature that can be
         // turned on but never off is one 白い熊 cannot retreat from.
         val switch = SwitchCompat(this).apply {
+            Theme.styleSwitch(this)
             isChecked = AutomationAuth.enabled(this@SettingsActivity)
-            thumbTintList = ColorStateList.valueOf(accent)
-            trackTintList = ColorStateList.valueOf(accent)
             setOnCheckedChangeListener { _, checked -> AutomationAuth.setEnabled(this@SettingsActivity, checked) }
         }
         parent.addView(
@@ -603,17 +616,12 @@ class SettingsActivity : AppCompatActivity() {
         // Token row — tap copies the WHOLE token, "Regenerate" replaces it. Built before the switch
         // that governs it so the switch's listener has a row to show and hide.
         val tokenSummary = rowSummary(AutomationAuth.abbreviate(AutomationAuth.token(this)), null)
-        val regenerate = TextView(this).apply {
-            text = "Regenerate"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(dp(12), dp(8), dp(4), dp(8))
-            applyKind(this, "page.label")
-            setTextColor(accent)
-            setOnClickListener {
-                tokenSummary.text = AutomationAuth.abbreviate(AutomationAuth.regenerateToken(this@SettingsActivity))
-                toast("New token — update anywhere you pasted the old one.")
-            }
+        val regenerate = ForkDialog.pill(this, "Regenerate") {
+            tokenSummary.text = AutomationAuth.abbreviate(AutomationAuth.regenerateToken(this@SettingsActivity))
+            toast("New token — update anywhere you pasted the old one.")
+        }.apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
         }
         val tokenRow = settingRow("Automation token", tokenSummary, widget = regenerate) {
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -627,9 +635,8 @@ class SettingsActivity : AppCompatActivity() {
         // the case this contract now serves is 応用管理 restoring apps onto a clean phone where
         // nothing has been configured and nobody has pasted anything.
         val requireToken = SwitchCompat(this).apply {
+            Theme.styleSwitch(this)
             isChecked = AutomationAuth.requireToken(this@SettingsActivity)
-            thumbTintList = ColorStateList.valueOf(accent)
-            trackTintList = ColorStateList.valueOf(accent)
             setOnCheckedChangeListener { _, checked ->
                 AutomationAuth.setRequireToken(this@SettingsActivity, checked)
                 // Hidden when the token is not being asked for: a 48-character secret sitting under
@@ -668,6 +675,7 @@ class SettingsActivity : AppCompatActivity() {
         )
 
         val reachable = SwitchCompat(this).apply {
+            Theme.styleSwitch(this)
             // The setting alone, as on the main page: the service follows it (MainActivity
             // restarts a killed one on resume), so "on but not running" is a moment, not a
             // state worth a different switch position.
@@ -699,6 +707,7 @@ class SettingsActivity : AppCompatActivity() {
         )
 
         val wake = SwitchCompat(this).apply {
+            Theme.styleSwitch(this)
             isChecked = pairing.bleWake
             isEnabled = pairing.stayReachable
             setOnCheckedChangeListener { _, checked ->
@@ -734,19 +743,18 @@ class SettingsActivity : AppCompatActivity() {
         )
 
         container.addView(
-            settingRow(
+            actionRow(
                 "Battery settings for this app",
                 rowSummary(
                     "Android stops a background app from being reached. Exempt this one here.",
                     null,
                 ),
-                onClick = { openBatterySettings() },
-            )
+            ) { openBatterySettings() }
         )
 
         val peers = pairing.peers()
         container.addView(
-            settingRow(
+            actionRow(
                 "Devices",
                 rowSummary(
                     when {
@@ -756,18 +764,18 @@ class SettingsActivity : AppCompatActivity() {
                     },
                     if (pairing.isPaired) null else Defaults.RED,
                 ),
-                onClick = {
-                    // The list, the pairing codes and the per-device rules all live on one
-                    // sheet, reached from the main screen too: two places that both half-do
-                    // it would be worse than one that does all of it.
-                    startActivity(
-                        Intent(this, MainActivity::class.java)
-                            .setAction(MainActivity.ACTION_OPEN_DEVICES)
-                            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    )
-                    finish()
-                },
-            )
+                main = true,
+            ) {
+                // The list, the pairing codes and the per-device rules all live on one
+                // sheet, reached from the main screen too: two places that both half-do
+                // it would be worse than one that does all of it.
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .setAction(MainActivity.ACTION_OPEN_DEVICES)
+                        .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+                finish()
+            }
         )
     }
 
@@ -775,17 +783,30 @@ class SettingsActivity : AppCompatActivity() {
         val field = EditText(this).apply {
             setText(pairing.name)
             setSingleLine()
+            setTextColor(accent)
+            backgroundTintList = ColorStateList.valueOf(accent)
         }
-        AlertDialog.Builder(this)
-            .setTitle("This device's name")
-            .setMessage("What the other devices call this one.")
-            .setView(field)
-            .setPositiveButton("Set") { _, _ ->
-                pairing.name = field.text.toString()
-                recreate()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(
+                ForkDialog.label(this@SettingsActivity, "What the other devices call this one.", color = dimGold)
+                    .apply { setPadding(0, dp(8), 0, dp(4)) },
+            )
+            addView(field)
+        }
+        ForkDialog.custom(
+            this,
+            "This device's name",
+            body,
+            listOf(
+                "Cancel" to { d: android.app.Dialog -> d.dismiss() },
+                "Set" to { d: android.app.Dialog ->
+                    d.dismiss()
+                    pairing.name = field.text.toString()
+                    recreate()
+                },
+            ),
+        )
     }
 
     /**
@@ -801,11 +822,11 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         if (!pairing.isPaired) {
-            AlertDialog.Builder(this)
-                .setTitle("Nothing to be reachable for")
-                .setMessage("Pair this device with another one first; there is no one to receive from yet.")
-                .setPositiveButton("OK", null)
-                .show()
+            ForkDialog.alert(
+                this,
+                "Nothing to be reachable for",
+                "Pair this device with another one first; there is no one to receive from yet.",
+            )
             return
         }
         pairing.stayReachable = true
@@ -830,15 +851,13 @@ class SettingsActivity : AppCompatActivity() {
             requestReachable()
         } else {
             // Said plainly rather than leaving a switch that silently refuses to stay on.
-            AlertDialog.Builder(this)
-                .setTitle("Notifications are required")
-                .setMessage(
-                    "Android only lets an app stay reachable in the background while it shows " +
-                        "a notification saying so. Without that permission this switch cannot " +
-                        "be turned on."
-                )
-                .setPositiveButton("OK", null)
-                .show()
+            ForkDialog.alert(
+                this,
+                "Notifications are required",
+                "Android only lets an app stay reachable in the background while it shows " +
+                    "a notification saying so. Without that permission this switch cannot " +
+                    "be turned on.",
+            )
             recreate()
         }
     }
@@ -868,9 +887,18 @@ class SettingsActivity : AppCompatActivity() {
     ): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(indent, dp(7), dp(16), dp(7))
+        // Minimal padding: the row is as tall as its content, never a 48 dp list item.
+        setPadding(indent, dp(2), dp(16), dp(2))
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        // The thin dim-gold rule down the item's left edge, ~10 dp before its text.
+        addView(
+            View(this@SettingsActivity).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(2), ViewGroup.LayoutParams.MATCH_PARENT)
+                    .apply { marginEnd = dp(10) }
+                setBackgroundColor(dimGold)
+            },
         )
         onClick?.let {
             isClickable = true
@@ -887,6 +915,7 @@ class SettingsActivity : AppCompatActivity() {
                     TextView(this@SettingsActivity).apply {
                         text = title
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                        setTypeface(typeface, Typeface.BOLD)
                         applyKind(this, "page.label")
                     },
                 )
@@ -896,23 +925,83 @@ class SettingsActivity : AppCompatActivity() {
         widget?.let { addView(it) }
     }
 
+    /**
+     * A row that does something when pressed, drawn so that it says so (the black-yellow theme's
+     * settings-page rule): an outlined pill as wide as its label, never filled and never stretched
+     * across the line, with the explanation beneath it aligned with the label. A 3 dp frame and
+     * bold for the main action of its section, 1.25 dp otherwise; › when it opens something. The
+     * pill alone is the touch target — the explanation is not. Rows with their own control
+     * (a switch, a value) stay [settingRow]s.
+     */
+    private fun actionRow(
+        title: String,
+        summaryView: TextView,
+        main: Boolean = false,
+        opens: Boolean = true,
+        onClick: () -> Unit,
+    ): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(indent, dp(3), dp(16), dp(3))
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        val stroke = dpPx(if (main) 3f else 1.25f)
+        val padH = dp(14)
+        val pill = TextView(this@SettingsActivity).apply {
+            text = if (opens) "$title  ›" else title
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            applyKind(this, "page.label")
+            if (main) setTypeface(typeface, Typeface.BOLD)
+            setPadding(padH, dp(9), padH, dp(9))
+            val shape = GradientDrawable().apply {
+                cornerRadius = dp(100).toFloat()
+                setStroke(stroke, currentTextColor)
+                setColor(Color.TRANSPARENT)
+            }
+            val mask = GradientDrawable().apply {
+                cornerRadius = dp(100).toFloat()
+                setColor(Color.WHITE)
+            }
+            background = RippleDrawable(
+                ColorStateList.valueOf(Theme.ripple(currentTextColor)),
+                shape,
+                mask,
+            )
+            isClickable = true
+            setOnClickListener { onClick() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        addView(pill)
+        // Under the label, not under the pill's edge.
+        summaryView.setPadding(stroke + padH, dp(3), 0, 0)
+        addView(summaryView)
+    }
+
+    // Dim gold, never grey; a colour that means something (red: "fix this") overrides it.
     private fun rowSummary(text: String, color: Int?) = TextView(this).apply {
         this.text = text
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        setTextColor(dimGold)
         applyKind(this, "page.note")
         color?.let { setTextColor(it) }
-        if (color == null) alpha = 0.75f
     }
 
     private fun confirmResetAll() {
-        AlertDialog.Builder(this)
-            .setTitle("Reset all UI settings?")
-            .setMessage("This clears every colour, text, font, size, and border override and restores the yellow-on-black defaults. (Added custom fonts are also cleared.)")
-            .setPositiveButton("Reset") { _, _ ->
-                settings.clearAll()
-                recreate()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        ForkDialog.info(
+            this,
+            "Reset all UI settings?",
+            "This clears every colour, text, font, size, and border override and restores the yellow-on-black defaults. (Added custom fonts are also cleared.)",
+            listOf(
+                "Cancel" to { d: android.app.Dialog -> d.dismiss() },
+                "Reset" to { d: android.app.Dialog ->
+                    d.dismiss()
+                    settings.clearAll()
+                    recreate()
+                },
+            ),
+            cancelable = true,
+        )
     }
 }

@@ -94,7 +94,7 @@ enum class Refusal(val code: Long, val message: String) {
         "The other device is not set to accept transfers from this one without asking."
     ),
     TOO_LARGE(4, "The other device does not accept a transfer this large without asking."),
-    NO_DESTINATION(5, "The other device has not been given a folder to receive into yet.");
+    NO_DESTINATION(5, "The other device has not been given a directory to receive into yet.");
 
     companion object {
         fun fromCode(code: Long): Refusal? = entries.find { it.code == code }

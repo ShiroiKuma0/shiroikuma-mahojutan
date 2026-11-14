@@ -500,7 +500,7 @@ class PairedController(
         val destination = peer.receiveDir?.let(Uri::parse) ?: receiveDirProvider()
         if (destination == null) {
             viewModel.outputText(
-                "A paired device wants to send over a hotspot, but no folder has been chosen " +
+                "A paired device wants to send over a hotspot, but no directory has been chosen " +
                     "to receive into. Pick one and try again."
             )
             return false

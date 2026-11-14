@@ -32,7 +32,7 @@ object DeviceMenu {
     ) {
         val items = listOf(
             "Rename…",
-            "Receive folder…",
+            "Receive directory…",
             if (peer.autoAccept) "Ask before accepting" else "Accept without asking",
             "Send over hotspot",
             "Receive over hotspot",
@@ -83,7 +83,7 @@ object DeviceMenu {
         val bar = LinearLayout(activity).apply { gravity = Gravity.END }
         bar.addView(ForkDialog.pill(activity, "Cancel") { dialog.dismiss() })
         bar.addView(
-            ForkDialog.pill(activity, "Set") {
+            ForkDialog.pill(activity, "Set", main = true) {
                 controller.pairing.setAlias(peer.deviceId, field.text.toString())
                 dialog.dismiss()
                 onChanged()
@@ -110,7 +110,7 @@ object DeviceMenu {
         box.addView(
             ForkDialog.label(
                 activity,
-                "It disappears from the list, along with the folder and name set for it here. " +
+                "It disappears from the list, along with the directory and name set for it here. " +
                     "It can be found again by looking, as long as both devices still share the " +
                     "same pairing key — this does not un-pair anything.",
                 13f,
@@ -121,7 +121,7 @@ object DeviceMenu {
         val bar = LinearLayout(activity).apply { gravity = Gravity.END }
         bar.addView(ForkDialog.pill(activity, "Cancel") { dialog.dismiss() })
         bar.addView(
-            ForkDialog.pill(activity, "Forget") {
+            ForkDialog.pill(activity, "Forget", main = true) {
                 controller.pairing.forgetPeer(peer.deviceId)
                 dialog.dismiss()
                 onChanged()

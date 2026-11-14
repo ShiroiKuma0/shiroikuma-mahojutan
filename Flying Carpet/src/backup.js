@@ -301,7 +301,7 @@ function fontEntries() {
  */
 export async function runExport(cats, appVersion) {
   const dir = exportDir();
-  if (!dir) throw new Error('no backup folder set');
+  if (!dir) throw new Error('no backup directory set');
 
   const entries = [];
   const lines = [];

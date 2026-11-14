@@ -304,7 +304,7 @@ private fun MainViewModel.resolveExistingFile(filename: String): ExistingFile? {
     }
     // No cache outside a receive transfer: the original findFile() walk.
     var target: DocumentFile? = DocumentFile.fromTreeUri(getApplication(), receiveDir)
-        ?: throw Exception("Error reading folder: $receiveDir")
+        ?: throw Exception("Error reading directory: $receiveDir")
     for (component in filename.split('/')) {
         target = target?.findFile(component) ?: return null
     }

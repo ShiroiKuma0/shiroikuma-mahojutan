@@ -12,7 +12,6 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.net.wifi.WifiManager
-import android.app.AlertDialog
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -288,11 +287,11 @@ class MainActivity : AppCompatActivity() {
         if (viewModel.mode == Mode.Sending) {
             viewModel.outputText(
                 "\nFiles selected. Now on the OTHER device: choose Receive and pick the " +
-                        "destination folder."
+                        "destination directory."
             )
         } else {
             viewModel.outputText(
-                "\nDestination folder selected. Now on the OTHER device: choose Send and pick " +
+                "\nDestination directory selected. Now on the OTHER device: choose Send and pick " +
                         "the files to send."
             )
         }
@@ -371,9 +370,9 @@ class MainActivity : AppCompatActivity() {
                         "Could not read $name, ignoring it." +
                                 if (!hasAllFilesAccess()) {
                                     " Give this app All-Files-Access in Android's settings, or" +
-                                            " send the folder with \"Directory to send\"."
+                                            " send the directory with \"Directory to send\"."
                                 } else {
-                                    " Only a folder on this device's own storage can be sent;" +
+                                    " Only a directory on this device's own storage can be sent;" +
                                             " one held by a cloud app cannot."
                                 }
                     )
@@ -409,7 +408,7 @@ class MainActivity : AppCompatActivity() {
         val from = when (folderNames.size) {
             0 -> "another app"
             1 -> folderNames[0]
-            else -> "${folderNames.size} folders"
+            else -> "${folderNames.size} directories"
         }
         viewModel.outputText(
             "Sharing $count file${if (count == 1) "" else "s"} from $from."
@@ -444,7 +443,7 @@ class MainActivity : AppCompatActivity() {
                 null
             } ?: uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
         }
-        return name?.takeIf { it.isNotBlank() }?.let { "\"$it\"" } ?: "the shared folder"
+        return name?.takeIf { it.isNotBlank() }?.let { "\"$it\"" } ?: "the shared directory"
     }
 
     // The share sheet hands us files; it does not hand us a decision. This used to call
@@ -584,7 +583,7 @@ class MainActivity : AppCompatActivity() {
                 // the sender two feet away was advertising perfectly well.
                 beginTransferWithSelection()
             } ?: run {
-                viewModel.outputText("No folder selected.")
+                viewModel.outputText("No directory selected.")
                 viewModel.cleanUpTransfer()
                 return@registerForActivityResult
             }
@@ -624,7 +623,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (viewModel.files.isEmpty()) {
-            viewModel.outputText("That folder is empty.")
+            viewModel.outputText("That directory is empty.")
             viewModel.cleanUpTransfer()
             return false
         }
@@ -805,7 +804,7 @@ class MainActivity : AppCompatActivity() {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                 )
             } catch (e: Exception) {
-                Log.i("Paired", "Could not persist the folder grant: $e")
+                Log.i("Paired", "Could not persist the directory grant: $e")
             }
             pairedController.pairing.setReceiveDir(peer.deviceId, uri.toString())
             viewModel.outputText("Files from ${peer.displayName} will land in ${uri.lastPathSegment}.")
@@ -885,7 +884,7 @@ class MainActivity : AppCompatActivity() {
                         // The Wi-Fi mark says which route this pill takes.
                         ForkDialog.icon(it, R.drawable.ic_wifi)
                     },
-                    folderHalf("Send a folder to $name over this network") {
+                    folderHalf("Send a directory to $name over this network") {
                         pickForPeer(peer, folder = true)
                     },
                     column, rows, peer,
@@ -896,7 +895,7 @@ class MainActivity : AppCompatActivity() {
                     ForkDialog.pill(this, "⚡ $name", ForkDialog.Corners.START) {
                         pairedOverHotspot(peer, sending = true)
                     },
-                    folderHalf("Send a folder to $name over a hotspot") {
+                    folderHalf("Send a directory to $name over a hotspot") {
                         pairedOverHotspot(peer, sending = true, folder = true)
                     },
                     column, rows, peer,
@@ -949,7 +948,7 @@ class MainActivity : AppCompatActivity() {
 
     /** The folder half of a split pill: the glyph alone, with the words on a long press. */
     private fun folderHalf(what: String, onClick: () -> Unit): Button =
-        ForkDialog.pill(this, "", ForkDialog.Corners.END, onClick).apply {
+        ForkDialog.pill(this, "", ForkDialog.Corners.END, onClick = onClick).apply {
             ForkDialog.icon(this, R.drawable.ic_folder, sizeDp = 18)
             compoundDrawablePadding = 0
             setPadding(
@@ -1090,7 +1089,7 @@ class MainActivity : AppCompatActivity() {
         val dir = lastReceiveDir()
         if (dir == null) {
             viewModel.outputText(
-                "Pick a folder to receive into first — press Receive and choose one, then try again."
+                "Pick a directory to receive into first — press Receive and choose one, then try again."
             )
             return
         }
@@ -1186,15 +1185,13 @@ class MainActivity : AppCompatActivity() {
                     requestReachable()
                 } else {
                     refreshReachableSwitch()
-                    AlertDialog.Builder(this)
-                        .setTitle("Cannot stay reachable")
-                        .setMessage(
-                            "Android only lets an app keep running in the background while " +
-                                "it shows a notification, and notifications were declined. " +
-                                "Allow them for this app in Settings, then try again."
-                        )
-                        .setPositiveButton("OK", null)
-                        .show()
+                    ForkDialog.alert(
+                        this,
+                        "Cannot stay reachable",
+                        "Android only lets an app keep running in the background while " +
+                            "it shows a notification, and notifications were declined. " +
+                            "Allow them for this app in Settings, then try again.",
+                    )
                 }
             }
         reachableSwitch = findViewById(id.reachableSwitch)
@@ -1438,7 +1435,7 @@ class MainActivity : AppCompatActivity() {
         // Red while it is on, like the UI page's row: this is the one switch with a standing
         // cost, and the colour says so every time the screen is looked at.
         hint.setTextColor(
-            if (on) Defaults.RED else (settings.colorOrNull("bluetoothHint.color") ?: Defaults.YELLOW)
+            if (on) Defaults.RED else (settings.colorOrNull("bluetoothHint.color") ?: Theme.DIM_GOLD)
         )
     }
 
@@ -1457,12 +1454,16 @@ class MainActivity : AppCompatActivity() {
         }
         if (!pairedController.isPaired) {
             refreshReachableSwitch()
-            AlertDialog.Builder(this)
-                .setTitle("Nothing to be reachable for")
-                .setMessage("Pair this phone with another device first; there is no one to receive from yet.")
-                .setPositiveButton("Pair…") { _, _ -> openDevicesSheet() }
-                .setNegativeButton("Cancel", null)
-                .show()
+            ForkDialog.info(
+                this,
+                "Nothing to be reachable for",
+                "Pair this phone with another device first; there is no one to receive from yet.",
+                listOf(
+                    "Cancel" to { d: android.app.Dialog -> d.dismiss() },
+                    "Pair…" to { d: android.app.Dialog -> d.dismiss(); openDevicesSheet() },
+                ),
+                cancelable = true,
+            )
             return
         }
         pairedController.pairing.stayReachable = true
@@ -1869,7 +1870,7 @@ class MainActivity : AppCompatActivity() {
                 ).apply { marginEnd = ForkDialog.dp(this@MainActivity, 10) }
             },
         )
-        row.addView(ForkDialog.pill(this, "OK") { accept(input.text.toString().trim()) })
+        row.addView(ForkDialog.pill(this, "OK", main = true) { accept(input.text.toString().trim()) })
         box.addView(row)
 
         dialog.show()
@@ -1901,6 +1902,7 @@ class MainActivity : AppCompatActivity() {
             // occupies this ImageView is tinted yellow by the fork, and that filter outlives the
             // drawable, so without clearing it here the code came out yellow on black.
             qrCode.colorFilter = null
+            qrCode.tag = Appearance.QR_TAG
             qrCode.setImageBitmap(viewModel.qrBitmap)
             qrCode.bringToFront()
         }
@@ -1914,6 +1916,7 @@ class MainActivity : AppCompatActivity() {
             val qrCode = findViewById<ImageView>(id.qrCodeView)
             val drawable = AppCompatResources.getDrawable(applicationContext, R.drawable.icon1024)
             qrCode.setImageDrawable(drawable)
+            qrCode.tag = null
             // The logo is back — re-apply its tint (cleared while a QR code was shown).
             Appearance.applyLogoTint(this)
         }
@@ -1925,12 +1928,15 @@ class MainActivity : AppCompatActivity() {
             val qrCode = findViewById<ImageView>(id.qrCodeView)
             viewModel.qrBitmap = getQrCodeBitmap(ssid, password)
             qrCode.colorFilter = null   // never tint a QR code — it must stay black/white to scan
+            qrCode.tag = Appearance.QR_TAG
             qrCode.setImageBitmap(viewModel.qrBitmap)
             qrCode.bringToFront()
         } else { // peer is macOS, because if windows or linux we wouldn't be hosting
-            val alertFragment =
-                Alert("Start the transfer on macOS and enter these when prompted:\n\nSSID: $ssid\nPassword: $password")
-            alertFragment.show(supportFragmentManager, "alert")
+            ForkDialog.alert(
+                this,
+                "Enter these on the Mac",
+                "Start the transfer on macOS and enter these when prompted:\n\nSSID: $ssid\nPassword: $password",
+            )
         }
     }
 
@@ -2061,12 +2067,17 @@ class MainActivity : AppCompatActivity() {
             4 -> peerGroup.check(id.macButton)
             5 -> peerGroup.check(id.windowsButton)
         }
-        val transferRunning = savedInstanceState.getBoolean("transferRunning")
+        // Fork: only if the transfer is still alive. When the process was killed in the
+        // background the Bundle still says "running", and the screen came back with Cancel
+        // showing over an empty log and nothing behind it (白い熊, 2026-11-14).
+        val transferRunning = savedInstanceState.getBoolean("transferRunning") &&
+            viewModel.transferIsRunning
         toggleUI(!transferRunning)
         if (transferRunning) {
             viewModel.qrBitmap?.let {
                 findViewById<ImageView>(id.qrCodeView).apply {
                     colorFilter = null   // restored view is showing a QR code; keep it untinted
+                    tag = Appearance.QR_TAG
                     setImageBitmap(it)
                 }
             }

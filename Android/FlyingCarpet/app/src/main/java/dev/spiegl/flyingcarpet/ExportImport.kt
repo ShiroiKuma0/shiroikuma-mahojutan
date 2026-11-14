@@ -102,7 +102,7 @@ class ExportImportPanel(
         content.addView(
             ForkDialog.label(
                 activity,
-                "Save everything you have set in this app to one .zip in your backup folder, or " +
+                "Save everything you have set in this app to one .zip in your backup directory, or " +
                     "restore it from one. Importing merges: categories the file doesn’t carry are left alone.",
                 13f,
                 color = dim,
@@ -114,10 +114,10 @@ class ExportImportPanel(
 
         if (!hasAllFilesAccess()) {
             content.addView(
-                ForkDialog.label(activity, "This app needs All-Files-Access to write into your backup folder.", 13f, color = red),
+                ForkDialog.label(activity, "This app needs All-Files-Access to write into your backup directory.", 13f, color = red),
             )
             content.addView(
-                ForkDialog.pill(activity, "Grant access") { requestAllFilesAccess() }.apply {
+                ForkDialog.pill(activity, "Grant access", main = true) { requestAllFilesAccess() }.apply {
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                     ).apply { topMargin = dp(8) }
@@ -151,11 +151,11 @@ class ExportImportPanel(
                 cornerRadius = dp(10).toFloat()
             }
             setOnClickListener { editDirectory(path) }
-            addView(ForkDialog.label(activity, "Backup folder", 12f))
+            addView(ForkDialog.label(activity, "Backup directory", 12f))
             addView(
                 ForkDialog.label(
                     activity,
-                    path ?: "No backup folder set — tap to choose one",
+                    path ?: "No backup directory set — tap to choose one",
                     15f,
                     color = if (path == null) red else dim,
                     bold = true,
@@ -177,9 +177,9 @@ class ExportImportPanel(
     }
 
     private fun lastExportStatus(): Pair<String, Boolean> {
-        if (Backup.exportDir(activity) == null) return "No backup folder set." to true
+        if (Backup.exportDir(activity) == null) return "No backup directory set." to true
         val newest = Backup.listBackups(activity).firstOrNull()
-            ?: return "No backup in this folder yet." to true
+            ?: return "No backup in this directory yet." to true
         val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date(newest.lastModified()))
         return "Latest export: $stamp (${Backup.humanSize(newest.length())})" to false
     }
@@ -222,7 +222,7 @@ class ExportImportPanel(
                 ).apply { marginEnd = dp(8) }
             },
         )
-        addView(ForkDialog.pill(activity, "Export") { onExport() })
+        addView(ForkDialog.pill(activity, "Export", main = true) { onExport() })
     }
 
     // ── Export ───────────────────────────────────────────────────────────────────────────────
@@ -273,7 +273,7 @@ class ExportImportPanel(
         }
         val backups = Backup.listBackups(activity)
         if (backups.isEmpty()) {
-            ForkDialog.alert(activity, "Import", "No backup of this app was found in the backup folder.")
+            ForkDialog.alert(activity, "Import", "No backup of this app was found in the backup directory.")
             return
         }
         ForkDialog.chooser(
@@ -336,11 +336,11 @@ class ExportImportPanel(
     /** Type a path, or browse for one. Same model as the sister apps: a real path, not a SAF tree. */
     private fun editDirectory(current: String?) {
         val content = ForkDialog.box(activity)
-        content.addView(ForkDialog.heading(activity, "Backup folder", sizeSp = 17f))
+        content.addView(ForkDialog.heading(activity, "Backup directory", sizeSp = 17f))
         content.addView(
             ForkDialog.label(
                 activity,
-                "The folder every 白い熊 app writes its backups into, e.g. /storage/emulated/0/〇/[979] バックアップ.",
+                "The directory every 白い熊 app writes its backups into, e.g. /storage/emulated/0/〇/[979] バックアップ.",
                 13f, color = dim,
             ).apply { setPadding(0, dp(8), 0, dp(8)) },
         )
@@ -377,7 +377,7 @@ class ExportImportPanel(
             },
         )
         row.addView(
-            ForkDialog.pill(activity, "Save") {
+            ForkDialog.pill(activity, "Save", main = true) {
                 d.dismiss()
                 saveDirectory(input.text.toString())
             },
@@ -399,7 +399,7 @@ class ExportImportPanel(
         val subDirs = dir.listFiles { f -> f.isDirectory }?.sortedBy { it.name.lowercase() } ?: emptyList()
         val labels = mutableListOf<String>()
         val targets = mutableListOf<File?>()
-        labels.add("✓ Use this folder"); targets.add(null)
+        labels.add("✓ Use this directory"); targets.add(null)
         dir.parentFile?.let { labels.add(".. (${it.name.ifBlank { "/" }})"); targets.add(it) }
         subDirs.forEach { labels.add("📁 ${it.name}"); targets.add(it) }
         ForkDialog.chooser(activity, dir.absolutePath, labels) { which ->
@@ -436,7 +436,7 @@ class ExportImportPanel(
  */
 object ExportImportStatus {
     fun summary(context: Context): Pair<String, Boolean> {
-        val path = Backup.exportDir(context) ?: return "No backup folder set" to true
+        val path = Backup.exportDir(context) ?: return "No backup directory set" to true
         val newest = Backup.listBackups(context).firstOrNull()
             ?: return "$path — no backup yet" to true
         val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date(newest.lastModified()))

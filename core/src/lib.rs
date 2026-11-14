@@ -436,7 +436,7 @@ pub async fn start_transfer<T: UI>(
         match receive_dir {
             Some(folder) => Mode::Receive(PathBuf::from(folder)),
             None => {
-                ui.output("Error: receive mode selected but no destination folder was chosen.");
+                ui.output("Error: receive mode selected but no destination directory was chosen.");
                 return None;
             }
         }

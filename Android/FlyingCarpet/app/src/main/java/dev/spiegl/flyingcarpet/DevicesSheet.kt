@@ -188,7 +188,7 @@ object DevicesSheet {
         val folderLine = ForkDialog.label(
             context,
             peer.receiveDir?.let { "Receives into ${folderName(context, it)}" }
-                ?: "No folder set — transfers from this device will be refused",
+                ?: "No directory set — transfers from this device will be refused",
             12f,
             color = if (peer.receiveDir == null) Color.parseColor("#FFFF5252") else null,
         ).apply {
@@ -258,7 +258,7 @@ object DevicesSheet {
             }
         )
         bar.addView(
-            ForkDialog.pill(context, "＋ Pair new device") {
+            ForkDialog.pill(context, "＋ Pair new device", main = true) {
                 showPairChoices(activity, controller, dialog, refresh)
             }
         )
@@ -356,7 +356,7 @@ object DevicesSheet {
 
         val dialog = ForkDialog.wrap(context, box)
         val bar = LinearLayout(context).apply { gravity = Gravity.END }
-        bar.addView(ForkDialog.pill(context, "Done") { dialog.dismiss() })
+        bar.addView(ForkDialog.pill(context, "Done", main = true) { dialog.dismiss() })
         box.addView(bar)
         // The other device is found by answering its probe while this is on screen, so the
         // list underneath is out of date by the time the code is put away.
@@ -392,7 +392,7 @@ object DevicesSheet {
         val bar = LinearLayout(context).apply { gravity = Gravity.END }
         bar.addView(ForkDialog.pill(context, "Cancel") { dialog.dismiss() })
         bar.addView(
-            ForkDialog.pill(context, "Pair") {
+            ForkDialog.pill(context, "Pair", main = true) {
                 val text = field.text.toString()
                 val parsed = parsePairUri(text)
                 if (parsed == null) {

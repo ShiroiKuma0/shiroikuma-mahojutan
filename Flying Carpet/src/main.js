@@ -139,6 +139,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     enableUi();
   });
 
+  // fork: a transfer a paired device sent us has ended. It never touched the controls, so
+  // only the progress readout needs putting away -- and only while nothing of our own is
+  // running, whose bars these would otherwise be (白い熊, 2026-11-14).
+  await appWindow.listen('pairedReceiveEnded', (_event) => {
+    if (transferState === 'idle') {
+      clearProgress();
+    }
+  });
+
   // the receiving device already has a file we are about to send: ask what to do with it.
   // fork-only (the exchange behind it is version-guarded in core), and the question belongs
   // here, on the device whose user picked the files.
@@ -200,7 +209,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       startTransfer(true);
     } else if (selectedMode === 'receive') {
       if (event.payload.length !== 1) {
-        output('Error: if receiving, must drop only one destination folder.');
+        output('Error: if receiving, must drop only one destination directory.');
         return;
       }
       let is_dir = await core.invoke('is_dir', { path: event.payload[0] });
@@ -208,11 +217,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         selectedFolder = event.payload[0];
         rememberFolder(selectedFolder);
       } else {
-        output('Error: if receiving, must select folder as destination.');
+        output('Error: if receiving, must select directory as destination.');
       }
       startTransfer(true);
     } else {
-      output('Error: must select whether sending or receiving before dropping files or folder.');
+      output('Error: must select whether sending or receiving before dropping files or directory.');
     }
     checkStatus();
   });
@@ -601,7 +610,7 @@ async function beginTransfer(filesSelected) {
         }
         selectedFiles = await core.invoke('expand_files', { paths: [folder] });
         if (!selectedFiles.length) {
-          output('Error: the selected folder is empty.');
+          output('Error: the selected directory is empty.');
           return;
         }
       } else {
@@ -632,10 +641,10 @@ async function beginTransfer(filesSelected) {
   // a hang -- so name the action to take over there, and say plainly that we are waiting for it.
   // Mirrored in the Android app's beginTransferWithSelection().
   if (selectedMode == 'send' && selectedFiles && selectedFiles.length) {
-    output('\nFiles selected. Now on the OTHER device: choose Receive and pick the destination folder.');
+    output('\nFiles selected. Now on the OTHER device: choose Receive and pick the destination directory.');
     output('This device will wait until the other device is ready.');
   } else if (selectedMode == 'receive' && selectedFolder) {
-    output('\nDestination folder selected. Now on the OTHER device: choose Send and pick the files to send.');
+    output('\nDestination directory selected. Now on the OTHER device: choose Send and pick the files to send.');
     output('This device will wait until the other device is ready.');
   }
 
@@ -893,6 +902,18 @@ let needPassword = async () => {
   return showPassword;
 }
 
+// Hides both bars and the lines above them, and zeroes them for the next transfer.
+let clearProgress = () => {
+  progressDetails.innerText = '';
+  progressTotalDetails.innerText = '';
+  progressDetails.style.display = 'none';
+  progressTotalDetails.style.display = 'none';
+  progressBar.style.display = 'none';
+  totalProgressBar.style.display = 'none';
+  progressBar.value = 0;
+  totalProgressBar.value = 0;
+};
+
 let enableUi = async () => {
   transferState = 'idle';
   // give the collapsed controls their space back (see .fork-transferring in customize.css)
@@ -905,14 +926,7 @@ let enableUi = async () => {
   // transfer that had already stopped (白い熊, 2026-08-11). Every path that ends a transfer ends
   // here -- the event handler when it completes, cancelTransfer()'s finally when it is cancelled
   // -- so this is the one place that catches both.
-  progressDetails.innerText = '';
-  progressTotalDetails.innerText = '';
-  progressDetails.style.display = 'none';
-  progressTotalDetails.style.display = 'none';
-  progressBar.style.display = 'none';
-  totalProgressBar.style.display = 'none';
-  progressBar.value = 0;
-  totalProgressBar.value = 0;
+  clearProgress();
   // show start button, and the directory button with it if we are sending
   startButton.style.display = '';
   document.getElementById('sendDirButton').style.display = selectedMode === 'send' ? '' : 'none';
@@ -1001,7 +1015,7 @@ INSTRUCTIONS
 
 Turn Bluetooth on or off on both devices. If one side fails to initialize Bluetooth or has it turned off, the other side must disable the "Use Bluetooth" switch in 白い熊 魔法絨毯.
 
-Select Sending on one device and Receiving on the other. If not using Bluetooth, select the operating system of the other device. Click the "Start Transfer" button on each device. On the sending device, select the files or folder to send. On the receiving device, select the folder in which to receive files. (To send a folder, check "Send Folder" before clicking "Start Transfer", or drag the folder onto the window. A folder you send is recreated inside the destination folder on the receiving device, with its contents inside.)
+Select Sending on one device and Receiving on the other. If not using Bluetooth, select the operating system of the other device. Click the "Start Transfer" button on each device. On the sending device, select the files or directory to send. On the receiving device, select the directory in which to receive files. (To send a directory, check "Send Directory" before clicking "Start Transfer", or drag the directory onto the window. A directory you send is recreated inside the destination directory on the receiving device, with its contents inside.)
 
 If using Bluetooth, confirm the 6-digit PIN on each side. The WiFi connection will be configured automatically. If not using Bluetooth, you will need to scan a QR code or type in a password.
 

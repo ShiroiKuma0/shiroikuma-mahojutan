@@ -218,7 +218,16 @@ class MainViewModel(private val application: Application) : AndroidViewModel(app
     lateinit var inputStream: InputStream // incoming TCP stream from peer
     lateinit var outputStream: OutputStream // outgoing TCP stream to peer
     var transferCoroutine: Job? = null
+    // Fork: the edges of this flag are what keep a transfer alive in the background — rising
+    // starts TransferService, falling stops it. Every way a transfer begins sets it and
+    // cleanUpTransfer() clears it, so the service lives exactly as long as the transfer.
     var transferIsRunning = false
+        set(value) {
+            if (value == field) return
+            field = value
+            if (value) TransferService.transferStarted(application)
+            else TransferService.transferStopped(application)
+        }
 
     // Fork: set for the length of a paired transfer, null for every other kind. Its presence
     // is what the two hooks below switch on — see Paired.kt.
