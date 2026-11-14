@@ -12,7 +12,7 @@ receiving — a full yellow-on-black theme, an in-app *白い熊 魔法絨毯 UI
 transfer readout with speed and ETA, one-tap receiving into the directory you used last, one-zip
 Export/Import of everything you have set, a headless backup surface that lets a sister app back
 this one up — and put it back on a wiped phone — external font
-support, a custom icon, a share-sheet target that accepts whole folders, and a rebranded Linux
+support, a custom icon, a share-sheet target that accepts whole directories, and a rebranded Linux
 desktop build shipped as an
 amd64 `.deb` — plus a **5 GHz Wi-Fi Direct hotspot** that transfers three times faster than stock,
 Bluetooth password hand-off in Shared Network mode, a say-what-happens dialog when the other
@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.6+084`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.6+089`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -60,12 +60,12 @@ after the app is closed, behind a foreground notification you can stop from itse
 while such a transfer is running and it is on screen — the log and both progress bars — exactly as
 if you had started it.
 
-**Two rows of pills, two routes — and files or a folder from each.** The top row sends over the
+**Two rows of pills, two routes — and files or a directory from each.** The top row sends over the
 network you are both on. The bottom row raises a hotspot — for a network that will not pass traffic
 between its clients, or no network at all — and it *also* needs nothing tapped over there: the
 sender asks over the LAN when it can and over Bluetooth when it cannot, and the other device raises
 its access point on its own. Every pill is split under one outline: its name sends files, the
-folder glyph beside it sends a whole folder, recreated by name on the far end. Hold a pill on the
+directory glyph beside it sends a whole directory, recreated by name on the far end. Hold a pill on the
 phone, or right-click it on the desktop, for the same menu — rename it here, give it a receive
 directory of its own, set whether it must ask, send or receive over a hotspot, or forget it — and
 drag it to reorder.
@@ -121,6 +121,24 @@ picker, the transfer log, the Bluetooth switch, the progress bar, the About dial
 itself. Nothing is left half-styled: any property you haven't overridden falls back to the fork's own
 default rather than to stock's blue-on-white.
 
+**Every button is an outlined pill, and nothing is filled.** The one action a block is for — *Files
+to send*, the OK of a dialog, *Export* — has a thick frame and a bold label; every other action has a
+thin one. Send / Receive, Hotspot / Shared Network and the peer-OS buttons are separate pills too,
+and the selected one is told by its weight rather than by a yellow slab. Switches follow the same
+rule: a round outline with a dot inside, bright and on the right when on, a darker yellow and on the
+left when off. Explanations are dim gold, never grey, and no dialog is the platform's white box.
+
+---
+
+## 🌙 A transfer that survives leaving the app
+
+Start a long send, switch to something else, come back later: it is still running. A phone that
+freezes background apps used to stop a transfer dead the moment the app left the screen, and the
+other device was left waiting on a connection that never said goodbye. Now a transfer holds a
+foreground service for exactly as long as it runs. Its notification shows the same progress line
+and bar as the main screen, and tapping it returns to the transfer. When the transfer ends, the
+notification goes with it.
+
 ---
 
 ## 🛠️ Customize UI — every surface, yours
@@ -157,7 +175,7 @@ enough that something is wrong". The speed is a **rolling five-second rate**, no
 first byte, so it reflects what is happening now and a stall is visible instead of averaged away;
 every clock measures the data phase, so waiting on a dialogue never counts as transfer time.
 
-There is also a **second bar for the whole transfer**, so sending a folder no longer means watching
+There is also a **second bar for the whole transfer**, so sending a directory no longer means watching
 the bar reset to zero twelve times with no idea how far along you are. The second row appears only
 when there is more than one file.
 
@@ -192,12 +210,12 @@ anywhere — a file manager, a gallery, another app — can be sent by choosing 
 share sheet. The selection arrives preloaded and the search for the receiving device starts on its
 own, so a share is one tap rather than a launch, a mode, and a picker.
 
-**Folders too**, which is harder than it sounds. A shared folder is indistinguishable from a file
+**Directories too**, which is harder than it sounds. A shared directory is indistinguishable from a file
 by every cheap test: a file manager sharing through an ordinary `FileProvider` guesses a mime type
 from the name and reports something perfectly normal, its URI carries no document id to resolve,
-and opening the folder *succeeds* — `open(2)` on a directory returns a healthy descriptor, and only
+and opening the directory *succeeds* — `open(2)` on a directory returns a healthy descriptor, and only
 the first `read()` fails. So the app asks the kernel instead, `fstat`s the descriptor the sender
-itself opened, and expands the folder into its contents before a byte moves. Share a folder and the
+itself opened, and expands the directory into its contents before a byte moves. Share a directory and the
 whole tree is recreated on the other device, exactly as if you had picked it in the app.
 
 ---
@@ -279,7 +297,7 @@ whose user is not the one watching the transfer. This fork stops and asks on the
 replaces the file that is there rather than leaving a `(1)` copy beside it.
 
 Asked once, not once per file: tick **Apply to every remaining file** and the answer stands for the
-rest of the transfer, so a folder the other device already has is one dialog rather than ten. A
+rest of the transfer, so a directory the other device already has is one dialog rather than ten. A
 repeated *rename* means “keep both” — each file is named for itself, `name (copy).ext`, since a name
 that was typed once cannot be reused.
 
@@ -324,7 +342,7 @@ Every wait ticks with the seconds counted off, and the phone writes its transcri
 
 ## 💾 Export / Import — everything, in one `.zip`
 
-The first thing on the UI page is a real backup surface. Point it at a folder once; from then on it
+The first thing on the UI page is a real backup surface. Point it at a directory once; from then on it
 tells you when the last backup was written and hands the whole configuration over in a single
 timestamped archive — `shiroikuma-mahojutan_2026-07-25_23-44-06.zip`.
 
@@ -332,7 +350,7 @@ timestamped archive — `shiroikuma-mahojutan_2026-07-25_23-44-06.zip`.
   files are separate, independently selectable categories.
 - **Import merges** rather than overwrites, key by key, so restoring a partial backup never wipes
   what it didn't cover, and importing the same file twice changes nothing the second time.
-- **No backup folder set** is shown in red wherever it appears, so an unconfigured backup is
+- **No backup directory set** is shown in red wherever it appears, so an unconfigured backup is
   impossible to overlook.
 - The archive knows which app wrote it, so a phone backup is never poured into the desktop app by
   mistake — the two store their colours differently.
@@ -345,7 +363,7 @@ The Android app answers a headless export request, so an automation app can trig
 no screen and no tapping, and get back the path, the byte count and a human-readable size. Progress
 comes back as **real counts, never a percentage**, naming the category being written so the caller
 can light up the right row. A long export can be **stopped from where it was started**, and a
-cancelled run leaves the backup folder exactly as it found it — the archive is written to a `.part`
+cancelled run leaves the backup directory exactly as it found it — the archive is written to a `.part`
 file and renamed into place only once it is complete, so a half-finished backup can never be mistaken
 for the newest one.
 

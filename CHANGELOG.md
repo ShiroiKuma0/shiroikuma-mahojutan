@@ -8,6 +8,70 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.6+089 — 2026-11-14
+
+Built on upstream release 10.0.6, like `+084`. Five builds were delivered on the way (`+085` to
+`+089`), each as an APK and a `.deb`; this release is the last of them. Nothing on the wire changed:
+a `+089` device pairs and transfers with a `+084` one.
+
+### Transfers keep running in the background (Android)
+
+- **A transfer no longer dies when the app leaves the screen.** A 33-file send from the file manager
+  stopped at file 4 the moment the app went behind another one: the phone froze the process, then
+  killed it, and the PC was left with “early eof” and frozen bars. A transfer now holds a foreground
+  service for exactly as long as it runs — whether it was started from the share sheet, a device
+  pill, the Start button, or received while “Stay reachable” is on.
+- **A “Transfer running” notification** shows the same progress line and bar as the main screen,
+  updated once a second and silent. Tapping it brings the app back over the same transfer. It
+  disappears when the transfer ends.
+- **No stuck Cancel button after a killed process.** The restored screen used to trust its saved
+  state and showed “Cancel transfer” over an empty log with nothing running. It now shows a transfer
+  as running only if one is.
+
+### The black-yellow theme, in full (both apps)
+
+- **Every action is an outlined pill, never a filled one.** The main action of a block has a 3 dp
+  frame and a bold label: *Files to send*, *Done* on the UI page, *Export*, and the rightmost button
+  of every dialog. Every other action has a 1.25 dp frame: *Directory to send*, the last-directory
+  button, *Cancel* (no longer in capitals), *Devices +*, the UI button, the device pills, *Reset to
+  default*, *Regenerate*. Disabled pills dim to 38 %.
+- **Send / Receive, Hotspot / Shared Network and the peer-OS buttons are separate pills.** On Android
+  they were joined into one bar. The selected one carries the thick frame and bold label; nothing is
+  filled in either state. The route switch in the send sheet works the same way. On the desktop,
+  selecting a button no longer nudges the labels beside it.
+- **Switches are an outline with a dot.** A 52 × 28 round outline with a solid dot inside: bright
+  and on the right when on, a darker opaque yellow (`#8C8C00`) and on the left when off. This
+  replaces the filled yellow track with a dark thumb, on the main page and the UI page.
+- **“About” is a pill.** It was a bare word that happened to be tappable.
+- **Pressable rows on the UI page are pills as wide as their label**, with the explanation beneath
+  and a › when the row opens something: *Export / Import…*, *Devices*, *Battery settings for this
+  app*. Rows with their own control stay plain rows.
+- **Described rows have one shape.** A bold label, a dim-gold explanation, and a thin dim-gold rule
+  down the left edge, with minimal padding. Explanations and hints are dim gold (`#C8C800`)
+  everywhere, including the lines under the two main-page switches; red still means “fix this”.
+- **No stock dialogs are left on these pages.** Rename this device, reset all, the colour picker,
+  “nothing to be reachable for”, “notifications are required” and the Mac hotspot credentials are
+  all the fork’s own black dialog with pills.
+- **Desktop: no white controls.** The font dropdowns were grey boxes and the slider knobs white;
+  both are drawn in the theme now.
+- **Colour settings changed to match.** “Switches” has two colours, *On* and *Off*, in place of the
+  four thumb and track colours of “Bluetooth switch”. The toggle buttons’ selected colours default
+  to black with yellow text, and their border-width slider sets the unselected frame. “Notes, hints
+  and explanations” sets the dim gold.
+
+### Fixes
+
+- **The carpet stays yellow during a transfer (Android).** Its tint was switched off for the whole
+  length of any transfer, to protect a QR code that a paired send never shows, which left the logo
+  white. The tint is now skipped only while a code is actually on screen.
+- **The progress bars clear after a received transfer (desktop).** A transfer sent by a paired
+  device left both bars full and the “0s left” lines up under “Transfer complete”, because the
+  standing receiver never told the window a session had ended. It now does, after every session,
+  finished or failed, and the window clears the readout unless a transfer of its own is running.
+- **“Directory”, not “folder”.** Every text either app shows — the Export / Import panel, the
+  devices sheet and menu, the transfer log, error messages, notifications and the About text — now
+  says “directory”.
+
 ## 10.0.6+084 — 2026-10-30
 
 Built on upstream release 10.0.6, rebased from 10.0.5. One delivered build, shipping both artifacts.
