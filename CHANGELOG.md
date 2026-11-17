@@ -8,6 +8,59 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.6+091 — 2026-11-17
+
+Built on upstream release 10.0.6, like `+089`. Two builds were delivered on the way (`+090` and
+`+091`), each as an APK and a `.deb`; this release is the second. Nothing on the wire changed: a
+`+091` device pairs and transfers with a `+089` one, which simply takes one transfer at a time.
+
+### Several transfers at once (both apps)
+
+- **A running transfer no longer blocks the next one.** A twenty-minute send to the desktop used to
+  hold the whole app until it finished. A paired transfer over a shared network now runs in a lane
+  of its own, with its own connection and its own encryption session, so a small file can go to a
+  second device while the big one is still moving.
+- **Up to four lanes run at the same time.** Sends and receives count alike.
+- **A paired send no longer takes the screen.** Tapping a device pill starts the lane and leaves the
+  main page free: pick other files and tap another device straight away. The files belong to the
+  lane from that moment, so choosing new ones does not disturb a transfer already under way.
+- **Each lane has its own block above the main bars.** “→ Name” for a send or “← Name” for a
+  receive, the current file's bar and figures, a total bar when there is more than one file, and a
+  thin Cancel pill that stops that lane and no other. The list is capped at two fifths of the screen
+  height and scrolls beyond that.
+- **A second send to a device already in a transfer is queued, not refused.** It waits behind the
+  first, in either direction, shows as queued, starts on its own, and can be cancelled while it
+  waits. A fifth send is queued the same way until a lane frees up.
+- **A fifth incoming transfer is refused as busy.** The sending device shows its usual “busy”
+  sentence. A second incoming transfer from a device that already has a lane is accepted.
+- **Hotspot and password-mode transfers stay exclusive.** They need the whole radio or the whole
+  page, so they refuse to start while a lane is running or queued, and paired transfers are refused
+  while one of them runs. Each refusal says why in the log.
+- **Log lines from a lane start with “[Name]”**, so two transfers writing at once stay readable.
+- **File-conflict questions come one at a time and name the device.** Two lanes that both meet an
+  existing file no longer stack two dialogs on top of each other.
+- **Android: the notification follows the lanes.** With the main page idle, “Transfer running”
+  shows the oldest running lane and how many are running. The foreground service and the Wi-Fi and
+  wake locks are held for as long as any lane runs.
+- **Desktop: the listener accepts while a transfer runs.** Each incoming connection gets a task of
+  its own, so a long transfer from one device never keeps the next one waiting at the door.
+
+### Fixes
+
+- **Cancel works for paired sends on the desktop.** It did nothing for them before; each lane now
+  has its own Cancel.
+- **Desktop: the `pairedReceiveEnded` event is gone.** It existed to clear the main bars after a
+  received transfer (`+089`). Received transfers no longer draw on the main bars at all — their
+  lane block is removed when they end — so the event, its listener and the flag behind it were
+  dead and are removed (`+091`).
+
+### Known limits
+
+- **Both ends need this release to receive in parallel.** An older build on the receiving side
+  still takes one transfer at a time and answers “busy” to a second.
+- **Closing the desktop window does not tell running lanes to stop.** They end with the process, and
+  the other device sees a dropped connection.
+
 ## 10.0.6+089 — 2026-11-14
 
 Built on upstream release 10.0.6, like `+084`. Five builds were delivered on the way (`+085` to

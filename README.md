@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.6+089`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.6+091`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -138,6 +138,20 @@ other device was left waiting on a connection that never said goodbye. Now a tra
 foreground service for exactly as long as it runs. Its notification shows the same progress line
 and bar as the main screen, and tapping it returns to the transfer. When the transfer ends, the
 notification goes with it.
+
+---
+
+## 🛤️ Several transfers at once
+
+A twenty-minute send to the desktop should not stop a two-second send to another phone. Paired
+transfers over a shared network each run in a **lane of their own** — own connection, own encryption
+session — and **up to four run at the same time**, sends and receives alike.
+
+Tapping a device pill no longer takes the screen: the files go to the lane, the main page stays
+free, and the next device can be tapped straight away. Every lane has its own block with the
+device's name, its progress and its own **Cancel**. A second send to a device that is already busy
+is **queued behind the first** rather than refused, and starts by itself. Hotspot and password
+transfers still run alone, because they need the whole radio.
 
 ---
 
