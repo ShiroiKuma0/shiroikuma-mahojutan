@@ -139,34 +139,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     enableUi();
   });
 
-  // fork: a transfer a paired device sent us has ended. It never touched the controls, so
-  // only the progress readout needs putting away -- and only while nothing of our own is
-  // running, whose bars these would otherwise be (白い熊, 2026-11-14).
-  await appWindow.listen('pairedReceiveEnded', (_event) => {
-    if (transferState === 'idle') {
-      clearProgress();
-    }
-  });
-
   // the receiving device already has a file we are about to send: ask what to do with it.
   // fork-only (the exchange behind it is version-guarded in core), and the question belongs
   // here, on the device whose user picked the files.
   await appWindow.listen('fileConflict', async (event) => {
     let { name, identical, more_files } = event.payload;
-    let { choice, applyToAll } = await showConflict(name, identical, more_files);
-    // Renaming one file asks what to call it. Renaming every remaining one cannot -- a name is
-    // used once -- so it means "keep both" and core names each file itself (utils::suggest_rename).
-    if (choice === 'rename' && !applyToAll) {
-      let suggestion = suggestRename(name);
-      let newName = await showPrompt(`Send \u201c${name}\u201d as:`, suggestion);
-      if (newName === null || !newName.trim()) {
-        choice = 'skip';
-      } else {
-        await core.invoke('user_file_conflict', { choice: 'rename', newName: newName.trim(), applyToAll: false });
-        return;
-      }
-    }
-    await core.invoke('user_file_conflict', { choice: choice, newName: null, applyToAll: applyToAll });
+    let answer = await askConflict(name, identical, more_files, null);
+    await core.invoke('user_file_conflict', answer);
   });
 
   // show bluetooth PIN and allow user to choose whether to pair on windows
@@ -422,12 +401,41 @@ function suggestRename(name) {
   return name + ' (copy)';
 }
 
+// One file-conflict question, start to finish, and never two at once. Parallel paired
+// transfers (lanes.js) can each hit a file the far device already has, and two dialogs
+// stacked on one another would be answered blind -- so every question, whichever transfer
+// asks it, waits here for the one before it. `peer` names the device when the asker is a
+// lane; the single hotspot/password transfer has only one "other device" and passes null.
+//
+// Resolves to {choice, newName, applyToAll}, the shape both answer commands take.
+let conflictQueue = Promise.resolve();
+let askConflict = (name, identical, moreFiles, peer) => {
+  let turn = conflictQueue.then(async () => {
+    let { choice, applyToAll } = await showConflict(name, identical, moreFiles, peer);
+    // Renaming one file asks what to call it. Renaming every remaining one cannot -- a name is
+    // used once -- so it means "keep both" and core names each file itself (utils::suggest_rename).
+    if (choice === 'rename' && !applyToAll) {
+      let suggestion = suggestRename(name);
+      let newName = await showPrompt(`Send \u201c${name}\u201d as:`, suggestion);
+      if (newName === null || !newName.trim()) {
+        return { choice: 'skip', newName: null, applyToAll: false };
+      }
+      return { choice: 'rename', newName: newName.trim(), applyToAll: false };
+    }
+    return { choice: choice, newName: null, applyToAll: applyToAll };
+  });
+  // The queue must survive a question that threw, or one failure would silence every later one.
+  conflictQueue = turn.catch(() => {});
+  return turn;
+};
+window.forkConflict = { ask: askConflict };
+
 // Skip / Overwrite / Rename, wearing the fork's dialog dress. Resolves to {choice, applyToAll};
 // dismissing it counts as skipping this one file, which is the only harmless default.
 //
 // The "apply to all" tick is offered only while files remain (moreFiles): on the last one it would
 // be a control that does nothing.
-let showConflict = (name, identical, moreFiles) => {
+let showConflict = (name, identical, moreFiles, peer) => {
   return new Promise((resolve) => {
     let overlay = document.createElement('div');
     overlay.className = 'fork-overlay';
@@ -435,7 +443,9 @@ let showConflict = (name, identical, moreFiles) => {
     box.className = 'fork-info-box';
     let title = document.createElement('div');
     title.className = 'fork-info-title';
-    title.innerText = 'The other device already has this file';
+    title.innerText = peer
+      ? `${peer} already has this file`
+      : 'The other device already has this file';
     let body = document.createElement('div');
     body.className = 'fork-info-body';
     body.innerText = `\u201c${name}\u201d is already there`
@@ -544,6 +554,14 @@ async function startTransfer(filesSelected) {
 }
 
 async function beginTransfer(filesSelected) {
+
+  // fork: a hotspot or password transfer needs the network to itself, so it waits for the
+  // paired transfers (lanes.js). Said here, before any picker or password dialog, rather
+  // than after the user has answered them all -- the backend refuses the same start anyway.
+  if (window.forkLanes?.active()) {
+    output('A transfer with a paired device is running or waiting. Hotspot and password transfers need the network to themselves — start this one when those have finished.');
+    return;
+  }
 
   // the password is collected after files are chosen (below), so file selection isn't
   // gated on the other device having started and displayed its password yet.
@@ -726,6 +744,12 @@ async function beginTransfer(filesSelected) {
   });
   if (refused) {
     output(refused);
+    // fork: refused for the sake of paired transfers still running (lanes.js). Nothing of
+    // ours is under way in that case, so no ending transfer will ever hand the controls
+    // back -- do it here.
+    if (window.forkLanes?.active()) {
+      enableUi();
+    }
   }
 }
 

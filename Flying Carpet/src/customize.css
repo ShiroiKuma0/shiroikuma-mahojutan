@@ -615,3 +615,92 @@ button:disabled,
 #mainContainer {
   overflow-y: auto;
 }
+
+/* ── Parallel paired transfers: one block per lane (lanes.js) ── */
+
+/* Sits between the log and the single-transfer bars. Never grows past a share of the
+   window: four lanes with both bars each would otherwise squeeze the log to its floor, so
+   past that the stack scrolls on its own. */
+#laneStack {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow-y: auto;
+  margin: 5px 5px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#laneStack[hidden] {
+  display: none;
+}
+
+.fork-lane {
+  border: 1px solid #ffff00;
+  border-radius: 10px;
+  padding: 6px 10px 8px;
+}
+
+.fork-lane-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.fork-lane-title {
+  font-weight: bold;
+  color: #ffff00;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "Queued…" / "Connecting…": takes the slack, so the Cancel pill stays at the right edge. */
+.fork-lane-status {
+  flex: 1 1 auto;
+  color: #8c8c00;
+  font-size: 13px;
+}
+
+/* An ordinary action, so the thin frame — and a little shorter than a dialog's pill, to keep
+   a block of four lanes compact. Pushed right when the status line is hidden. */
+.fork-lane-cancel {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 3px 16px;
+  font-size: 13px;
+}
+
+.fork-lane-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fork-lane-details {
+  text-align: center;
+  white-space: pre-line;
+  font-variant-numeric: tabular-nums;
+  color: #ffff00;
+  margin-top: 4px;
+}
+
+.fork-lane-bar {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 15px;
+  min-height: 15px;
+  margin-top: 3px;
+  accent-color: #ffff00;
+}
+
+.fork-lane-bar::-webkit-progress-bar {
+  background-color: #000000;
+  border: 1px solid #ffff00;
+}
+
+.fork-lane-bar::-webkit-progress-value {
+  background-color: #ffff00;
+}

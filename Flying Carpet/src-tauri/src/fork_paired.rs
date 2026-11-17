@@ -13,8 +13,9 @@ use flying_carpet_core::{
     paired::{self, Caller, PairedOffer, Refusal, Verdict},
     pairing::{self, KeyRing, PairKey, PairedPeer, PairingStore},
     presence::{self, DiscoveredPeer, LocalIdentity, PeerOs, PRESENCE_PORT},
-    PairedHotspot, SendFile, Transfer, WiFiInterface, UI,
+    FileConflictAnswer, PairedHotspot, SendFile, Transfer, WiFiInterface, UI,
 };
+use crate::fork_lanes::{self, Incoming, LaneUi};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,14 +34,11 @@ const SCAN_WINDOW: Duration = Duration::from_millis(1500);
 /// window it is emitting into — a serve loop that panics when someone closes the window
 /// would take the receiver down with it.
 ///
-/// `receiver` marks the standing receiver's sink. Its `enable_ui` must not reset the window the
-/// way a finished send does — the window may be in the middle of a transfer of its own — so it
-/// sends `pairedReceiveEnded` instead, and the window clears the progress readout only if it is
-/// idle.
+/// It serves the standing listener and the presence responder only. Transfers speak through
+/// their lane (`fork_lanes::LaneUi`), so nothing here ever touches the window's controls.
 #[derive(Clone)]
 pub struct BackgroundUi {
     app: AppHandle,
-    receiver: bool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -90,8 +88,8 @@ impl UI for BackgroundUi {
         );
     }
     fn enable_ui(&self) {
-        let event = if self.receiver { "pairedReceiveEnded" } else { "enableUi" };
-        let _ = self.app.emit(event, Value { value: 0 });
+        // Nothing to re-enable: the listener never disabled anything, and the window may be
+        // in the middle of a transfer of its own.
     }
     fn show_pin(&self, pin: &str) {
         let _ = self.app.emit(
@@ -486,11 +484,11 @@ fn remember(
 
 /// Sends to a paired device in one call: no mode, no password, no interface picker.
 ///
-/// The cached address is tried first and the scan is the fallback, not the other way
-/// round — a unicast packet reaches a device whose Wi-Fi driver is filtering broadcast,
-/// which is exactly the state a phone sitting on a desk is in.
+/// Returns as soon as the send has a lane or a place in the queue (fork_lanes.rs). The
+/// transfer itself runs on that lane's task and reports through it, so the window is never
+/// held: another selection can go to another device while this one is still moving.
 #[tauri::command]
-pub async fn paired_send(
+pub fn paired_send(
     app: AppHandle,
     device_id: String,
     file_list: Vec<SendFile>,
@@ -499,34 +497,40 @@ pub async fn paired_send(
         return Err("Nothing selected to send.".to_string());
     }
     let state: State<PairedState> = app.state();
-    let transfer: State<Transfer> = app.state();
     let store = state.snapshot();
     let peer = store
         .find_peer(&device_id)
         .cloned()
         .ok_or_else(|| "That device is not in the paired list.".to_string())?;
+    if store.key_for(&device_id).is_none() {
+        return Err("No key is stored for that device; pair it again.".to_string());
+    }
+    fork_lanes::request_send(&app, device_id, peer.display_name(), file_list)
+}
+
+/// One lane's send, start to finish. The store is read here rather than when the send was
+/// asked for: a queued send may start long after, and the peer's address — or its key — may
+/// have changed while it waited.
+///
+/// The cached address is tried first and the scan is the fallback, not the other way
+/// round — a unicast packet reaches a device whose Wi-Fi driver is filtering broadcast,
+/// which is exactly the state a phone sitting on a desk is in.
+pub async fn run_send(
+    app: &AppHandle,
+    ui: &LaneUi,
+    device_id: &str,
+    file_list: &[SendFile],
+    conflict_rx: &mut mpsc::Receiver<FileConflictAnswer>,
+) -> Result<(), String> {
+    let state: State<PairedState> = app.state();
+    let store = state.snapshot();
+    let peer = store
+        .find_peer(device_id)
+        .cloned()
+        .ok_or_else(|| "That device is no longer in the paired list.".to_string())?;
     let key = store
-        .key_for(&device_id)
+        .key_for(device_id)
         .ok_or_else(|| "No key is stored for that device; pair it again.".to_string())?;
-
-    // Claim the one transfer slot exactly as start_async does, so a paired send and a
-    // classic transfer can never run at once and Cancel keeps working on either.
-    let (conflict_tx, mut conflict_rx) = mpsc::channel(1);
-    {
-        let task = transfer.task.lock().unwrap_or_else(|e| e.into_inner());
-        if task.cancelling {
-            return Err("Still cancelling the previous transfer. Try again in a moment.".into());
-        }
-        if task.is_running() {
-            return Err("A transfer is already in progress.".into());
-        }
-    }
-    {
-        let mut slot = transfer.conflict_tx.lock().unwrap_or_else(|e| e.into_inner());
-        *slot = Some(conflict_tx);
-    }
-
-    let ui = BackgroundUi { app: app.clone(), receiver: false };
     let identity_id = store.device_id_bytes();
     let identity_name = store.name.clone();
     let peer_name = peer.display_name();
@@ -537,7 +541,7 @@ pub async fn paired_send(
         .and_then(|ip| ip.parse::<IpAddr>().ok());
     if address.is_none() {
         ui.output("No remembered address for that device; searching...");
-        address = find_now(&app, &state, &device_id).await?;
+        address = find_now(app, &state, device_id).await?;
     }
     let Some(address) = address else {
         return Err(format!(
@@ -546,65 +550,53 @@ pub async fn paired_send(
         ));
     };
 
-    let result = paired::send_to_peer(
+    let first = match paired::send_to_peer(
         address,
         PRESENCE_PORT,
         &key,
         &peer_name,
         identity_id,
         &identity_name,
-        &file_list,
-        &ui,
-        &mut conflict_rx,
+        file_list,
+        ui,
+        conflict_rx,
     )
-    .await;
-
-    match result {
+    .await
+    {
         Ok(()) => {
-            let _ = state.update(&app, |store| {
-                store.note_seen(&device_id, &address.to_string())
+            let _ = state.update(app, |store| {
+                store.note_seen(device_id, &address.to_string())
             });
-            ui.enable_ui();
+            return Ok(());
+        }
+        Err(e) => e,
+    };
+    // A remembered address goes stale every time DHCP moves the peer, and the failure
+    // looks identical to the device being off. So a failed direct connect is a reason to
+    // look again, not to give up: this is the retry that makes the cached-address shortcut
+    // safe to rely on.
+    ui.output(&format!("{} Looking for a new address...", first));
+    match find_now(app, &state, device_id).await? {
+        Some(new_address) if new_address != address => {
+            paired::send_to_peer(
+                new_address,
+                PRESENCE_PORT,
+                &key,
+                &peer_name,
+                identity_id,
+                &identity_name,
+                file_list,
+                ui,
+                conflict_rx,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let _ = state.update(app, |store| {
+                store.note_seen(device_id, &new_address.to_string())
+            });
             Ok(())
         }
-        Err(first) => {
-            // A remembered address goes stale every time DHCP moves the peer, and the
-            // failure looks identical to the device being off. So a failed direct connect
-            // is a reason to look again, not to give up: this is the retry that makes the
-            // cached-address shortcut safe to rely on.
-            ui.output(&format!("{} Looking for a new address...", first));
-            let fresh = find_now(&app, &state, &device_id).await?;
-            match fresh {
-                Some(new_address) if new_address != address => {
-                    let outcome = paired::send_to_peer(
-                        new_address,
-                        PRESENCE_PORT,
-                        &key,
-                        &peer_name,
-                        identity_id,
-                        &identity_name,
-                        &file_list,
-                        &ui,
-                        &mut conflict_rx,
-                    )
-                    .await;
-                    ui.enable_ui();
-                    match outcome {
-                        Ok(()) => {
-                            let _ = state.update(&app, |store| {
-                                store.note_seen(&device_id, &new_address.to_string())
-                            });
-                            Ok(())
-                        }
-                        Err(e) => Err(e.to_string()),
-                    }
-                }
-                _ => {
-                    ui.enable_ui();
-                    Err(first.to_string())
-                }
-            }
-        }
+        _ => Err(first.to_string()),
     }
 }
 
@@ -651,9 +643,11 @@ async fn find_now(
 /// deliberately unable to ask: phase one has no "somebody is knocking" dialog, and an offer
 /// that cannot be auto-accepted is refused with a reason the sender can act on rather than
 /// left hanging on a prompt nobody is in front of.
-fn decide(app: &AppHandle, offer: &PairedOffer) -> Verdict {
-    let transfer: State<Transfer> = app.state();
+fn decide(app: &AppHandle, offer: &PairedOffer, incoming: &Incoming) -> Verdict {
+    // A hotspot or password-mode transfer has the network to itself. Asked first, so the
+    // sender hears "busy" rather than a complaint about a setting it could not act on now.
     {
+        let transfer: State<Transfer> = app.state();
         let task = transfer.task.lock().unwrap_or_else(|e| e.into_inner());
         if task.is_running() || task.cancelling {
             return Verdict::Refuse(Refusal::Busy);
@@ -662,16 +656,67 @@ fn decide(app: &AppHandle, offer: &PairedOffer) -> Verdict {
     let state: State<PairedState> = app.state();
     let store = state.snapshot();
     let id = pairing::base32_encode(&offer.device_id);
-    match store.find_peer(&id) {
-        Some(peer) if peer.auto_accept => (),
+    let peer_name = match store.find_peer(&id) {
+        Some(peer) if peer.auto_accept => peer.display_name(),
         // Holding the key is necessary but not sufficient: the user gets the last word on
         // which of their own devices may write here unattended.
         _ => return Verdict::Refuse(Refusal::NotAllowed),
+    };
+    let Some(dir) = store.receive_dir_for(&id) else {
+        return Verdict::Refuse(Refusal::NoDestination);
+    };
+    // Last, so a lane is only ever opened for a transfer that is going to happen. Refused
+    // when every lane is running — or when a primary transfer started in the moment since
+    // the check above, which the admission decides again under the lock.
+    match fork_lanes::admit_receive(app, incoming, &id, &peer_name) {
+        Ok(()) => Verdict::Accept(PathBuf::from(dir)),
+        Err(_) => Verdict::Refuse(Refusal::Busy),
     }
-    match store.receive_dir_for(&id) {
-        Some(dir) => Verdict::Accept(PathBuf::from(dir)),
-        None => Verdict::Refuse(Refusal::NoDestination),
-    }
+}
+
+/// Serves one connection the listener accepted. Runs on the connection's own task
+/// (fork_lanes::spawn_receive); it becomes a lane at the moment `decide` accepts its offer.
+pub async fn serve_connection(
+    app: &AppHandle,
+    tcp: tokio::net::TcpStream,
+    ui: &LaneUi,
+    incoming: Arc<Incoming>,
+) -> Result<(), String> {
+    // The ring as it stands when the call arrives: a code shown a moment ago must already
+    // be claimable, and one just claimed must not be claimable again.
+    let ring = {
+        let state: State<PairedState> = app.state();
+        state.key_ring()
+    };
+    let decider_app = app.clone();
+    let claim_app = app.clone();
+    paired::serve_one(
+        tcp,
+        &ring,
+        ui,
+        &move |offer: &PairedOffer| decide(&decider_app, offer, &incoming),
+        &move |caller: &Caller, name: &str| {
+            let state: State<PairedState> = claim_app.state();
+            claim(
+                &claim_app,
+                &state,
+                &caller.key.key,
+                PairedPeer {
+                    device_id: pairing::base32_encode(&caller.device_id),
+                    key: String::new(),
+                    name: name.to_string(),
+                    os: caller.os.as_str().to_string(),
+                    last_ip: None,
+                    last_seen: pairing::now_secs(),
+                    auto_accept: true,
+                    receive_dir: None,
+                    alias: None,
+                },
+            );
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Brings the serve loop up, or takes it down, to match the store.
@@ -715,38 +760,13 @@ pub fn restart_serving(app: &AppHandle) {
         let app = app.clone();
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            let ui = BackgroundUi { app: app.clone(), receiver: true };
-            let decider_app = app.clone();
-            let ring_app = app.clone();
-            let claim_app = app.clone();
-            let result = paired::serve(
-                move || {
-                    let state: State<PairedState> = ring_app.state();
-                    state.key_ring()
-                },
-                &ui,
-                cancel,
-                move |offer: &PairedOffer| decide(&decider_app, offer),
-                move |caller: &Caller, name: &str| {
-                    let state: State<PairedState> = claim_app.state();
-                    claim(
-                        &claim_app,
-                        &state,
-                        &caller.key.key,
-                        PairedPeer {
-                            device_id: pairing::base32_encode(&caller.device_id),
-                            key: String::new(),
-                            name: name.to_string(),
-                            os: caller.os.as_str().to_string(),
-                            last_ip: None,
-                            last_seen: pairing::now_secs(),
-                            auto_accept: true,
-                            receive_dir: None,
-                            alias: None,
-                        },
-                    );
-                },
-            )
+            let ui = BackgroundUi { app: app.clone() };
+            // The loop only accepts. Each connection gets a task of its own, so a long
+            // transfer from one device never keeps the next one waiting at the door.
+            let lane_app = app.clone();
+            let result = paired::serve(&ui, cancel, move |tcp, addr| {
+                fork_lanes::spawn_receive(lane_app.clone(), tcp, addr)
+            })
             .await;
             if let Err(e) = result {
                 // Port already taken is the realistic case — a second copy of the app, or
@@ -767,7 +787,7 @@ pub fn restart_serving(app: &AppHandle) {
         let app = app.clone();
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            let ui = BackgroundUi { app: app.clone(), receiver: true };
+            let ui = BackgroundUi { app: app.clone() };
             let (_interface, ip, prefix) = match local_endpoint() {
                 Ok(endpoint) => endpoint,
                 Err(e) => {

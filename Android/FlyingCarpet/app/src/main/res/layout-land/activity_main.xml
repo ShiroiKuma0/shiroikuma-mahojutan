@@ -161,7 +161,7 @@
         android:textColorHint="?android:attr/textColorPrimary"
         android:textIsSelectable="true"
         android:textSize="16sp"
-        app:layout_constraintBottom_toTopOf="@+id/progressDetails"
+        app:layout_constraintBottom_toTopOf="@+id/laneScroll"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0.476"
         app:layout_constraintStart_toStartOf="parent"
@@ -226,6 +226,27 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="@+id/startButton" />
+
+    <!-- Fork: one block per paired transfer running over this network (TransferLanes.kt): the
+         device, its bars and its own Cancel. Empty and gone when there are none. It scrolls
+         within a capped height, so four transfers at once cannot push the log off the screen. -->
+    <dev.spiegl.flyingcarpet.LaneScrollView
+        android:id="@+id/laneScroll"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/progressDetails"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <LinearLayout
+            android:id="@+id/laneList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="20dp"
+            android:paddingBottom="4dp" />
+    </dev.spiegl.flyingcarpet.LaneScrollView>
 
     <!-- sent/total, rate and ETA, shown above the bar while a transfer runs -->
     <TextView

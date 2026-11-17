@@ -57,6 +57,7 @@ class TransferService : Service() {
         TransferFeed.totalProgressBar.observeForever(observer)
         TransferFeed.progressDetails.observeForever(observer)
         TransferFeed.progressTotalDetails.observeForever(observer)
+        TransferLanes.pulse.observeForever(observer)
     }
 
     // NOT_STICKY: a transfer that died with the process is gone; a revived service would only
@@ -69,6 +70,7 @@ class TransferService : Service() {
         TransferFeed.totalProgressBar.removeObserver(observer)
         TransferFeed.progressDetails.removeObserver(observer)
         TransferFeed.progressTotalDetails.removeObserver(observer)
+        TransferLanes.pulse.removeObserver(observer)
         super.onDestroy()
     }
 
@@ -90,10 +92,28 @@ class TransferService : Service() {
         val total = TransferFeed.progressTotalDetails.value.orEmpty()
         val file = TransferFeed.progressDetails.value.orEmpty()
         // The whole transfer when there is more than one file, otherwise the one file.
-        val (line, percent) = if (total.isNotEmpty()) {
+        var (line, percent) = if (total.isNotEmpty()) {
             total to (TransferFeed.totalProgressBar.value ?: 0)
         } else {
             file to (TransferFeed.progressBar.value ?: 0)
+        }
+        // Lanes — paired transfers over the network, several at once — have bars of their
+        // own rather than TransferFeed's. The shade has room for one, so it shows the oldest
+        // running lane and says how many there are.
+        val lanes = TransferLanes.current()
+        var title = "Transfer running"
+        if (line.isEmpty() && lanes.isNotEmpty()) {
+            val lane = lanes.firstOrNull { it.state == PairedLane.State.RUNNING } ?: lanes[0]
+            val laneTotal = lane.progressTotalDetailsMut.value.orEmpty()
+            val laneFile = lane.progressDetailsMut.value.orEmpty()
+            val whole = laneTotal.isNotEmpty() && !laneTotal.startsWith("File 1 of 1")
+            line = (if (whole) laneTotal else laneFile).replace("\n", " · ")
+            percent = (if (whole) lane.totalProgressBarMut.value else lane.progressBarMut.value) ?: 0
+            title = if (lanes.size == 1) {
+                lane.title.value.orEmpty().ifEmpty { title }
+            } else {
+                "${lanes.size} transfers · ${lane.title.value.orEmpty()}"
+            }
         }
         val open = PendingIntent.getActivity(
             this,
@@ -102,7 +122,7 @@ class TransferService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Transfer running")
+            .setContentTitle(title)
             .setContentText(line.ifEmpty { "Connecting…" })
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)

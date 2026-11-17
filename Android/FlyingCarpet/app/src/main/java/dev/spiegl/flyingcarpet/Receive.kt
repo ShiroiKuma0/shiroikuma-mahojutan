@@ -19,7 +19,7 @@ const val CHUNK_IDLE_TIMEOUT_MS = 30_000
 
 // v10+: file contents are protected by the Noise transport (see Noise.kt), which wraps the
 // whole connection, so chunks arrive as raw bytes here — no application-level decryption.
-suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
+suspend fun TransferLane.receiveFile(lastFile: Boolean) {
     val start = System.currentTimeMillis()
 
     // receive file details. the filename is peer-supplied: allow "/" separators for
@@ -61,14 +61,14 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
     // detect if filename has folders in its path. if so, make them
     val destinationFolder = makeParentDirectories(saveAs)
         ?: safCache?.rootDocumentFile()
-        ?: DocumentFile.fromTreeUri(getApplication(), receiveDir)
+        ?: DocumentFile.fromTreeUri(app, receiveDir)
         ?: throw Exception("Could not get DocumentFile from receiveDir.")
 
     // The name this file will end up under. Overwriting keeps the name of the document the user
     // chose to replace, so the file that changes is the one they picked rather than a "(1) name"
     // beside it; otherwise the collision loop picks a free one.
     val finalName = if (overwriteUri != null) {
-        DocumentFile.fromSingleUri(getApplication(), overwriteUri)?.name
+        DocumentFile.fromSingleUri(app, overwriteUri)?.name
             ?: saveAs.split("/").last()
     } else {
         findNewFilename(destinationFolder, saveAs).split("/").last()
@@ -176,7 +176,7 @@ suspend fun MainViewModel.receiveFile(lastFile: Boolean) {
     }
 }
 
-private fun MainViewModel.receiveChunk(): ByteArray {
+private fun TransferLane.receiveChunk(): ByteArray {
     // receive size. 0 is the legitimate end-of-file sentinel; a larger-than-possible value
     // means a corrupt or hostile stream, and must be rejected before we allocate a receive
     // buffer of that size (or truncate it into a negative Int).
@@ -194,7 +194,7 @@ private fun MainViewModel.receiveChunk(): ByteArray {
     return readNBytes(size.toInt(), inputStream)
 }
 
-private fun MainViewModel.receiveFileDetails(): Pair<String, Long> {
+private fun TransferLane.receiveFileDetails(): Pair<String, Long> {
     // receive size of filename. real paths fit comfortably under the bound; a negative
     // or unbounded value is rejected before we allocate that many bytes.
     val filenameLenBytes = readNBytes(8, inputStream)
@@ -228,7 +228,7 @@ private sealed class ConflictOutcome {
  * The fork's file-conflict exchange, receiving half. The wire format is documented in
  * core/src/sending.rs (resolve_conflict); this half only reports and obeys.
  */
-private suspend fun MainViewModel.resolveConflictReceiving(
+private suspend fun TransferLane.resolveConflictReceiving(
     filename: String,
     incomingSize: Long,
 ): ConflictOutcome = withContext(Dispatchers.IO) {
@@ -267,7 +267,7 @@ private suspend fun MainViewModel.resolveConflictReceiving(
 }
 
 // returns true if we need the transfer, false if not
-private fun MainViewModel.checkForFileReceiving(filename: String, size: Long): Boolean {
+private fun TransferLane.checkForFileReceiving(filename: String, size: Long): Boolean {
     // Does a file of this name and size already exist? Resolved against the cached directory
     // listing; the equivalent findFile() walk cost a full directory enumeration per path
     // component (see SafDirectoryCache).
@@ -296,14 +296,14 @@ private fun MainViewModel.checkForFileReceiving(filename: String, size: Long): B
 // its size and URI, or null if there's nothing there.
 private class ExistingFile(val uri: Uri, val size: Long)
 
-private fun MainViewModel.resolveExistingFile(filename: String): ExistingFile? {
+private fun TransferLane.resolveExistingFile(filename: String): ExistingFile? {
     safCache?.let { cache ->
         val entry = cache.resolve(filename) ?: return null
         if (entry.isDirectory) return null
         return ExistingFile(cache.documentUri(entry.documentId), entry.size)
     }
     // No cache outside a receive transfer: the original findFile() walk.
-    var target: DocumentFile? = DocumentFile.fromTreeUri(getApplication(), receiveDir)
+    var target: DocumentFile? = DocumentFile.fromTreeUri(app, receiveDir)
         ?: throw Exception("Error reading directory: $receiveDir")
     for (component in filename.split('/')) {
         target = target?.findFile(component) ?: return null

@@ -241,11 +241,11 @@ fun sanitizeRelativeFilename(filename: String): String {
     return components.joinToString("/")
 }
 
-fun MainViewModel.makeParentDirectories(filename: String): DocumentFile? {
+fun TransferLane.makeParentDirectories(filename: String): DocumentFile? {
     val childDirs = File(filename).parent?.split('/') ?: return null
     val cache = safCache ?: run {
         // No cache outside a receive transfer: the original findFile() walk.
-        var currentDir = DocumentFile.fromTreeUri(getApplication(), receiveDir)
+        var currentDir = DocumentFile.fromTreeUri(app, receiveDir)
         for (dir in childDirs) {
             if (currentDir == null) {
                 throw Exception("Could not make parent directories, couldn't get currentDir.")
@@ -484,8 +484,8 @@ private fun getFilesInRawDir(
     return allFiles
 }
 
-fun MainViewModel.hashFile(uri: Uri): ByteArray {
-    val stream = getApplication<Application>().contentResolver.openInputStream(uri)
+fun TransferLane.hashFile(uri: Uri): ByteArray {
+    val stream = app.contentResolver.openInputStream(uri)
         ?: throw Exception("Could not open file to hash")
     val buffer = ByteArray(1_000_000)
     val hasher = MessageDigest.getInstance("SHA-256")

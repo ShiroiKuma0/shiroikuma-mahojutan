@@ -565,6 +565,11 @@ function buildThemeCss() {
   css += `#totalProgressBar { accent-color: ${prog}; }\n`;
   css += `#totalProgressBar::-webkit-progress-bar { background-color: ${eColor('window.bg', BLACK)}; border: 1px solid ${prog}; }\n`;
   css += `#totalProgressBar::-webkit-progress-value { background-color: ${prog}; }\n`;
+  // the per-lane bars of parallel paired transfers (lanes.js) follow the same two settings
+  css += `.fork-lane-bar { height: ${barHeight}px; min-height: ${barHeight}px; accent-color: ${prog}; }\n`;
+  css += `.fork-lane-bar::-webkit-progress-bar { background-color: ${eColor('window.bg', BLACK)}; border: 1px solid ${prog}; }\n`;
+  css += `.fork-lane-bar::-webkit-progress-value { background-color: ${prog}; }\n`;
+  css += `.fork-lane-details { color: ${prog}; }\n`;
 
   // Settings page + About dialog chrome (page.* / about*).
   const accent = eColor('page.section.color', YELLOW);

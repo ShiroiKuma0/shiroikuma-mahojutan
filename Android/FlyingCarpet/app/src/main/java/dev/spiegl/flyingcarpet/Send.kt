@@ -8,7 +8,7 @@ import java.nio.ByteBuffer
 
 // v10+: file contents are protected by the Noise transport (see Noise.kt), which wraps the
 // whole connection, so chunks are sent as raw bytes here — no application-level encryption.
-suspend fun MainViewModel.sendFile(
+suspend fun TransferLane.sendFile(
     file: DocumentFile,
     fileStream: InputStream,
     filePath: String,
@@ -113,7 +113,7 @@ suspend fun MainViewModel.sendFile(
     }
 }
 
-private fun MainViewModel.sendChunk(chunk: ByteArray) {
+private fun TransferLane.sendChunk(chunk: ByteArray) {
     // length-prefixed raw bytes; confidentiality/integrity come from the Noise transport
     outputStream.write(longToBigEndianBytes(chunk.size.toLong()))
     outputStream.write(chunk)
@@ -123,7 +123,7 @@ private fun MainViewModel.sendChunk(chunk: ByteArray) {
  *  that is the folder part, empty for individually picked files. Handing it back is the only way
  *  the conflict question can name the file the peer is actually talking about (白い熊, 2026-08-09:
  *  the dialog asked about "" and offered to rename it to " (copy)"). */
-private fun MainViewModel.sendFileDetails(file: DocumentFile, path: String): String {
+private fun TransferLane.sendFileDetails(file: DocumentFile, path: String): String {
     // send size of filename
     if (file.name == null) {
         throw Exception("Could not get filename.")
@@ -152,7 +152,7 @@ private fun MainViewModel.sendFileDetails(file: DocumentFile, path: String): Str
  * the sticky rule is remembered on this side only, so a peer running an older build of the fork
  * still understands every file of the transfer.
  */
-private suspend fun MainViewModel.resolveConflictSending(
+private suspend fun TransferLane.resolveConflictSending(
     file: DocumentFile,
     filePath: String,
     moreFiles: Boolean,
@@ -214,7 +214,7 @@ private suspend fun MainViewModel.resolveConflictSending(
     }
 }
 
-private fun MainViewModel.checkForFileSending(file: DocumentFile): Boolean {
+private fun TransferLane.checkForFileSending(file: DocumentFile): Boolean {
     // we've sent the file details already, so need to wait for receiving end to tell us if they
     // have a file by that name and size. if so, hash and send. if not, proceed with transfer.
     val hasFileBytes = readNBytes(8, inputStream)

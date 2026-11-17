@@ -95,7 +95,8 @@ pub struct PairedOffer {
 /// than just "refused".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// This device is already transferring. One at a time, exactly as before.
+    /// This device cannot take another transfer right now: every lane is running, or a
+    /// hotspot or password-mode transfer has the radio.
     Busy = 2,
     /// The peer completed the handshake, so it holds the group key, but the user has not
     /// granted it unattended acceptance.
@@ -501,10 +502,12 @@ pub async fn send_to_peer<T: UI>(
     Ok(())
 }
 
-/// Handles one accepted connection. Split from the accept loop so a peer that misbehaves
-/// during its own session cannot take the listener down with it — `serve` logs the error
-/// and goes back to accepting.
-async fn serve_one<T: UI, D, C>(
+/// Handles one accepted connection, start to finish. Public because the accept loop no
+/// longer runs it: each connection is a lane of its own (see lanes.rs), spawned by whoever
+/// called `serve`, so a long transfer from one device does not hold the door shut against
+/// every other. A peer that misbehaves during its own session ends that session and
+/// nothing else.
+pub async fn serve_one<T: UI, D, C>(
     tcp: TcpStream,
     ring: &KeyRing,
     ui: &T,
@@ -596,29 +599,23 @@ where
     Ok(())
 }
 
-/// The standing receiver. Binds the presence TCP port and serves paired devices until
-/// cancelled.
+/// The standing receiver. Binds the presence TCP port and hands every connection to
+/// `on_connection` until cancelled.
 ///
 /// It never returns on its own: like the shared-network receiver, there is no timeout,
-/// because the other device may not be started for hours. A failed session is logged and
-/// the loop carries on — one peer with a stale key must not silently take away the
-/// ability to receive from every other.
+/// because the other device may not be started for hours.
 ///
-/// `keys` is asked afresh for every connection, for the same reason the presence responder
-/// does: a code shown a moment ago must already be claimable, and one just claimed must
-/// not be claimable again. `claimed` is told whenever a handshake completes, with whom and
-/// under which key, so the store can bind a pending code to the device that used it.
-pub async fn serve<T: UI, D, K, C>(
-    keys: K,
+/// It only accepts. `on_connection` is expected to spawn — typically `serve_one` on a task
+/// of its own — and return at once, so that a transfer in progress never stops the next
+/// device from getting through. This loop used to await each session in turn, which is
+/// what made a second sender wait on a connect that was accepted by nobody.
+pub async fn serve<T: UI, H>(
     ui: &T,
     cancel: Arc<AtomicBool>,
-    decide: D,
-    claimed: C,
+    on_connection: H,
 ) -> Result<(), FCError>
 where
-    D: Fn(&PairedOffer) -> Verdict + Send + Sync + 'static,
-    K: Fn() -> KeyRing + Send + Sync + 'static,
-    C: Fn(&Caller, &str) + Send + Sync + 'static,
+    H: Fn(TcpStream, SocketAddr),
 {
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], PRESENCE_PORT))).await?;
     ui.output(&format!(
@@ -641,16 +638,7 @@ where
                 Err(_) => continue,
             };
         let (tcp, addr) = accepted;
-        let ring = keys();
-        if let Err(e) = serve_one(tcp, &ring, ui, &decide, &claimed).await {
-            // Includes the ordinary case of a stranger connecting: they cannot get past
-            // the hello without a key of ours, and this is where that surfaces.
-            ui.output(&format!("Transfer from {} ended: {}", addr, e));
-        }
-        // Fork: the session is over either way, so the window can put its progress
-        // readout away. Without this a received transfer left its bars full and its
-        // "0s left" lines up under "Transfer complete" for good (白い熊, 2026-11-14).
-        ui.enable_ui();
+        on_connection(tcp, addr);
     }
 }
 

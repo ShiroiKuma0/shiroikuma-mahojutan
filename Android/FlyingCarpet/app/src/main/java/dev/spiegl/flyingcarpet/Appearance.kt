@@ -484,6 +484,18 @@ object Appearance {
     /// faint track, which reads as a different control entirely.
     private fun applyProgressBar(activity: AppCompatActivity, s: Settings, barId: Int) {
         val bar = activity.findViewById<ProgressBar>(barId) ?: return
+        styleProgressBar(activity, s, bar)
+    }
+
+    /** The colour of the bars and of the lines above them. */
+    fun progressColor(activity: AppCompatActivity): Int =
+        Settings(activity).colorOrNull("progress.color") ?: Defaults.YELLOW
+
+    /** The same bar for one made in code — a lane's (LaneViews.kt). */
+    fun styleProgressBar(activity: AppCompatActivity, bar: ProgressBar) =
+        styleProgressBar(activity, Settings(activity), bar)
+
+    private fun styleProgressBar(activity: AppCompatActivity, s: Settings, bar: ProgressBar) {
         val color = s.colorOrNull("progress.color") ?: Defaults.YELLOW
         val height = dpToPx(activity, s.sizeOrNull("progress.height") ?: 15f)
 
@@ -510,7 +522,9 @@ object Appearance {
         bar.progressTintList = null
         bar.progress = 0
         bar.progress = progress
-        bar.layoutParams = bar.layoutParams.apply { this.height = height }
+        bar.layoutParams = (bar.layoutParams ?: android.view.ViewGroup.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT, height,
+        )).apply { this.height = height }
         bar.minimumHeight = height
     }
 

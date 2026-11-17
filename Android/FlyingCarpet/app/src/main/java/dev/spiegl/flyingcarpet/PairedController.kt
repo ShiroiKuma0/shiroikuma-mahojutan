@@ -1,5 +1,6 @@
 package dev.spiegl.flyingcarpet
 
+import android.app.Application
 import android.content.Context
 import android.net.Uri
 import android.util.Log
@@ -36,6 +37,7 @@ class PairedController(
     val pairing = Pairing(context)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val app: Application get() = context.applicationContext as Application
     private var responder: PresenceResponder? = null
     private var responderJob: Job? = null
     private var listener: PairedListener? = null
@@ -105,7 +107,11 @@ class PairedController(
         listener = paired
         listenerJob = scope.launch {
             try {
-                paired.listen { socket -> serveOne(socket) }
+                // One coroutine per connection, and in the controller's scope rather than
+                // under this one: several devices may send at once, and a transfer under
+                // way must outlive the listener that accepted it — stop() cancels the
+                // listener every time the app leaves the screen.
+                paired.listen { socket -> scope.launch { serveOne(socket) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -319,18 +325,34 @@ class PairedController(
         return wakeOverBluetooth()
     }
 
-    /** One authenticated control connection: handshake, ask, hear the answer, hang up. */
+    /**
+     * One authenticated control connection: handshake, ask, hear the answer, hang up.
+     *
+     * A lane of its own that is never entered in the registry: it moves no files and is gone
+     * in a moment, and it must never share state with the hotspot transfer that follows it —
+     * which, being a lane, it now cannot.
+     */
     private suspend fun requestOverLan(
         peer: PairedPeer,
         address: String,
         key: ByteArray,
     ): Boolean {
+        val lane = PairedLane(
+            app,
+            sending = true,
+            peerId = peer.deviceId,
+            peerName = peer.displayName,
+            log = viewModel::outputText,
+        )
+        // Read for the offer only — how many files and how large — so the far device can
+        // refuse a transfer it would refuse anyway before raising a hotspot for it. The
+        // streams stay where they are: the transfer itself runs on the single slot.
+        lane.files = viewModel.files
         return try {
-            if (!viewModel.connectToPairedPeer(address)) return false
-            viewModel.mode = Mode.Sending
-            viewModel.connectionMode = ConnectionMode.SharedNetwork
-            viewModel.psk = derivePairedPsk(key)
-            viewModel.pairedSession = PairedSession(
+            if (!lane.connectToPairedPeer(address)) return false
+            lane.mode = Mode.Sending
+            lane.psk = derivePairedPsk(key)
+            lane.pairedSession = PairedSession(
                 key = key,
                 sending = true,
                 localId = pairing.deviceId,
@@ -338,9 +360,9 @@ class PairedController(
                 peerName = peer.displayName,
                 request = REQUEST_RAISE_HOTSPOT,
             )
-            viewModel.startTransfer()
-            // startTransfer only returns normally if it ran a whole transfer, which a
-            // request must never do.
+            lane.run()
+            // run() only returns normally if it ran a whole transfer, which a request must
+            // never do.
             false
         } catch (e: HotspotRequested) {
             pairing.noteSeen(peer.deviceId, address)
@@ -351,10 +373,7 @@ class PairedController(
             Log.i("Paired", "LAN hotspot request failed: ${e.message}")
             false
         } finally {
-            // Only the control connection is torn down here; the hotspot that follows is set
-            // up fresh by the caller.
-            viewModel.pairedSession = null
-            viewModel.closePairedControlConnection()
+            lane.close()
         }
     }
 
@@ -380,6 +399,13 @@ class PairedController(
         val key = pairing.keyFor(peer.deviceId)
         if (key == null) {
             viewModel.outputText("No pairing key is stored for ${peer.displayName}; pair it again.")
+            onFinished()
+            return
+        }
+        // A hotspot takes the radio the lanes are running on. Refused here as well as on the
+        // screen, because the doorbell and the "Stay reachable" service arrive without one.
+        if (lanesBlockHotspot()) {
+            viewModel.cleanUpUi()
             onFinished()
             return
         }
@@ -485,6 +511,7 @@ class PairedController(
      * later, and doing it here as well would raise two access points.
      */
     fun armForIncomingHotspot(senderId: String?, senderOs: PeerOs?): Boolean {
+        if (lanesBlockHotspot()) return false
         // The credentials are derived per pair, so a caller that did not say who it is
         // cannot be hosted for — there is no key to derive them from.
         val peer = senderId?.let { pairing.findPeer(it) }
@@ -548,6 +575,20 @@ class PairedController(
         }
     }
 
+    /**
+     * Whether lanes are in the way of a hotspot, saying so if they are. The other half of the
+     * exclusion is in sendTo() and decide(): no lane starts while the single slot is busy.
+     */
+    private fun lanesBlockHotspot(): Boolean {
+        if (!TransferLanes.anyActive) return false
+        viewModel.outputText(
+            "A hotspot transfer cannot start while transfers over this network are running " +
+                "or queued — it would take the Wi-Fi away from them. Wait for them to finish, " +
+                "or cancel them."
+        )
+        return true
+    }
+
     /** Finds one device now, for when its remembered address did not answer. */
     private suspend fun locate(deviceId: String): String? =
         scanFor(deviceId).find { it.deviceId == deviceId }?.ip
@@ -557,39 +598,62 @@ class PairedController(
     /**
      * Whether to take one offer, and where to put it.
      *
-     * [alreadyBusy] is sampled by the caller *before* it arms the transfer, and that is not a
-     * nicety — reading `transferIsRunning` in here refused every paired receive that ever
-     * happened (白い熊, 2026-09-11, "The other device is busy with another transfer"). Both
-     * callers set the flag and then run the transfer, and the offer exchange sits inside that
-     * transfer, so the guard was always looking at the very transfer it was being asked
-     * about. The question is "was this device busy when the connection arrived", which can
-     * only be answered before we make ourselves busy answering it.
+     * [lane] is the lane the offer arrived on, or null for the receiving half of a paired
+     * hotspot transfer, which runs on the single slot. That half passes [alreadyBusy],
+     * sampled *before* it armed the transfer, and that is not a nicety — reading
+     * `transferIsRunning` in here refused every paired receive that ever happened (白い熊,
+     * 2026-09-11, "The other device is busy with another transfer"): the caller sets the flag
+     * and then runs the transfer, and the offer exchange sits inside that transfer, so the
+     * guard was always looking at the very transfer it was being asked about.
+     *
+     * A lane has no such problem. It does not touch the single slot's flag, so "is this
+     * device busy" is asked of the registry, here, at the moment the answer goes on the wire.
      */
-    private fun decide(offer: PairedOffer, alreadyBusy: Boolean): Verdict {
+    private fun decide(offer: PairedOffer, alreadyBusy: Boolean, lane: PairedLane? = null): Verdict {
         if (alreadyBusy) return Verdict.Refuse(Refusal.BUSY)
         val peer = pairing.findPeer(offer.deviceId)
         // Holding the key is necessary but not sufficient: 白い熊 gets the last word on which
         // of their own devices may write here without being asked.
         if (peer == null || !peer.autoAccept) return Verdict.Refuse(Refusal.NOT_ALLOWED)
+        if (offer.request == REQUEST_RAISE_HOTSPOT) {
+            // Asked to leave this network for a hotspot: not while anything is running on
+            // it, and not while the single slot is already spoken for.
+            if (TransferLanes.anyActive || TransferLanes.primaryRunning) {
+                return Verdict.Refuse(Refusal.BUSY)
+            }
+        }
         val ceiling = pairing.autoAcceptMaxBytes
         if (ceiling > 0 && offer.totalBytes > ceiling) return Verdict.Refuse(Refusal.TOO_LARGE)
-        // This device's own folder first, then whatever the main screen is pointing at. The
-        // fallback matters: a peer paired before per-device folders existed has none stored.
+        // This device's own directory first, then whatever the main screen is pointing at. The
+        // fallback matters: a peer paired before per-device directories existed has none stored.
         val destination = peer.receiveDir?.let(Uri::parse) ?: receiveDirProvider()
             ?: return Verdict.Refuse(Refusal.NO_DESTINATION)
+        if (lane != null && offer.request == REQUEST_TRANSFER) {
+            // Last, so that a lane is only ever entered for a transfer that is going to
+            // happen. The registry says no when the lanes are full, or when a hotspot or
+            // password-mode transfer holds the single slot.
+            lane.peerId = offer.deviceId
+            lane.peerName = peer.displayName
+            if (!TransferLanes.admitIncoming(lane)) return Verdict.Refuse(Refusal.BUSY)
+        }
         return Verdict.Accept(destination)
     }
 
     private suspend fun serveOne(socket: Socket) {
         // The destination is deliberately NOT chosen here: it depends on which device is
         // calling, and that is not known until its offer has been read — inside the transfer,
-        // after the handshake has proved it holds the key. decide() picks it then. The key
-        // itself is chosen by the hello, from the ring as it stands when the call arrives.
-        viewModel.client = socket
-        viewModel.mode = Mode.Receiving
-        viewModel.connectionMode = ConnectionMode.SharedNetwork
-        // Sampled before arming, or the guard in decide() sees the flag set two lines below.
-        val alreadyBusy = viewModel.transferIsRunning
+        // after the handshake has proved it holds the key. decide() picks it then, and enters
+        // the lane in the registry at the same moment. The key itself is chosen by the hello,
+        // from the ring as it stands when the call arrives.
+        val lane = PairedLane(
+            app,
+            sending = false,
+            peerId = null,
+            peerName = "",
+            log = viewModel::outputText,
+        )
+        lane.client = socket
+        lane.mode = Mode.Receiving
         val session = PairedSession(
             key = null,
             sending = false,
@@ -610,25 +674,34 @@ class PairedController(
                     )
                 )
             },
-            decide = { offer -> decide(offer, alreadyBusy) },
+            decide = { offer -> decide(offer, alreadyBusy = false, lane = lane) },
         )
-        viewModel.pairedSession = session
-        viewModel.transferIsRunning = true
+        lane.pairedSession = session
+        lane.job = kotlin.coroutines.coroutineContext[Job]
         try {
-            viewModel.startTransfer()
+            lane.run()
             session.offer?.let { onArrival(it) }
-            viewModel.cleanUpTransfer()
         } catch (e: HotspotRequested) {
-            // Not a failure: the control connection did its job. Let go of it and of the
-            // transfer state it borrowed, then raise the access point the peer is waiting for.
-            viewModel.cleanUpTransfer()
+            // Not a failure: the control connection did its job. Let go of it, then raise the
+            // access point the peer is waiting for.
+            lane.close()
             val offer = e.offer
             // The OS is not in the offer — it is looked up from the paired store by id, which
             // is where it was recorded when the device was found.
             hostForPairedPeer(offer?.deviceId, null)
-        } catch (e: Throwable) {
-            viewModel.cleanUpTransfer()
+        } catch (e: CancellationException) {
             throw e
+        } catch (e: Exception) {
+            Log.w("Paired", "Transfer from ${socket.inetAddress} ended: ${e.message}")
+            // On screen only once the transfer was taken. A connection that never got that
+            // far — a stale key, a refusal — is the other device's news, and it has said so
+            // there.
+            if (lane.state == PairedLane.State.RUNNING && !lane.cancelled) {
+                lane.outputText("Transfer error: ${e.message}")
+            }
+        } finally {
+            lane.close()
+            TransferLanes.finish(lane)
         }
     }
 
@@ -636,7 +709,11 @@ class PairedController(
 
     /**
      * Sends to a paired device. The caller has already put the selection into the ViewModel,
-     * exactly as the file picker does; everything after that is this one call.
+     * exactly as the file picker does; this takes it out again and into a lane of its own, so
+     * the screen is free for the next selection while this one is still on its way.
+     *
+     * The lane starts at once unless that device already has a transfer with this one, or
+     * four are already running — then it waits its turn, on screen, with its own Cancel.
      *
      * The remembered address is tried first and a scan is the fallback, not the other way
      * round: a unicast packet reaches a phone whose Wi-Fi driver is filtering broadcast,
@@ -651,26 +728,57 @@ class PairedController(
             onFinished()
             return
         }
-        viewModel.transferCoroutine = scope.launch {
+        if (TransferLanes.primaryRunning) {
+            viewModel.outputText(
+                "A hotspot or password transfer is running, and it has the Wi-Fi to itself. " +
+                    "Send to ${peer.displayName} when it has finished."
+            )
+            onFinished()
+            return
+        }
+        val lane = PairedLane(
+            app,
+            sending = true,
+            peerId = peer.deviceId,
+            peerName = peer.displayName,
+            log = viewModel::outputText,
+            ask = { who, name, identical, moreFiles ->
+                viewModel.askAboutExistingFile(who, name, identical, moreFiles)
+            },
+        )
+        // The selection moves into the lane, and the ViewModel gets fresh, empty lists: the
+        // next pick must not reach into a transfer that is already running.
+        lane.files = viewModel.files
+        lane.fileStreams = viewModel.fileStreams
+        lane.filePaths = viewModel.filePaths
+        viewModel.files = mutableListOf()
+        viewModel.fileStreams = mutableListOf()
+        viewModel.filePaths = mutableListOf()
+        lane.mode = Mode.Sending
+        lane.psk = derivePairedPsk(key)
+        lane.pairedSession = PairedSession(
+            key = key,
+            sending = true,
+            localId = pairing.deviceId,
+            localName = pairing.name,
+            peerName = peer.displayName,
+        )
+        val count = lane.files.size
+        val what = if (count == 1) lane.files[0].name ?: "one file" else "$count files"
+        if (TransferLanes.enqueue(lane)) {
+            lane.outputText("Queued $what. It starts as soon as it can.")
+        } else {
+            lane.outputText("Sending $what.")
+        }
+        lane.job = scope.launch {
             try {
-                viewModel.mode = Mode.Sending
-                viewModel.connectionMode = ConnectionMode.SharedNetwork
-                viewModel.psk = derivePairedPsk(key)
-                viewModel.pairedSession = PairedSession(
-                    key = key,
-                    sending = true,
-                    localId = pairing.deviceId,
-                    localName = pairing.name,
-                    peerName = peer.displayName,
-                )
-                viewModel.transferIsRunning = true
-
-                var connected = peer.lastIp?.let { viewModel.connectToPairedPeer(it) } == true
+                TransferLanes.awaitTurn(lane)
+                var connected = peer.lastIp?.let { lane.connectToPairedPeer(it) } == true
                 if (!connected) {
-                    viewModel.outputText("Looking for ${peer.displayName} on this network...")
+                    lane.outputText("Looking for ${peer.displayName} on this network...")
                     val fresh = locate(peer.deviceId)
                     if (fresh != null && fresh != peer.lastIp) {
-                        connected = viewModel.connectToPairedPeer(fresh)
+                        connected = lane.connectToPairedPeer(fresh)
                         if (connected) pairing.noteSeen(peer.deviceId, fresh)
                     }
                 }
@@ -680,14 +788,15 @@ class PairedController(
                             "devices are on the same network."
                     )
                 }
-                viewModel.startTransfer()
+                lane.run()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                viewModel.outputText("Transfer error: ${e.message}\n")
+                // A cancelled lane fails on its closed socket; it has already said why.
+                if (!lane.cancelled) lane.outputText("Transfer error: ${e.message}")
             } finally {
-                viewModel.cleanUpTransfer()
-                viewModel.finishTransfer()
+                lane.close()
+                TransferLanes.finish(lane)
                 onFinished()
             }
         }

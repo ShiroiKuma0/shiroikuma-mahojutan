@@ -9,6 +9,8 @@
     <!-- fork: paired devices — the one-click send. Loaded after customize.js, whose dialog
          primitives it imports. -->
     <script type="module" src="/devices.js" defer></script>
+    <!-- fork: parallel paired transfers — one progress block per running or queued lane. -->
+    <script type="module" src="/lanes.js" defer></script>
     <!-- <script type="module" src="/deps/bootstrap.bundle.min.js" defer></script> -->
     <link rel="stylesheet" href="/deps/bootstrap.min.css">
     <link rel="stylesheet" href="style.css" />
@@ -107,6 +109,10 @@
       <div id="outputBox" class="horizontalContainer" style="flex-grow: 9; flex-shrink: 9; overflow-y: auto; padding: 5px; margin-top: 5px;">
         Welcome to 白い熊 魔法絨毯!<br>Once other options are selected, drag and drop can be used to start a transfer.
       </div>
+
+      <!-- fork: paired transfers in progress, one block each (lanes.js). Empty and hidden
+           while there are none; the bars below belong to hotspot and password transfers. -->
+      <div id="laneStack" hidden></div>
 
       <!-- two lines above the bars while a transfer runs: the current file, then the whole transfer -->
       <div id="progressDetails" style="display: none; text-align: center; margin-top: 5px; font-variant-numeric: tabular-nums;"></div>

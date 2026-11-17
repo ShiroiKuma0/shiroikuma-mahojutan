@@ -17,7 +17,7 @@ import kotlin.coroutines.coroutineContext
 
 // Fork: a transfer between two devices that already know each other.
 //
-// Written as extensions on MainViewModel, the way Send.kt and Receive.kt are, so the whole
+// Written as extensions on TransferLane, the way Send.kt and Receive.kt are, so the whole
 // existing pipeline is reused rather than reimplemented: the same preamble, the same Noise
 // handshake, the same sendFile/receiveFile, the same conflict dialog, the same SAF cache.
 // What changes is only what happens before it:
@@ -172,7 +172,7 @@ class PairedSession(
  * preamble and before the Noise handshake, on the *recording* streams, so it lands in the
  * prologue. On the listening side it is what chooses the PSK.
  */
-suspend fun MainViewModel.exchangePairedHello(session: PairedSession, role: NoiseRole) {
+suspend fun TransferLane.exchangePairedHello(session: PairedSession, role: NoiseRole) {
     withContext(Dispatchers.IO) {
         if (role == NoiseRole.INITIATOR) {
             val key = session.key ?: throw Exception("No pairing key for that device; pair it again.")
@@ -266,7 +266,7 @@ private fun readNBytesOrThrow(input: InputStream, n: Int): ByteArray {
     return buffer
 }
 
-fun MainViewModel.writePairedOffer(offer: PairedOffer) {
+fun TransferLane.writePairedOffer(offer: PairedOffer) {
     outputStream.write(longToBigEndianBytes(OFFER_VERSION))
     outputStream.write(longToBigEndianBytes(offer.request))
     writeBytes(outputStream, base32Decode(offer.deviceId) ?: ByteArray(16))
@@ -277,7 +277,7 @@ fun MainViewModel.writePairedOffer(offer: PairedOffer) {
     outputStream.flush()
 }
 
-fun MainViewModel.readPairedOffer(): PairedOffer {
+fun TransferLane.readPairedOffer(): PairedOffer {
     val version = ByteBuffer.wrap(readNBytesOrThrow(inputStream, 8)).long
     if (version != OFFER_VERSION) {
         throw Exception(
@@ -300,7 +300,7 @@ fun MainViewModel.readPairedOffer(): PairedOffer {
  * startTransfer() immediately after the Noise handshake, so everything here is already
  * encrypted and the peer has already proved it holds the group key.
  */
-suspend fun MainViewModel.exchangePairedOffer(session: PairedSession) {
+suspend fun TransferLane.exchangePairedOffer(session: PairedSession) {
     withContext(Dispatchers.IO) {
         if (session.sending) {
             val total = files.sumOf { it.length() }
@@ -396,7 +396,7 @@ suspend fun MainViewModel.exchangePairedOffer(session: PairedSession) {
  * has not been armed — if it does not answer, it is not listening, and saying so at once is
  * more useful than fifteen attempts over thirty seconds.
  */
-suspend fun MainViewModel.connectToPairedPeer(address: String): Boolean =
+suspend fun TransferLane.connectToPairedPeer(address: String): Boolean =
     withContext(Dispatchers.IO) {
         try {
             outputText("Connecting to $address...")
@@ -410,20 +410,6 @@ suspend fun MainViewModel.connectToPairedPeer(address: String): Boolean =
             false
         }
     }
-
-/**
- * Closes the socket a control connection used, without running the full transfer teardown —
- * which would release locks and clear UI state the hotspot about to be raised still needs.
- */
-fun MainViewModel.closePairedControlConnection() {
-    try {
-        client.close()
-    } catch (e: UninitializedPropertyAccessException) {
-        // Never connected; nothing to close.
-    } catch (e: Exception) {
-        Log.i("Paired", "Could not close the control connection: ${e.message}")
-    }
-}
 
 // ── receiving ─────────────────────────────────────────────────────────────────────────────
 

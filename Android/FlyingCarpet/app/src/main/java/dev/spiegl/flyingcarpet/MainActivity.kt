@@ -189,8 +189,8 @@ class MainActivity : AppCompatActivity() {
                 return@registerForActivityResult
             }
             if (peer != null) {
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-                toggleUI(false)
+                // A lane of its own: nothing on this screen is locked, so the next
+                // selection can go to another device while this one is still moving.
                 pairedController.sendTo(peer) { }
                 return@registerForActivityResult
             }
@@ -487,14 +487,18 @@ class MainActivity : AppCompatActivity() {
             totalBytes = viewModel.files.sumOf { it.length() },
             onSendTo = { peer, overHotspot ->
                 sharedSelectionPending = false
-                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-                toggleUI(false)
                 // The files are already in hand, so neither route needs a picker: this is the
-                // one tap the whole sheet exists for.
+                // one tap the whole sheet exists for. Only the hotspot route takes the screen;
+                // a send over this network is a lane and leaves it free.
                 if (overHotspot) {
-                    pairedController.overHotspot(peer, sending = true, receiveDir = null) { }
+                    if (!lanesBlockSingleSlot()) {
+                        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                        toggleUI(false)
+                        pairedController.overHotspot(peer, sending = true, receiveDir = null) { }
+                    }
                 } else {
                     pairedController.sendTo(peer) { }
+                    refreshStartLabel()
                 }
             },
             onClassic = { mode ->
@@ -568,8 +572,6 @@ class MainActivity : AppCompatActivity() {
                     return@registerForActivityResult
                 }
                 if (peer != null) {
-                    requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
-                    toggleUI(false)
                     pairedController.sendTo(peer) { }
                     return@registerForActivityResult
                 }
@@ -1074,6 +1076,7 @@ class MainActivity : AppCompatActivity() {
      * used, and asks for one only if there isn't one.
      */
     private fun pairedOverHotspot(peer: PairedPeer, sending: Boolean, folder: Boolean = false) {
+        if (lanesBlockSingleSlot()) return
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
         if (sending) {
             toggleUI(false)
@@ -1257,6 +1260,12 @@ class MainActivity : AppCompatActivity() {
         viewModel.totalProgressBar.observe(this) { value ->
             totalProgressBar.progress = value
         }
+        // Fork: the paired transfers running over this network, one block each.
+        LaneViews.bind(
+            this,
+            findViewById(id.laneScroll),
+            findViewById(id.laneList),
+        ) { viewModel.transferIsRunning }
         viewModel.transferFinished.observe(this) { finished ->
             // this was firing because when we started observing, we were running viewModel.cleanUpTransfer()
             // no matter what. and then _transferFinished was true. now initializing as false.
@@ -1324,6 +1333,7 @@ class MainActivity : AppCompatActivity() {
         lastFolderButton = findViewById(id.lastFolderButton)
         lastFolderButton.setOnClickListener {
             val uri = lastReceiveDir() ?: return@setOnClickListener
+            if (lanesBlockSingleSlot()) return@setOnClickListener
             viewModel.receiveDir = uri
             viewModel.mode = Mode.Receiving
             // Arm the transfer, exactly as the start button does. Without this the whole receive
@@ -1501,7 +1511,7 @@ class MainActivity : AppCompatActivity() {
         // this design exists to avoid. A transfer already under way is not affected: it owns
         // its own socket, not the listener's.
         if (this::pairedController.isInitialized && !viewModel.transferIsRunning &&
-            !PresenceService.running
+            !TransferLanes.anyActive && !PresenceService.running
         ) {
             pairedController.stop()
         }
@@ -1544,6 +1554,11 @@ class MainActivity : AppCompatActivity() {
     // What both send buttons (and the receive button, which is the same view) do: arm the transfer,
     // lock the UI, read the mode and peer, then open the picker the pressed button implies.
     private fun startPressed(sendFolder: Boolean) {
+
+        // Fork: hotspot and password-mode transfers have the Wi-Fi to themselves.
+        if (lanesBlockSingleSlot()) {
+            return
+        }
 
         // Fallback for a denial at launch. Checked here rather than in startHotspot()
         // because that only covers the hosting path — joining a hotspot and shared network
@@ -1677,13 +1692,18 @@ class MainActivity : AppCompatActivity() {
     // because this is where the user who chose the files is -- upstream decides it silently on the
     // receiving one. Fork-only: the exchange behind it is version-guarded (see confirmVersion).
     private fun askFileConflict(
+        who: String,
         name: String,
         identical: Boolean,
         moreFiles: Boolean,
         answer: (FileConflictAnswer) -> Unit,
     ) {
         val box = ForkDialog.box(this)
-        box.addView(ForkDialog.heading(this, "The other device already has this file"))
+        // Named when it is known: with several transfers running, "the other device" is no
+        // longer one device.
+        box.addView(
+            ForkDialog.heading(this, "${who.ifEmpty { "The other device" }} already has this file")
+        )
         box.addView(ForkDialog.spacer(this, 10))
         box.addView(
             TextView(this).apply {
@@ -1908,10 +1928,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Fork: hotspot and password-mode transfers run on the single slot and have the Wi-Fi to
+     * themselves — a hotspot takes this device off the network the lanes are running on. True,
+     * with the reason in the log, when lanes are in the way of starting one.
+     */
+    private fun lanesBlockSingleSlot(): Boolean {
+        if (!TransferLanes.anyActive) return false
+        viewModel.outputText(
+            "Transfers to paired devices are running or queued, and this kind of transfer " +
+                "needs the Wi-Fi to itself. Wait for them to finish, or cancel them."
+        )
+        return true
+    }
+
     private fun cleanUpUi() {
         // toggle UI and replace icon
         runOnUiThread {
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            // The lanes hold the orientation too, for as long as there are any — see
+            // observeLanes().
+            if (!TransferLanes.anyActive) {
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
             toggleUI(true)
             val qrCode = findViewById<ImageView>(id.qrCodeView)
             val drawable = AppCompatResources.getDrawable(applicationContext, R.drawable.icon1024)

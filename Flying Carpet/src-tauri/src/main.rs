@@ -17,6 +17,8 @@ use tokio::sync::mpsc;
 // Fork: paired devices. Everything the feature needs lives in this module; only the
 // registrations below reach into upstream's file.
 mod fork_paired;
+// Fork: parallel paired transfers. Same arrangement.
+mod fork_lanes;
 
 #[derive(Clone, serde::Serialize)]
 struct FileConflictPayload {
@@ -247,6 +249,7 @@ fn start_async(
     // store here.
     paired_hotspot: Option<String>,
     paired_state: State<fork_paired::PairedState>,
+    lanes: State<fork_lanes::LanesState>,
     window: Window,
 ) -> Option<String> {
     let thread_window = window.clone();
@@ -287,6 +290,12 @@ fn start_async(
     }
     if task.is_running() {
         return Some("A transfer is already in progress.".to_string());
+    }
+    // Fork: a hotspot or password-mode transfer needs the network to itself, so it waits
+    // for the paired transfers. Asked under the task lock, which a lane's admission takes
+    // too — the two can never both pass.
+    if lanes.is_active() {
+        return Some(fork_lanes::PRIMARY_REFUSED.to_string());
     }
 
     let handle = tokio::spawn(async move {
@@ -371,6 +380,7 @@ async fn main() {
         .plugin(tauri_plugin_os::init())
         .manage(Transfer::new())
         .manage(fork_paired::PairedState::load())
+        .manage(fork_lanes::LanesState::default())
         .setup(|_app| {
             // Tauri's default window icon is the first PNG listed in bundle.icon, i.e. the
             // 32x32 one, and that's all it publishes as _NET_WM_ICON. Window managers scale
@@ -441,6 +451,9 @@ async fn main() {
             fork_paired::paired_reorder,
             fork_paired::paired_scan,
             fork_paired::paired_send,
+            fork_lanes::lanes_status,
+            fork_lanes::lane_cancel,
+            fork_lanes::lane_file_conflict,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
