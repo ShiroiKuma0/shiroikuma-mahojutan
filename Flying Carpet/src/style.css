@@ -17,25 +17,8 @@ body {
   justify-content: space-between;
 }
 
+/* fork: the prompt's shade and card are drawn in customize.css, from the dialog roles — no
+   colour is written here. Upstream's white card is gone: it left yellow text on white. */
 #promptOverlay {
   display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  align-items: center;
-  justify-content: center;
-}
-
-/* fork: the card wears the same black/yellow dress as the Export/Import dialogs
-   (.fork-info-box in customize.css); customize.js repaints it from the "Password dialog"
-   settings. Upstream's white card is gone -- it left yellow text on white. */
-#promptCard {
-  background: #000000;
-  border: 2px solid #ffff00;
-  border-radius: 16px;
-  padding: 20px 22px 16px;
-  min-width: 320px;
-  max-width: 90%;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
 }

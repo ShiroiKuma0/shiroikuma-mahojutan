@@ -124,8 +124,25 @@ class Totals(val numFiles: Int, val totalBytes: Long?) {
     // a cumulative average sitting next to a recent one.
     private val rateWindow = RateWindow()
 
+    // For the speed check (LinkDoctor.kt), which needs the figures rather than the sentence:
+    // how much has moved, and how fast lately. Kept whether or not the total is known, so a
+    // receiving transfer has them too.
+    private val speedWindow = RateWindow()
+
+    /** Bytes moved so far, files in flight included. */
+    @Volatile
+    var moved = 0L
+        private set
+
+    /** Bytes per second over the last few seconds; null before there is anything to go on. */
+    @Volatile
+    var recentRate: Double? = null
+        private set
+
     // Pair(percent, text) for the whole transfer, given how far into the current file we are.
     fun snapshot(currentDone: Long, currentSize: Long): Pair<Int, String> {
+        moved = bytesDone + currentDone
+        recentRate = speedWindow.sample(moved)
         val files = "File ${maxOf(fileIndex, 1)} of $numFiles"
         val total = totalBytes
         return if (total != null && total > 0) {

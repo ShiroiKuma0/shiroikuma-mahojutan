@@ -9,7 +9,7 @@
 // "stay reachable" question that shapes the Android side does not arise here.
 
 use flying_carpet_core::{
-    network,
+    linkstate, network,
     paired::{self, Caller, PairedOffer, Refusal, Verdict},
     pairing::{self, KeyRing, PairKey, PairedPeer, PairingStore},
     presence::{self, DiscoveredPeer, LocalIdentity, PeerOs, PRESENCE_PORT},
@@ -690,7 +690,8 @@ pub async fn serve_connection(
     };
     let decider_app = app.clone();
     let claim_app = app.clone();
-    paired::serve_one(
+    let control_app = app.clone();
+    paired::serve_one_with_control(
         tcp,
         &ring,
         ui,
@@ -714,9 +715,90 @@ pub async fn serve_connection(
                 },
             );
         },
+        &move |offer: &PairedOffer, local_ip: IpAddr| control(&control_app, offer, local_ip),
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// A way to see the narrow-channel dialog without waiting for an access point to misbehave:
+/// started with `SHIROIKUMA_PRETEND_NARROW=1`, this device reports its downlink as the 20 MHz
+/// one of 2026-11-21 until its Wi-Fi has been reconnected once. Everything else — the
+/// reconnect itself included — is real.
+fn pretend_narrow() -> &'static AtomicBool {
+    static PRETEND: std::sync::OnceLock<AtomicBool> = std::sync::OnceLock::new();
+    PRETEND.get_or_init(|| {
+        AtomicBool::new(std::env::var("SHIROIKUMA_PRETEND_NARROW").is_ok_and(|v| v == "1"))
+    })
+}
+
+/// Answers the requests that move no files (paired::is_control): how this device's Wi-Fi link
+/// looks, reconnect it, send again what was cut. All three come from the phone's
+/// narrow-channel dialog (LinkDoctor.kt), under a pair key the handshake has just proved.
+///
+/// The reply is `key=value` lines; `ok=0` comes with an `error=` a person can read, because
+/// it is shown to one.
+fn control(app: &AppHandle, offer: &PairedOffer, local_ip: IpAddr) -> Option<String> {
+    let id = pairing::base32_encode(&offer.device_id);
+    let peer_name = {
+        let state: State<PairedState> = app.state();
+        state.snapshot().find_peer(&id).map(|p| p.display_name())?
+    };
+    let refuse = |why: &str| Some(format!("ok=0\nerror={}\n", why));
+    match offer.request {
+        paired::REQUEST_LINK_STATUS => {
+            let mut state = linkstate::read(local_ip);
+            if pretend_narrow().load(Ordering::SeqCst) && state.wifi {
+                state.rx = linkstate::Rate { mbps: 172.0, mhz: 20 };
+            }
+            Some(state.to_wire())
+        }
+        paired::REQUEST_REASSOCIATE => {
+            {
+                let transfer: State<Transfer> = app.state();
+                let task = transfer.task.lock().unwrap_or_else(|e| e.into_inner());
+                if task.is_running() || task.cancelling {
+                    return refuse("A hotspot or password transfer is running on it; reconnecting its Wi-Fi would cut that.");
+                }
+            }
+            if fork_lanes::others_active(app, &id) {
+                return refuse("It has transfers running with other devices; reconnecting its Wi-Fi would cut them.");
+            }
+            let before = linkstate::read(local_ip);
+            if !before.wifi {
+                return refuse("It is not connected over Wi-Fi.");
+            }
+            let ui = BackgroundUi { app: app.clone() };
+            ui.output(&format!(
+                "{} asked this device to reconnect its Wi-Fi: the link is narrow ({}). Reconnecting...",
+                peer_name,
+                before.describe()
+            ));
+            let iface = before.iface.clone();
+            // On a thread of its own, and after a pause: the reply has to leave over the
+            // very link this is about to take down.
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(700));
+                match linkstate::reassociate(&iface) {
+                    Ok(()) => {
+                        pretend_narrow().store(false, Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_secs(2));
+                        ui.output(&format!(
+                            "Wi-Fi reconnected ({}).",
+                            linkstate::read(local_ip).describe()
+                        ));
+                    }
+                    Err(e) => ui.output(&format!("Could not reconnect the Wi-Fi: {}", e)),
+                }
+            });
+            Some("ok=1\n".to_string())
+        }
+        paired::REQUEST_RESEND => match fork_lanes::resend(app, &id, &peer_name) {
+            Ok(count) => Some(format!("ok=1\nfiles={}\n", count)),
+            Err(e) => refuse(&e),
+        },
+        _ => None,
+    }
 }
 
 /// Brings the serve loop up, or takes it down, to match the store.

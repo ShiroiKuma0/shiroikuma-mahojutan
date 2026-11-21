@@ -21,13 +21,17 @@ import com.google.android.material.button.MaterialButtonToggleGroup
 // black backgrounds — everywhere, unless 白い熊 overrides a specific property. Boxes and selectors
 // default to a 1 dp yellow line with a 10 dp corner radius; action buttons are the theme's pills
 // (Theme.kt). The sliders still start at 0, so a border can be removed.
+//
+// The colour values themselves are written once, in the role table (Roles.kt). The three names
+// here are kept for the code that already says Defaults.YELLOW / BLACK / RED, and only point
+// there: the two primaries are what an unset colour falls back to, and RED reads the warning
+// role, so it follows the UI page. New code asks Roles — Roles.warning(context) — instead.
 object Defaults {
-    val YELLOW = 0xFFFFFF00.toInt()
-    val BLACK = 0xFF000000.toInt()
+    const val YELLOW = Roles.ACCENT
+    const val BLACK = Roles.GROUND
 
-    // The one non-yellow accent in the fork: "you have to fix this" (no backup folder set). Used by
-    // the Export/Import panel and by the UI page's export-folder row.
-    val RED = 0xFFFF5252.toInt()
+    // "You have to fix this" (no backup directory set, a device that will refuse transfers).
+    val RED: Int get() = Roles.warningOrDefault()
     const val BORDER_WIDTH = 1f   // dp
     const val CORNER_RADIUS = 10f // dp
 }
@@ -98,6 +102,14 @@ object FontUtil {
 }
 
 object UiCatalog {
+    /** Every colour key the catalogue owns — what "Reset all colours" clears beside the role table. */
+    fun colorKeys(): List<String> = sections.flatMap { section ->
+        section.surfaces.flatMap { surface ->
+            (if (surface.hasTextColor) listOf("${surface.key}.color") else emptyList()) +
+                surface.extraColors.map { it.key }
+        } + section.colorGroups.flatMap { group -> group.colors.map { it.key } }
+    }
+
     // A Send/Receive/OS toggle button: label + per-button selected/unselected fill & text, border colour,
     // and border-width / corner-radius sliders — all separate per button, in that button's own element.
     // Fork: a pill like every other button, and never filled — the selected one is told by its 3 dp
@@ -218,7 +230,7 @@ object UiCatalog {
                     "cancel", "Cancel button", listOf(LabelField("cancel.text", "Button text")),
                     extraColors = listOf(
                         ColorField("cancel.fill", "Background", Defaults.BLACK),
-                        ColorField("cancel.stroke", "Border colour", Defaults.YELLOW),
+                        ColorField("cancel.stroke", "Border colour", Roles.default("cancel.stroke")),
                     ),
                     extraDims = listOf(
                         DimField("cancel.strokeWidth", "Border width", 16, Theme.PILL_REGULAR_DP),
@@ -260,6 +272,7 @@ object UiCatalog {
                     listOf(
                         ColorField("window.bg", "Background", Defaults.BLACK),
                         ColorField("window.statusBar", "Status bar", Defaults.BLACK),
+                        ColorField("window.navBar", "Navigation bar", Defaults.BLACK),
                     ),
                 ),
             ),
@@ -321,6 +334,12 @@ object Appearance {
         // Window background + status bar (black by default).
         activity.findViewById<View>(android.R.id.content).setBackgroundColor(s.colorOrNull("window.bg") ?: Defaults.BLACK)
         activity.window.statusBarColor = s.colorOrNull("window.statusBar") ?: Defaults.BLACK
+        // The window ground and the navigation bar are literal black in the theme only because
+        // the platform draws them before this runs; from here on they follow their roles.
+        activity.window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(s.colorOrNull("window.bg") ?: Defaults.BLACK)
+        )
+        activity.window.navigationBarColor = s.colorOrNull("window.navBar") ?: Defaults.BLACK
 
         // Simple text surfaces (label + colour/font/size; default text colour yellow). programTitle is
         // portrait-only; the version label is `textView` (portrait) / `textView2` (landscape) — applyText
@@ -360,7 +379,7 @@ object Appearance {
         applyText(activity, s, R.id.linuxButton, "linuxOs", setText = true)
         applyText(activity, s, R.id.macButton, "macOs", setText = true)
         applyText(activity, s, R.id.windowsButton, "windowsOs", setText = true)
-        applyText(activity, s, R.id.cancelButton, "cancel", setText = true)
+        applyText(activity, s, R.id.cancelButton, "cancel", setText = true, default = Roles.default("cancel.color"))
 
 
         // "Customize UI" button: text/font/size via applyText, then background / border / corner radius.
@@ -491,17 +510,30 @@ object Appearance {
     fun progressColor(activity: AppCompatActivity): Int =
         Settings(activity).colorOrNull("progress.color") ?: Defaults.YELLOW
 
-    /** The same bar for one made in code — a lane's (LaneViews.kt). */
-    fun styleProgressBar(activity: AppCompatActivity, bar: ProgressBar) =
-        styleProgressBar(activity, Settings(activity), bar)
+    /**
+     * The same bar for one made in code — a lane's (LaneViews.kt), which passes its own
+     * [color] and [ground] roles.
+     */
+    fun styleProgressBar(
+        activity: AppCompatActivity,
+        bar: ProgressBar,
+        color: Int? = null,
+        ground: Int? = null,
+    ) = styleProgressBar(activity, Settings(activity), bar, color, ground)
 
-    private fun styleProgressBar(activity: AppCompatActivity, s: Settings, bar: ProgressBar) {
-        val color = s.colorOrNull("progress.color") ?: Defaults.YELLOW
+    private fun styleProgressBar(
+        activity: AppCompatActivity,
+        s: Settings,
+        bar: ProgressBar,
+        barColor: Int? = null,
+        ground: Int? = null,
+    ) {
+        val color = barColor ?: s.colorOrNull("progress.color") ?: Defaults.YELLOW
         val height = dpToPx(activity, s.sizeOrNull("progress.height") ?: 15f)
 
         val track = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(s.colorOrNull("window.bg") ?: Defaults.BLACK)
+            setColor(ground ?: s.colorOrNull("window.bg") ?: Defaults.BLACK)
             setStroke(dpToPx(activity, 1f), color)
             cornerRadius = dpToPx(activity, 2f).toFloat()
         }
@@ -657,7 +689,7 @@ object Appearance {
         main: Boolean,
         frameKey: String? = "$key.strokeWidth",
     ) {
-        val accent = s.colorOrNull("$key.stroke") ?: Defaults.YELLOW
+        val accent = s.colorOrNull("$key.stroke") ?: Roles.default("$key.stroke")
         Theme.pill(
             b,
             accent = accent,

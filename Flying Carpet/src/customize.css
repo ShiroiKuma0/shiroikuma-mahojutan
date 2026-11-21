@@ -1,39 +1,383 @@
-/* 白い熊 魔法絨毯 fork — static base for the yellow-on-black theme (prevents a white flash before
-   customize.js injects the full generated theme) and layout for the Customize UI page + About dialog. */
+/* 白い熊 魔法絨毯 fork — the black-yellow theme's shapes and layout.
 
-body {
+   NO COLOUR IS WRITTEN IN THIS FILE, with the single exception right below. Every colour is a
+   role from the table in roles.js, named here only as var(--role-…); customize.js writes the
+   values onto the root element when the page loads and whenever a role is changed. Derived
+   looks — a hover tint, the shade behind a dialog — are mixed from roles with color-mix().
+   Widths, radii and fonts that 白い熊 can set per element come from the stylesheet
+   customize.js generates (#forkTheme). */
+
+/* The first paint, before any script has run: the one colour that cannot be read from the
+   role store. customize.js overwrites it from the window-background role the moment it runs. */
+html {
   background-color: #000000;
-  color: #ffff00;
 }
 
-/* fork: the Devices button sits beside the UI button and reads as its pair. */
-#uiButton,
-#devicesButton {
-  margin-top: 6px;
-  padding: 2px 12px;
-  background-color: #000000;
-  color: #ffff00;
-  border: 1.25px solid #ffff00;
+body {
+  background-color: var(--role-window-bg);
+  color: var(--role-text);
+  caret-color: var(--role-caret);
+}
+
+/* Bootstrap stays loaded for its reset only — no element wears one of its component classes —
+   and what its reset paints is pointed at roles. */
+:root {
+  --bs-body-bg: var(--role-window-bg);
+  --bs-body-color: var(--role-text);
+  --bs-link-color: var(--role-text);
+  --bs-link-hover-color: var(--role-text);
+  --bs-border-color: var(--role-divider);
+}
+
+::selection {
+  background-color: var(--role-selection-ground);
+  color: var(--role-selection-text);
+}
+
+:focus-visible {
+  outline: 1px dashed var(--role-focus);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background-color: var(--role-scrollbar-track);
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--role-scrollbar-thumb);
+  border-radius: 5px;
+}
+
+/* ── Icons: one size, drawn in currentColor, coloured by what their row does ── */
+
+.fork-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.fork-tint-connect { color: var(--role-icon-connect); }
+.fork-tint-message { color: var(--role-icon-message); }
+.fork-tint-contact { color: var(--role-icon-contact); }
+.fork-tint-share { color: var(--role-icon-share); }
+.fork-tint-view { color: var(--role-icon-view); }
+.fork-tint-block { color: var(--role-icon-block); }
+.fork-tint-delete { color: var(--role-icon-delete); }
+
+/* ── The pill: every button in the app ──
+   Never filled — the ground shows through an outline. 1.25 px and normal weight for an
+   ordinary action; .fork-main (the one action its block is for) is 3 px and bold; .fork-danger
+   lends the delete red to frame and label. The three colours are local properties, so a
+   surface with roles of its own (a dialog, the UI page, an element 白い熊 styles separately)
+   sets those and the shape stays one rule. */
+
+.fork-pill {
+  --pill-text: var(--role-button-text);
+  --pill-frame: var(--role-button-frame);
+  --pill-ground: var(--role-button-ground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1.25px solid var(--pill-frame);
   border-radius: 999px;
+  background-color: var(--pill-ground);
+  color: var(--pill-text);
+  padding: 7px 20px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: normal;
+  line-height: 1.5;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-/* fork: the theme's switch is 28 px tall, so its label is centred beside it rather than floated
-   against Bootstrap's 1 em one. */
-.form-switch:has(#bluetoothSwitch) {
+.fork-pill:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--pill-frame) 12%, var(--pill-ground));
+}
+
+.fork-pill:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--pill-frame) 30%, var(--pill-ground));
+}
+
+.fork-pill.fork-main {
+  border-width: 3px;
+  font-weight: bold;
+}
+
+.fork-pill.fork-danger {
+  --pill-text: var(--role-button-danger);
+  --pill-frame: var(--role-button-danger);
+}
+
+.fork-pill .fork-chevron {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* The small “Default” pills beside a control. */
+.fork-pill.fork-mini {
+  padding: 1px 10px;
+  font-size: 12px;
+}
+
+/* The buttons under the logo and the About pill. */
+.fork-pill.fork-small {
+  padding: 2px 12px;
+  font-size: 14px;
+}
+
+/* The main page's own buttons. A block rather than a flex box, so that a long remembered
+   directory can end in an ellipsis. */
+.fork-pill.fork-big {
+  display: inline-block;
+  text-align: center;
+  padding: 6px 24px;
+  font-size: 1rem;
+}
+
+/* Disabled: the same shape with frame and content at 38 %. */
+button:disabled,
+input:disabled,
+.fork-switch:disabled ~ label,
+.fork-seg-input:disabled + .fork-seg {
+  opacity: 0.38 !important;
+  cursor: default;
+}
+
+#uiButton,
+#devicesButton {
+  margin-top: 6px;
+}
+
+/* ── Selectors: Send / Receive, the connection mode, the peer's OS ──
+   A segment of a selector is a selection control, not an action — but it wears the pill all
+   the same, and the chosen one is told by its 3 px frame and bold label, never by a fill.
+   Colours, widths and radii per segment come from the generated stylesheet. */
+
+.fork-seg-group {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+#modeBox,
+#peerBox {
+  gap: 6px;
+}
+
+.fork-seg-input {
+  position: absolute;
+  clip: rect(0, 0, 0, 0);
+  pointer-events: none;
+}
+
+.fork-seg {
+  position: relative;
+  flex: 1 1 auto;
+  display: inline-block;
+  margin-right: 6px;
+  padding: 6px 12px;
+  font-size: 1rem;
+  line-height: 1.5;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fork-seg-input:disabled + .fork-seg {
+  pointer-events: none;
+}
+
+.fork-seg-input:focus-visible + .fork-seg {
+  outline: 1px dashed var(--role-focus);
+  outline-offset: 2px;
+}
+
+/* ── The switch: an outlined pill with a solid dot, never filled ──
+   52 × 28, a 2 px round outline with the ground showing through, and a dot 46 % of the
+   height inset by the same gap all round: left and the opaque dim yellow when off, right and
+   the accent when on. Both colours are roles. */
+
+.fork-switch {
+  --switch-colour: var(--role-switch-off);
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 52px;
+  height: 28px;
+  margin: 0;
+  border: 2px solid var(--switch-colour);
+  border-radius: 14px;
+  background-color: transparent;
+  background-image: radial-gradient(circle closest-side, var(--switch-colour) 0, var(--switch-colour) 53.7%, transparent 57%);
+  background-repeat: no-repeat;
+  background-size: 24px 24px;
+  background-position: left center;
+  transition: background-position 0.18s ease-out;
+  cursor: pointer;
+}
+
+.fork-switch:checked {
+  --switch-colour: var(--role-switch-on);
+  background-position: right center;
+}
+
+/* Drawn smaller in a menu or a list, to sit in a compact row. */
+.fork-switch.fork-switch-small {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background-size: 20px 20px;
+}
+
+.fork-switch-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding-left: 0;
-}
-#bluetoothSwitch {
-  float: none !important;
-  margin: 0 !important;
-  flex-shrink: 0;
 }
 
-/* fork: the paired-device strip on the main page — a column per device, two pills each,
-   scrolling sideways when there are more columns than width, as on Android. */
+/* ── Selection marks ──
+   A list where several things can be chosen keeps tick boxes (白い熊's decision): an outlined
+   box, a solid square inside it when chosen, both in the selection-mark role. */
+
+.fork-check {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.25px solid var(--role-check-mark);
+  border-radius: 3px;
+  background-color: transparent;
+  cursor: pointer;
+}
+
+.fork-check:checked {
+  background-color: var(--role-check-mark);
+  box-shadow: inset 0 0 0 2.5px var(--role-dialog-ground);
+}
+
+/* ── Fields, pickers, sliders, swatches ── */
+
+.fork-text-input,
+.fork-num-input,
+.fork-value {
+  background-color: var(--role-field-ground);
+  color: var(--role-field-text);
+  border: 1px solid var(--role-field-frame);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font: inherit;
+}
+
+.fork-text-input::placeholder,
+.fork-num-input::placeholder {
+  color: var(--role-field-placeholder);
+  opacity: 1;
+}
+
+.fork-text-input {
+  width: 320px;
+  max-width: 100%;
+}
+
+.fork-num-input {
+  width: 90px;
+}
+
+/* The platform draws a number field's spin buttons in its own greys; the number is typed. */
+.fork-num-input::-webkit-inner-spin-button,
+.fork-num-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* A value that opens a picker: the field's dress, the value on the left, a ⌄ on the right. */
+.fork-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 200px;
+  cursor: pointer;
+}
+
+.fork-value:hover {
+  background-color: color-mix(in srgb, var(--role-field-frame) 12%, var(--role-field-ground));
+}
+
+/* Neither draws text, but neither keeps the platform's own text colour either. */
+input[type='range'],
+input[type='color'] {
+  color: inherit;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: transparent;
+  width: 160px;
+  height: 18px;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background-color: var(--role-slider-track);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background-color: var(--role-slider-thumb);
+  border: none;
+}
+
+input[type='color'] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 0 0 auto;
+  background-color: transparent;
+  border: 1px solid var(--role-swatch-frame);
+  border-radius: 6px;
+  width: 48px;
+  height: 26px;
+  padding: 1px;
+  cursor: pointer;
+}
+input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+
+/* ── Warnings ── */
+
+.fork-warn {
+  color: var(--role-warning) !important;
+  opacity: 1 !important;
+}
+
+/* ── The paired-device strip on the main page ──
+   A column per device, two pills each, scrolling sideways when there are more columns than
+   width, as on Android. */
+
 #devicePills {
   display: flex;
   flex-direction: row;
@@ -49,20 +393,20 @@ body {
 .fork-device-column {
   display: flex;
   flex-direction: column;
-  /* Both rows take the width of the wider one, so the folder halves line up. */
+  /* Both rows take the width of the wider one, so the directory halves line up. */
   align-items: stretch;
   gap: 6px;
   user-select: none;
   touch-action: none;
 }
-/* A pill with two targets: the name half sends files, the folder half sends a folder. One
+/* A pill with two targets: the name half sends files, the other half sends a directory. One
    outline round both, a hairline between — the same 1.25 px as the outline (a regular pill). */
 .fork-split-pill {
   display: inline-flex;
   align-items: stretch;
   border-radius: 999px;
-  border: 1.25px solid #ffff00;
-  background-color: #000000;
+  border: 1.25px solid var(--role-strip-frame);
+  background-color: var(--role-strip-ground);
   overflow: hidden;
 }
 .fork-device-pill {
@@ -72,75 +416,190 @@ body {
   white-space: nowrap;
   border: none;
   background-color: transparent;
-  color: #ffff00;
+  color: var(--role-strip-text);
   padding: 7px 16px 7px 18px;
   font-size: 14px;
   cursor: pointer;
 }
 .fork-device-pill:hover {
-  background-color: rgba(255, 255, 0, 0.12);
+  background-color: color-mix(in srgb, var(--role-strip-frame) 12%, transparent);
 }
 .fork-pill-files {
   flex: 1 1 auto;
   justify-content: center;
 }
-.fork-pill-folder {
-  border-left: 1.25px solid #ffff00;
+.fork-pill-directory {
+  border-left: 1.25px solid var(--role-strip-frame);
   padding: 7px 14px 7px 12px;
 }
-.fork-device-pill svg {
+.fork-device-pill .fork-icon {
   width: 16px;
   height: 16px;
-  fill: currentColor;
-}
-.fork-pill-folder svg {
-  width: 18px;
-  height: 18px;
+  flex-basis: 16px;
 }
 /* While a column is dragged: the column itself fades in the slot it is being moved to, and a
    copy of it rides under the pointer. The copy is see-through to hit-testing, so the column
    under the pointer is found through it. */
-.fork-device-column.fork-dragging {
+.fork-device-column.fork-dragging,
+.fork-chip.fork-dragging {
   opacity: 0.4;
 }
 .fork-drag-ghost {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 50;
+  z-index: 2000;
   pointer-events: none;
   opacity: 0.85;
 }
 
-/* ── Overlays ── */
+/* ── Dialogs and panels ──
+   One box for all of them: the dialog ground, an outline, pills at the foot. */
 
-.fork-overlay {
+.fork-overlay,
+#promptOverlay {
   position: fixed;
   inset: 0;
-  display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.7);
+  background-color: color-mix(in srgb, var(--role-dialog-scrim) 70%, transparent);
   z-index: 1000;
+}
+
+.fork-overlay {
+  display: flex;
+}
+
+.fork-info-box,
+.fork-panel-box,
+.fork-modal-box,
+#promptCard {
+  overflow-y: auto;
+  padding: 20px 22px 16px;
+  background-color: var(--role-dialog-ground);
+  border: 2px solid var(--role-dialog-frame);
+  border-radius: 16px;
+  color: var(--role-dialog-body);
+}
+
+.fork-info-box {
+  width: 92%;
+  max-width: 560px;
+  max-height: 85%;
+}
+
+.fork-panel-box {
+  width: 92%;
+  max-width: 640px;
+  max-height: 88%;
 }
 
 .fork-modal-box {
   max-width: 80%;
   max-height: 85%;
-  overflow-y: auto;
-  padding: 20px;
+  background-color: var(--role-aboutBg);
+  border: 1px solid var(--role-aboutStroke);
   border-radius: 10px;
+  padding: 20px;
 }
 
-/* The prompt dialog's field and dropdown (index.html): Bootstrap's .form-control / .form-select
-   are white with a dark caret, so the fork's static base dresses them the same way it dresses the
-   card in style.css. customize.js repaints all of it from the “Password dialog” settings. */
-#promptInput,
-#promptSelect {
-  background-color: #000000;
-  color: #ffff00;
-  border: 1px solid #ffff00;
-  border-radius: 10px;
+#promptCard {
+  background-color: var(--role-promptBg);
+  border-color: var(--role-promptStroke);
+  min-width: 320px;
+  max-width: 90%;
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--role-dialog-scrim) 60%, transparent);
+}
+
+#promptInput {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 1rem;
+  background-color: var(--role-password-bg);
+  border-color: var(--role-password-stroke);
+}
+
+.fork-info-box .fork-pill,
+.fork-panel-box .fork-pill,
+#promptCard .fork-pill {
+  --pill-text: var(--role-dialog-button-text);
+  --pill-frame: var(--role-dialog-button-frame);
+  --pill-ground: var(--role-dialog-button-ground);
+}
+
+.fork-info-box .fork-pill.fork-danger,
+.fork-panel-box .fork-pill.fork-danger {
+  --pill-text: var(--role-button-danger);
+  --pill-frame: var(--role-button-danger);
+}
+
+.fork-info-title {
+  font-size: 19px;
+  font-weight: bold;
+  color: var(--role-dialog-title);
+}
+
+.fork-info-body {
+  white-space: pre-wrap;
+  font-size: 14px;
+  padding-top: 10px;
+  color: var(--role-dialog-body);
+}
+
+/* An aside in a dialog: present, but not competing with the question. */
+.fork-info-hint {
+  font-size: 13px;
+  color: var(--role-dialog-note);
+  padding-top: 6px;
+}
+
+.fork-info-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 16px;
+}
+
+.fork-panel-title {
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+  padding-bottom: 6px;
+  color: var(--role-dialog-title);
+}
+
+.fork-panel-desc {
+  font-size: 13px;
+  color: var(--role-dialog-note);
+  margin-bottom: 10px;
+}
+
+.fork-status-line {
+  font-size: 14px;
+  color: var(--role-panel-status);
+  padding: 2px 0 8px 2px;
+}
+
+.fork-hairline {
+  height: 1px;
+  background-color: var(--role-dialog-divider);
+  margin: 4px 0;
+}
+
+.fork-pill-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.fork-pill-bar .fork-pill-spacer {
+  flex: 1 1 auto;
 }
 
 .fork-about-title {
@@ -154,7 +613,257 @@ body {
   margin-bottom: 14px;
 }
 
-/* ── Customize UI page ── */
+/* A QR code and the code printed under it: dark on light, both roles. */
+.fork-qr-holder {
+  background-color: var(--role-qr-light);
+  padding: 16px;
+  width: 214px;
+  margin: 12px auto 6px auto;
+}
+
+.fork-qr-caption {
+  margin-top: 8px;
+  text-align: center;
+  font-family: monospace;
+  font-weight: bold;
+  color: var(--role-qr-dark);
+  font-size: 13px;
+  letter-spacing: 1px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* ── Lists inside dialogs and panels: devices, backups, choices ──
+   One icon column and one label edge. A row that does something is an outlined pill across
+   the whole width, its icon inside at the left; what is merely read stands under it, on the
+   label's edge; groups are parted by a clear line. */
+
+.fork-list {
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+
+.fork-list-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 3px 0;
+  padding: 7px 14px;
+  border: 1.25px solid var(--role-list-pill);
+  border-radius: 999px;
+  background-color: transparent;
+  color: var(--role-list-primary);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fork-list-pill:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--role-list-pill) 12%, transparent);
+}
+
+.fork-list-pill .fork-list-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The value a picker holds now. */
+.fork-list-pill.fork-current {
+  font-weight: bold;
+}
+
+/* Under a pill, on its label's edge: the pill's frame + padding + icon + gap. */
+.fork-list-sub {
+  padding-left: 43.25px;
+  font-size: 13px;
+  color: var(--role-list-secondary);
+  overflow-wrap: anywhere;
+}
+
+.fork-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 0 3px 43.25px;
+}
+
+/* A toggle row: plain, its icon in the pills' icon column, the switch at the right edge. */
+.fork-list-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding-left: 15.25px;
+  color: var(--role-list-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.fork-list-toggle .fork-list-text {
+  flex: 1 1 auto;
+}
+
+.fork-list-divider {
+  height: 1px;
+  background-color: var(--role-list-divider);
+  margin: 7px 0;
+}
+
+/* A plain control row in a panel: icon, label, the control. */
+.fork-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0 3px 15.25px;
+  color: var(--role-list-primary);
+  font-size: 14px;
+}
+
+.fork-panel-row .fork-text-input {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.fork-panel-heading {
+  display: inline-block;
+  font-size: 17px;
+  font-weight: bold;
+  margin-top: 12px;
+  padding-bottom: 2px;
+  color: var(--role-panel-heading);
+  border-bottom: 2px solid var(--role-panel-heading);
+}
+
+.fork-panel-note {
+  font-size: 13px;
+  color: var(--role-panel-status);
+  padding: 4px 0 2px 43.25px;
+}
+
+/* A check row of a multi-select list: mark, icon, label. */
+.fork-check-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0 5px 2px;
+  font-size: 15px;
+  color: var(--role-list-primary);
+  cursor: pointer;
+}
+
+/* ── Menus ──
+   Every row that does something is an outlined pill across the full width of the menu,
+   1.25 px, its icon inside at the left and a › at the right when it opens something. A toggle
+   row is plain, 36 px, with the outlined switch. Groups are parted by a clear 1 px line. */
+
+.fork-menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+}
+
+.fork-menu {
+  position: fixed;
+  box-sizing: border-box;
+  min-width: 250px;
+  max-width: calc(100vw - 16px);
+  /* Never scrolls while the window has room: it is shifted into view instead, and only a
+     menu taller than the whole window scrolls. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 5px 0;
+  background-color: var(--role-menu-ground);
+  border: 1.25px solid var(--role-menu-frame);
+  border-radius: 14px;
+}
+
+.fork-menu-header {
+  padding: 6px 23.25px 4px;
+  font-weight: bold;
+  color: var(--role-menu-header);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fork-menu-item {
+  --menu-colour: var(--role-menu-label);
+  --menu-frame: var(--role-menu-pill);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 16px);
+  margin: 3px 8px;
+  padding: 7px 14px;
+  border: 1.25px solid var(--menu-frame);
+  border-radius: 999px;
+  background-color: transparent;
+  color: var(--menu-colour);
+  font: inherit;
+  font-size: 14px;
+  font-weight: normal;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fork-menu-item:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--menu-frame) 12%, transparent);
+}
+
+.fork-menu-item:active:not(:disabled) {
+  background-color: color-mix(in srgb, var(--menu-frame) 30%, transparent);
+}
+
+.fork-menu-item.fork-danger {
+  --menu-colour: var(--role-menu-danger);
+  --menu-frame: var(--role-menu-danger);
+}
+
+.fork-menu-item.fork-danger .fork-icon {
+  color: var(--role-menu-danger);
+}
+
+.fork-menu-text {
+  flex: 1 1 auto;
+}
+
+.fork-menu-item .fork-chevron {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Icon and label lined up with the pill contents above; the switch's right edge on the
+   pills' right edge. */
+.fork-menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  margin: 0 8px;
+  padding: 0 0 0 15.25px;
+  color: var(--role-menu-label);
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fork-menu-toggle .fork-menu-text {
+  padding-right: 8px;
+}
+
+.fork-menu-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background-color: var(--role-menu-divider);
+}
+
+/* ── The UI page ── */
 
 #forkSettingsPage {
   position: fixed;
@@ -163,6 +872,7 @@ body {
   z-index: 900;
   padding: 20px;
   display: none;
+  background-color: var(--role-page-bg);
 }
 
 .fork-page-header {
@@ -170,7 +880,8 @@ body {
   flex-direction: row;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .fork-page-title {
@@ -183,20 +894,55 @@ body {
   gap: 10px;
 }
 
+/* The index: a wrapping grid of small outlined chips, one for every section. A click unfolds
+   the section and scrolls to it; held or dragged, a chip is moved, the others making room
+   under the pointer as it goes. */
+.fork-chip-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.fork-chip {
+  border: 1.25px solid var(--role-page-chip-frame);
+  border-radius: 999px;
+  background-color: var(--role-page-chip-ground);
+  color: var(--role-page-chip-text);
+  padding: 2px 12px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+
+.fork-chip:hover {
+  background-color: color-mix(in srgb, var(--role-page-chip-frame) 12%, var(--role-page-chip-ground));
+}
+
 /* The heading system is the shiroikuma-kxkb settings page (白い熊, 2026-07-25): a full-width 1 px
-   hairline marks the boundary between top-level sections, every heading carries a **text-width**
+   line marks the boundary between top-level sections, every heading carries a **text-width**
    underline (never full-width — hence inline-block), and the indentation ladder is kxkb's:
    section 36 px → element 54 px → control 72 px. */
 
-.fork-section {
-  margin-bottom: 18px;
-}
-
-/* The thin spacer between one section and the next. */
+/* The thin line between one section and the next. It stays, folded or open. */
 .fork-section-rule {
   height: 1px;
-  background-color: #ffff00;
-  margin-bottom: 10px;
+  background-color: var(--role-page-divider);
+  margin: 6px 0;
+}
+
+/* The whole heading row folds or unfolds its section: › folded, ⌄ open. */
+.fork-section-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 6px 4px 0;
+  cursor: pointer;
 }
 
 .fork-section-title {
@@ -205,19 +951,34 @@ body {
   font-weight: bold;
   margin-left: 36px;
   padding-bottom: 2px;
-  border-bottom: 3px solid #ffff00;
+  border-bottom: 3px solid var(--role-page-section-color);
+}
+
+.fork-fold {
+  flex: 0 0 28px;
+  text-align: center;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--role-page-fold);
+}
+
+.fork-section-body {
+  padding-bottom: 10px;
+}
+
+.fork-section-body[hidden] {
+  display: none;
 }
 
 .fork-note {
   font-size: 13px;
-  color: #c8c800;
   margin-left: 54px;
-  margin-top: 6px;
+  margin-top: 4px;
   margin-bottom: 4px;
 }
 
 .fork-element {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .fork-element-title {
@@ -225,9 +986,9 @@ body {
   font-size: 17px;
   font-weight: bold;
   margin-left: 54px;
-  margin-top: 12px;
+  margin-top: 10px;
   padding-bottom: 2px;
-  border-bottom: 2px solid #ffff00;
+  border-bottom: 2px solid var(--role-page-element-color);
 }
 
 .fork-controls {
@@ -235,339 +996,117 @@ body {
   margin-top: 4px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
-/* A kxkb settings row: title over summary at the control indent, optional widget on the right. */
-.fork-setting-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 12px;
-  margin-left: 72px;
-  padding: 7px 16px 7px 0;
-  cursor: pointer;
-}
-
-.fork-setting-row:hover {
-  background-color: rgba(255, 255, 0, 0.08);
-}
-
-.fork-setting-title {
-  font-size: 16px;
-}
-
-.fork-setting-summary {
-  font-size: 13px;
-  color: #c8c800;
-}
-
-/* A row that does something when pressed: an outlined pill as wide as its label, never filled,
-   its explanation beneath, aligned with the label (the pill's border + padding). 1.25 px frame
-   for an ordinary action, 3 px and bold for the main one of its section. */
-.fork-action-row {
-  margin-left: 72px;
-  padding: 7px 16px 7px 0;
-}
-
-.fork-action-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 16px;
-  border: 1.25px solid currentColor;
-  border-radius: 999px;
-  padding: 5px 14px;
-  cursor: pointer;
-}
-
-.fork-action-pill:hover {
-  background-color: rgba(255, 255, 0, 0.08);
-}
-
-.fork-action-main {
-  border-width: 3px;
-  font-weight: bold;
-}
-
-.fork-action-chevron {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.fork-action-summary {
-  margin-top: 4px;
-  padding-left: 15.25px;
-}
-
-.fork-action-row:has(.fork-action-main) .fork-action-summary {
-  padding-left: 17px;
-}
-
-/* "No backup folder set" — the one non-yellow accent in the fork, everywhere it appears. */
-.fork-warn {
-  color: #ff5252 !important;
-  opacity: 1 !important;
-}
-
+/* A control row: icon, label, the control. Only as tall as its content — 2 px above and
+   below, no minimum height. The 12 px at the left keep every row's icon in one column with
+   the rows that carry the left rule. */
 .fork-row {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  /* Minimal padding: a row is as tall as its content. */
-  padding: 2px 0;
+  min-height: 0;
+  padding: 2px 0 2px 12px;
 }
 
-.fork-row .fork-label {
-  min-width: 240px;
+.fork-row > .fork-label,
+.fork-row > .fork-row-text {
+  flex: 0 0 250px;
+  max-width: 100%;
 }
 
-.fork-text-input,
-.fork-select,
-.fork-num-input {
-  background-color: #000000;
-  color: #ffff00;
-  border: 1px solid #ffff00;
-  border-radius: 6px;
-  padding: 2px 8px;
+/* A row that carries an explanation: bold label, dim-gold description, and a thin dim-gold
+   rule down its left edge, 10 px before the content. */
+.fork-explained {
+  border-left: 2px solid var(--role-page-rule);
+  padding-left: 10px;
+  margin: 2px 0;
 }
 
-.fork-text-input {
-  width: 320px;
-}
-
-.fork-num-input {
-  width: 90px;
-}
-
-.fork-mini-btn {
-  background-color: #000000;
-  color: #ffff00;
-  border: 1.25px solid #ffff00;
-  border-radius: 999px;
-  padding: 1px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.fork-group-reset {
-  align-self: flex-start;
-  margin-top: 4px;
-}
-
-/* No white anywhere in the theme: WebKitGTK draws a range's thumb white and a select grey
-   whatever accent-color says, so both are drawn here instead. */
-input[type='range'] {
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-  width: 220px;
-  height: 18px;
-}
-input[type='range']::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
-  background: #8c8c00;
-}
-input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -5px;
-  border-radius: 50%;
-  background: #ffff00;
-  border: none;
-}
-
-select.fork-select {
-  -webkit-appearance: none;
-  appearance: none;
-  background-color: #000000 !important;
-  color: #ffff00 !important;
-  padding-right: 26px;
-  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffff00' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
-  background-repeat: no-repeat;
-  background-position: right 8px center;
-  background-size: 12px;
-}
-select.fork-select option {
-  background-color: #000000;
-  color: #ffff00;
-}
-
-input[type='color'] {
-  background: #000000;
-  border: 1px solid #ffff00;
-  border-radius: 6px;
-  width: 48px;
-  height: 26px;
-  padding: 1px;
-}
-
-/* ── Export / Import panel + info dialogs ──
-   The visual format is the shiroikuma-kojiki export/import sheet: one bordered rounded box carries
-   the whole panel — centred bold title, dim description, a bordered tappable folder box (red while
-   unset), the last-export line, a hairline, Select all + the category checkboxes, a hairline, then
-   the ArcaneChat button bar: Cancel alone on the left, Import and Export grouped on the right, all
-   round pills. */
-
-.fork-panel-box {
-  width: 92%;
-  max-width: 640px;
-  max-height: 88%;
-  overflow-y: auto;
-  padding: 20px 22px 16px;
-  background-color: #000000;
-  border: 2px solid #ffff00;
-  border-radius: 16px;
-}
-
-.fork-panel-title {
-  font-size: 18px;
+.fork-row-label {
   font-weight: bold;
-  text-align: center;
-  padding-bottom: 6px;
 }
 
-.fork-panel-desc {
+.fork-row-note {
   font-size: 13px;
-  color: #c8c800;
-  margin-bottom: 10px;
 }
 
-.fork-dirbox {
-  border: 2px solid #ffff00;
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin: 6px 0;
-  cursor: pointer;
-}
-
-.fork-dirbox.unset {
-  border-color: #ff5252;
-}
-
-.fork-dirbox-label {
-  font-size: 12px;
-}
-
-.fork-dirbox-value {
-  font-size: 15px;
-  font-weight: bold;
-}
-
-.fork-status-line {
-  font-size: 14px;
-  opacity: 0.8;
-  padding: 0 0 8px 2px;
-}
-
-.fork-hairline {
-  height: 1px;
-  background-color: #ffff00;
-  opacity: 0.4;
-}
-
-.fork-check-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 0;
-  font-size: 15px;
-}
-
-.fork-check-row input[type='checkbox'] {
-  accent-color: #ffff00;
-  width: 16px;
-  height: 16px;
-}
-
-/* The theme's pill: never filled — the background shows through an accent outline. 1.25 px for an
-   ordinary action; .fork-main (the one action its block is for) is 3 px and bold. */
-.fork-pill {
-  border-radius: 999px;
-  border: 1.25px solid #ffff00;
-  background-color: #000000;
-  color: #ffff00;
-  padding: 7px 20px;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.fork-pill:hover {
-  background-color: rgba(255, 255, 0, 0.12);
-}
-
-.fork-pill.fork-main,
-.fork-btn.fork-main {
-  border-width: 3px;
-  font-weight: bold;
-}
-
-.fork-pill-bar {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  padding-top: 14px;
-}
-
-.fork-pill-bar .fork-pill-spacer {
-  flex: 1 1 auto;
-}
-
-/* The Export/Import finished dialog: black, yellow-bordered, pills right-aligned. */
-.fork-info-box {
-  width: 92%;
-  max-width: 560px;
-  max-height: 85%;
-  overflow-y: auto;
-  padding: 20px 22px 16px;
-  background-color: #000000;
-  border: 2px solid #ffff00;
-  border-radius: 16px;
-}
-
-.fork-info-title {
-  font-size: 19px;
-  font-weight: bold;
-}
-
-.fork-info-body {
-  white-space: pre-wrap;
-  font-size: 14px;
-  padding-top: 10px;
-}
-
-/* The aside under a ticked "apply to all": present, but not competing with the question. */
-.fork-info-hint {
+.fork-value-note {
   font-size: 13px;
-  color: #c8c800;
-  padding-left: 24px;
 }
 
-.fork-info-actions {
-  display: flex;
-  flex-direction: row;
-  justify-content: flex-end;
+/* A row that does something when pressed: an outlined pill as wide as its label, never
+   filled, its explanation beneath on the label's edge. 1.25 px for an ordinary action, 3 px
+   and bold for the main one of its section; › when it opens something. The rule spans pill
+   and explanation. */
+.fork-action-row {
+  padding: 3px 0 3px 10px;
+  margin: 2px 0;
+  border-left: 2px solid var(--role-page-rule);
+}
+
+.fork-level-row {
+  margin-left: 72px;
+}
+
+.fork-pill.fork-action-pill {
+  --pill-text: var(--role-page-action-text);
+  --pill-frame: var(--role-page-action-frame);
+  --pill-ground: var(--role-page-action-ground);
   gap: 10px;
-  padding-top: 16px;
+  font-size: 16px;
+  padding: 5px 14px;
 }
 
-/* Disabled controls: Bootstrap's default dim is opacity .65, which turns the pure yellow into a
-   gold that reads as a "wrong colour". Dim much harder so the disabled state is unmistakable. */
-button:disabled,
-.btn:disabled,
-.btn.disabled,
-.form-check-input:disabled,
-.form-check-input[disabled] ~ .form-check-label,
-.form-check-input:disabled ~ .form-check-label {
-  opacity: 0.35 !important;
+.fork-pill.fork-action-pill.fork-danger {
+  --pill-text: var(--role-button-danger);
+  --pill-frame: var(--role-button-danger);
+}
+
+#forkSettingsPage .fork-pill.fork-mini {
+  --pill-text: var(--role-page-action-text);
+  --pill-frame: var(--role-page-action-frame);
+  --pill-ground: var(--role-page-action-ground);
+}
+
+/* On the label's edge: the pill's frame + padding + icon + gap. */
+.fork-action-summary {
+  font-size: 13px;
+  margin-top: 3px;
+  padding-left: 43.25px;
+}
+
+.fork-action-row:has(.fork-main) .fork-action-summary {
+  padding-left: 45px;
+}
+
+/* In a dialog the same row takes the dialog's roles. */
+.fork-panel-box .fork-pill.fork-action-pill {
+  --pill-text: var(--role-dialog-button-text);
+  --pill-frame: var(--role-dialog-button-frame);
+  --pill-ground: var(--role-dialog-button-ground);
+}
+
+.fork-panel-box .fork-pill.fork-action-pill.fork-danger {
+  --pill-text: var(--role-button-danger);
+  --pill-frame: var(--role-button-danger);
+}
+
+/* No left rule there: the pill stands in the icon column of the list pills round it. */
+.fork-panel-box .fork-action-row {
+  border-left: none;
+  padding-left: 0;
+}
+
+.fork-panel-box .fork-pill.fork-action-pill {
+  font-size: 14px;
+  padding: 7px 14px;
+}
+
+.fork-panel-box .fork-action-summary {
+  color: var(--role-dialog-note);
 }
 
 /* ── A running transfer takes the screen ── */
@@ -608,12 +1147,38 @@ button:disabled,
    was actually unreadable, gets ~300px from the collapse above. */
 #outputBox {
   min-height: 2em;
+  padding: 8px;
+  background-color: var(--role-output-bg);
 }
 
 /* Last resort. Dragged shorter than even the collapsed stack needs, the column scrolls rather
    than dropping its last children past the bottom edge with nothing to say it has. */
 #mainContainer {
   overflow-y: auto;
+}
+
+/* ── Progress bars: the single transfer's two, and one pair per lane ── */
+
+#progressBar,
+#totalProgressBar {
+  accent-color: var(--role-progress-color);
+}
+
+#progressBar::-webkit-progress-bar,
+#totalProgressBar::-webkit-progress-bar {
+  background-color: var(--role-progress-ground);
+  border: 1px solid var(--role-progress-frame);
+}
+
+#progressBar::-webkit-progress-value,
+#totalProgressBar::-webkit-progress-value {
+  background-color: var(--role-progress-color);
+}
+
+/* The sent/total, rate and time-left lines above the bars. */
+#progressDetails,
+#progressTotalDetails {
+  color: var(--role-progress-text);
 }
 
 /* ── Parallel paired transfers: one block per lane (lanes.js) ── */
@@ -636,9 +1201,10 @@ button:disabled,
 }
 
 .fork-lane {
-  border: 1px solid #ffff00;
+  border: 1px solid var(--role-lane-frame);
   border-radius: 10px;
   padding: 6px 10px 8px;
+  background-color: var(--role-lane-ground);
 }
 
 .fork-lane-head {
@@ -649,9 +1215,16 @@ button:disabled,
 }
 
 .fork-lane-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   font-weight: bold;
-  color: #ffff00;
+  color: var(--role-lane-title);
   flex: 0 1 auto;
+}
+
+.fork-lane-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -660,29 +1233,25 @@ button:disabled,
 /* "Queued…" / "Connecting…": takes the slack, so the Cancel pill stays at the right edge. */
 .fork-lane-status {
   flex: 1 1 auto;
-  color: #8c8c00;
+  color: var(--role-lane-status);
   font-size: 13px;
 }
 
 /* An ordinary action, so the thin frame — and a little shorter than a dialog's pill, to keep
    a block of four lanes compact. Pushed right when the status line is hidden. */
-.fork-lane-cancel {
+.fork-pill.fork-lane-cancel {
+  --pill-ground: var(--role-lane-ground);
   margin-left: auto;
   flex: 0 0 auto;
   padding: 3px 16px;
   font-size: 13px;
 }
 
-.fork-lane-cancel:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .fork-lane-details {
   text-align: center;
   white-space: pre-line;
   font-variant-numeric: tabular-nums;
-  color: #ffff00;
+  color: var(--role-lane-details);
   margin-top: 4px;
 }
 
@@ -690,17 +1259,15 @@ button:disabled,
   appearance: none;
   display: block;
   width: 100%;
-  height: 15px;
-  min-height: 15px;
   margin-top: 3px;
-  accent-color: #ffff00;
+  accent-color: var(--role-lane-bar);
 }
 
 .fork-lane-bar::-webkit-progress-bar {
-  background-color: #000000;
-  border: 1px solid #ffff00;
+  background-color: var(--role-lane-barGround);
+  border: 1px solid var(--role-lane-barFrame);
 }
 
 .fork-lane-bar::-webkit-progress-value {
-  background-color: #ffff00;
+  background-color: var(--role-lane-bar);
 }

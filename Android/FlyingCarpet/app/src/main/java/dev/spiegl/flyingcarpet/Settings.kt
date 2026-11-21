@@ -18,6 +18,32 @@ import java.io.File
 class Settings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    // Lets the context-less names kept for older code (Defaults.RED) read their role.
+    init { Roles.attach(context) }
+
+    // ── The UI page's arrangement ────────────────────────────────────────────
+    // The order of its sections and which of them are unfolded: two small comma-separated lists
+    // under "page.*" keys, so they sit in this same file and travel in the export's "page"
+    // category with the page's colours and fonts. (Strings, not a string set: the backup engine
+    // carries strings.) Sections are named by stable keys; every section is folded unless its key
+    // is in the open list.
+    fun sectionOrder(): List<String> = list(SECTION_ORDER_KEY)
+    fun setSectionOrder(order: List<String>) = setList(SECTION_ORDER_KEY, order)
+    fun resetSectionOrder() = prefs.edit().remove(SECTION_ORDER_KEY).apply()
+    fun openSections(): Set<String> = list(SECTIONS_OPEN_KEY).toSet()
+    fun setSectionOpen(key: String, open: Boolean) {
+        val now = openSections().toMutableSet()
+        if (open) now += key else now -= key
+        setList(SECTIONS_OPEN_KEY, now.toList())
+    }
+
+    private fun list(key: String): List<String> =
+        (prefs.getString(key, "") ?: "").split(',').filter { it.isNotBlank() }
+
+    private fun setList(key: String, values: List<String>) = prefs.edit().apply {
+        if (values.isEmpty()) remove(key) else putString(key, values.joinToString(","))
+    }.apply()
+
     fun colorOrNull(key: String): Int? = if (prefs.contains(key)) prefs.getInt(key, 0) else null
     fun setColor(key: String, value: Int?) = prefs.edit().apply {
         if (value == null) remove(key) else putInt(key, value)
@@ -81,6 +107,8 @@ class Settings(context: Context) {
     companion object {
         const val PREFS = "shiroikuma_ui"
         const val FONT_FILES_KEY = "__fontFiles"
+        const val SECTION_ORDER_KEY = "page.sectionOrder"
+        const val SECTIONS_OPEN_KEY = "page.sectionsOpen"
 
         // System font families offered for every text surface.
         val FONT_VALUES = listOf(

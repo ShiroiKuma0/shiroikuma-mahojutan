@@ -68,7 +68,9 @@ object LaneViews {
     }
 
     private fun block(activity: AppCompatActivity, lane: PairedLane): View {
-        val color = Appearance.progressColor(activity)
+        // Every part of a lane has a role of its own ("Transfer lanes" on the UI page); unset,
+        // the bars and their lines follow the main progress bar's colour as they always did.
+        val color = Roles.color(activity, "lane.details")
         val column = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -82,21 +84,44 @@ object LaneViews {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val title = ForkDialog.label(activity, "", 15f, bold = true).apply {
+        val title = ForkDialog.label(
+            activity, "", 15f, color = Roles.color(activity, "lane.title"), bold = true,
+        ).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            Icons.lead(this, Icons.Icon.DEVICE, IconRole.CONTACT, sizeDp = 16f)
         }
         val cancel = ForkDialog.pill(activity, "Cancel") { lane.cancel() }.apply {
+            setTextColor(Theme.enabledList(Roles.color(activity, "lane.cancel.text")))
+            background = Theme.pillBackground(
+                activity,
+                Roles.color(activity, "lane.cancel.frame"),
+                Roles.color(activity, "lane.cancel.bg"),
+            )
             setPadding(
                 ForkDialog.dp(activity, 14), ForkDialog.dp(activity, 4),
                 ForkDialog.dp(activity, 14), ForkDialog.dp(activity, 4),
             )
             textSize = 13f
         }
+        // Beside it, for a device that can answer one: how fast this is, and whether that is
+        // what the Wi-Fi link gives (LinkDoctor.kt). Shown once the lane knows whom it is with.
+        val speed = ForkDialog.pill(activity, "Speed check  ›") { LinkDoctor.check(lane) }.apply {
+            setPadding(
+                ForkDialog.dp(activity, 14), ForkDialog.dp(activity, 4),
+                ForkDialog.dp(activity, 14), ForkDialog.dp(activity, 4),
+            )
+            textSize = 13f
+            isVisible = false
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = ForkDialog.dp(activity, 8) }
+        }
         head.addView(title)
+        head.addView(speed)
         head.addView(cancel)
         column.addView(head)
 
-        val waiting = ForkDialog.label(activity, "", 13f, color = Theme.dimGold(activity))
+        val waiting = ForkDialog.label(activity, "", 13f, color = Roles.color(activity, "lane.waiting"))
         val details = detailLine(activity, color)
         val bar = bar(activity)
         val totalDetails = detailLine(activity, color)
@@ -106,7 +131,10 @@ object LaneViews {
             column.addView(view)
         }
 
-        lane.title.observe(activity) { title.text = it }
+        lane.title.observe(activity) {
+            title.text = it
+            speed.isVisible = LinkDoctor.canCheck(lane)
+        }
         lane.waiting.observe(activity) {
             waiting.text = it
             waiting.isVisible = it.isNotEmpty()
@@ -137,7 +165,11 @@ object LaneViews {
     private fun bar(activity: AppCompatActivity): ProgressBar =
         ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
-            Appearance.styleProgressBar(activity, this)
+            Appearance.styleProgressBar(
+                activity, this,
+                color = Roles.color(activity, "lane.bar"),
+                ground = Roles.color(activity, "lane.bar.bg"),
+            )
             (layoutParams as? LinearLayout.LayoutParams)?.bottomMargin = ForkDialog.dp(activity, 2)
         }
 }

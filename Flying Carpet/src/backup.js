@@ -37,8 +37,11 @@ const STORE_KEY = 'shiroikuma_ui';
 const FONT_FILES_KEY = '__fontFiles';
 
 export const CATEGORIES = [
-  { id: 'appearance', label: 'Appearance — main window' },
-  { id: 'page', label: 'Appearance — this UI page' },
+  // Every colour role that is not the UI page's own (dialogs, menus, lists, lanes, icons, …)
+  // is stored beside the main window's settings and travels with them.
+  { id: 'appearance', label: 'Appearance — main window, dialogs, menus and every colour role' },
+  // The page's look, and the order and fold state of its sections.
+  { id: 'page', label: 'Appearance — this UI page, its section order and folding' },
   { id: 'fonts', label: 'Imported fonts' },
 ];
 
@@ -242,8 +245,12 @@ function zipRead(bytes) {
 
 // ── Categories ────────────────────────────────────────────────────────────────────────────────
 
-// The UI page styles itself through "page.*" keys; everything else styles the main window. The
-// font map belongs to the FONTS category, so it is in neither prefs dump.
+// The UI page styles itself through "page.*" keys — its colour roles, and the two lists that
+// hold the order of its sections and which of them are open; everything else styles the rest
+// of the app, the colour roles of roles.js included. The font map belongs to the FONTS
+// category, so it is in neither prefs dump. A backup written before the roles existed simply
+// carries fewer keys: importing merges per key, so it restores what it has and leaves the
+// roles, the order and the folding as they are.
 function isPageKey(key) { return key.startsWith('page.'); }
 function isAppearanceKey(key) { return !isPageKey(key) && key !== FONT_FILES_KEY; }
 

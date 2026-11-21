@@ -15,7 +15,7 @@ let outputBox;
 let startButton;
 let cancelButton;
 let progressBar;
-let lastFolderButton;
+let lastDirButton;
 let progressDetails;
 let progressTotalDetails;
 let totalProgressBar;
@@ -67,7 +67,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   startButton = document.getElementById('startButton');
   cancelButton = document.getElementById('cancelButton');
   progressBar = document.getElementById('progressBar');
-  lastFolderButton = document.getElementById('lastFolderButton');
+  lastDirButton = document.getElementById('lastDirButton');
   progressDetails = document.getElementById('progressDetails');
   progressTotalDetails = document.getElementById('progressTotalDetails');
   totalProgressBar = document.getElementById('totalProgressBar');
@@ -151,7 +151,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   // show bluetooth PIN and allow user to choose whether to pair on windows
   await appWindow.listen('showPin', async (event) => {
     console.log(event);
-    let choice = await dialog.ask(`Is this code displayed on the other device?\n\n${event.payload.message}`, { title: 'Confirm Bluetooth PIN', type: 'info' });
+    // fork: asked in the theme's own dialog, pills and all, rather than the platform's box
+    let choice = await window.forkUI.confirm(
+      'Confirm Bluetooth PIN',
+      `Is this code displayed on the other device?\n\n${event.payload.message}`,
+      { confirm: 'Yes', cancel: 'No' },
+    );
     console.log('choice:', choice);
     await core.invoke('user_bluetooth_pair', {
       choice: choice,
@@ -207,7 +212,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   checkStatus();
   await resolveHomeDir();
-  refreshLastFolderButton();
+  refreshLastDirButton();
   // the default connection mode is set in markup and fires no change event, so the Bluetooth
   // switch has to be brought in line with it once on a fresh load
   applyBluetoothAvailability();
@@ -257,7 +262,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
     checkStatus();
   }
-  refreshLastFolderButton();
+  refreshLastDirButton();
 });
 
 // The directory picked last time, remembered across restarts so receiving is one tap.
@@ -281,21 +286,21 @@ function prettyPath(p) {
   return p;
 }
 
-function refreshLastFolderButton() {
-  if (!lastFolderButton) {
+function refreshLastDirButton() {
+  if (!lastDirButton) {
     return;
   }
   let last = localStorage.getItem(LAST_FOLDER_KEY);
   let show = selectedMode === 'receive' && !!last && startButton.style.display !== 'none';
-  lastFolderButton.style.display = show ? '' : 'none';
+  lastDirButton.style.display = show ? '' : 'none';
   if (last) {
-    lastFolderButton.innerText = `Receive in \u201c${prettyPath(last)}\u201d`;
-    lastFolderButton.title = last;
+    lastDirButton.innerText = `Receive in \u201c${prettyPath(last)}\u201d`;
+    lastDirButton.title = last;
   }
 }
 
 // Same as picking that directory again: skip the file dialog and start listening.
-window.useLastFolder = () => {
+window.useLastDirectory = () => {
   let last = localStorage.getItem(LAST_FOLDER_KEY);
   if (!last) {
     return;
@@ -307,7 +312,7 @@ window.useLastFolder = () => {
 function rememberFolder(folder) {
   if (folder) {
     localStorage.setItem(LAST_FOLDER_KEY, folder);
-    refreshLastFolderButton();
+    refreshLastDirButton();
   }
 }
 
@@ -348,47 +353,14 @@ let showPrompt = (message, prefill) => {
   });
 }
 
-// same modal as showPrompt, but with a single-choice dropdown prepopulated with
-// `options` instead of a text input. resolves with the selected index, or null on cancel.
+// a single choice out of `options`. resolves with the selected index, or null on cancel.
+// fork: the theme's own list -- a full-width pill per option, each with its icon -- instead of
+// a dropdown inside the prompt card, whose opened list the platform drew in its own colours.
 let showSelect = (message, options) => {
-  return new Promise((resolve) => {
-    let overlay = document.getElementById('promptOverlay');
-    let input = document.getElementById('promptInput');
-    let select = document.getElementById('promptSelect');
-    let okButton = document.getElementById('promptOk');
-    let cancelButton = document.getElementById('promptCancel');
-    document.getElementById('promptMessage').innerText = message;
-    input.style.display = 'none';
-    select.style.display = '';
-    select.innerHTML = '';
-    for (let i = 0; i < options.length; i++) {
-      let option = document.createElement('option');
-      option.value = i;
-      option.innerText = options[i];
-      select.appendChild(option);
-    }
-    let finish = (value) => {
-      overlay.style.display = 'none';
-      input.style.display = '';
-      select.style.display = 'none';
-      okButton.onclick = null;
-      cancelButton.onclick = null;
-      select.onkeydown = null;
-      resolve(value);
-    };
-    okButton.onclick = () => finish(parseInt(select.value));
-    cancelButton.onclick = () => finish(null);
-    select.onkeydown = (event) => {
-      event.stopPropagation();
-      if (event.key === 'Enter') {
-        finish(parseInt(select.value));
-      } else if (event.key === 'Escape') {
-        finish(null);
-      }
-    };
-    overlay.style.display = 'flex';
-    select.focus();
-  });
+  return window.forkUI.choose(
+    message,
+    options.map((label) => ({ label: label, icon: 'network', tint: 'connect' })),
+  );
 }
 
 // "example.jpg (copy).jpg" reads worse than "example (copy).jpg": keep the extension last.
@@ -455,15 +427,16 @@ let showConflict = (name, identical, moreFiles, peer) => {
 
     let applyAll = null;
     if (moreFiles) {
+      // One thing that is on or off, so the theme's switch -- not a tick box.
       let row = document.createElement('label');
-      row.className = 'fork-check-row';
-      row.style.cursor = 'pointer';
-      applyAll = document.createElement('input');
-      applyAll.type = 'checkbox';
+      row.className = 'fork-list-toggle';
+      applyAll = window.forkUI.switchInput(false, true);
       let text = document.createElement('span');
+      text.className = 'fork-list-text';
       text.innerText = 'Apply to every remaining file';
-      row.appendChild(applyAll);
+      row.appendChild(window.forkUI.icon('file', 'view'));
       row.appendChild(text);
+      row.appendChild(applyAll);
       // Said only when it is ticked, because it only matters then: a repeated rename has no box to
       // type in, so it becomes "keep both" with an automatic name.
       let hint = document.createElement('div');
@@ -483,11 +456,10 @@ let showConflict = (name, identical, moreFiles, peer) => {
       overlay.remove();
       resolve({ choice: choice, applyToAll: !!(applyAll && applyAll.checked) });
     };
+    // Three ways on and none of them the obvious one, so no pill is the main one. Overwrite
+    // replaces a file on the other device, which makes it the destructive one: red.
     for (let [label, choice] of [['Skip', 'skip'], ['Rename', 'rename'], ['Overwrite', 'overwrite']]) {
-      let button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'fork-pill';
-      button.innerText = label;
+      let button = window.forkUI.pill(label, { danger: choice === 'overwrite' });
       button.onclick = () => finish(choice);
       actions.appendChild(button);
     }
@@ -495,12 +467,18 @@ let showConflict = (name, identical, moreFiles, peer) => {
     overlay.appendChild(box);
     // Clicking away is "skip this one", never "skip all": a stray click must not decide the
     // rest of the transfer.
+    let dismiss = () => {
+      overlay.remove();
+      resolve({ choice: 'skip', applyToAll: false });
+    };
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
-        overlay.remove();
-        resolve({ choice: 'skip', applyToAll: false });
+        dismiss();
       }
     });
+    // Escape (handled in customize.js) is the same answer; without this the dialog went away
+    // and the transfer waited for ever on a question nobody could see.
+    overlay._dismiss = dismiss;
     document.body.appendChild(overlay);
   });
 }
@@ -508,10 +486,10 @@ let showConflict = (name, identical, moreFiles, peer) => {
 function makeQRCode(str, caption) {
   let elem = document.getElementById('qrcode');
   elem.innerHTML = '';
-  // fork: yellow quiet zone (4+ modules) so the code doesn't bleed into the black page
-  // background; the QR's light modules are yellow too, so the whole block is black-on-yellow.
+  // fork: a quiet zone (4+ modules) in the code's light colour, so the code doesn't bleed into
+  // the page background; light and dark are both roles (the UI page, "QR codes").
   // Bootstrap makes everything border-box, so 150 total = 118 QR + 2*16 quiet zone
-  elem.style.background = '#ffff00';
+  elem.style.background = 'var(--role-qr-light)';
   elem.style.padding = '16px';
   elem.style.width = '150px';
   // with a caption the block grows downward instead of squeezing the code
@@ -520,15 +498,16 @@ function makeQRCode(str, caption) {
     text: str,
     width: 118,
     height: 118,
-    colorLight: '#ffff00',
+    colorLight: window.forkUI.colour('role.qr.light'),
+    colorDark: window.forkUI.colour('role.qr.dark'),
   });
   if (caption) {
     // The password printed under its own QR code, so a sender can scan it or read it off without
-    // a dialog to dismiss first. Black on the same yellow as the quiet zone, clear of the modules.
+    // a dialog to dismiss first. In the code's dark colour on its light one, clear of the modules.
     const cap = document.createElement('div');
     cap.textContent = caption;
-    cap.style.cssText = 'margin-top:6px; text-align:center; font-family:monospace; font-weight:bold;'
-      + ' color:#000000; font-size:15px; letter-spacing:1px; line-height:1.2;';
+    cap.className = 'fork-qr-caption';
+    cap.style.cssText = 'margin-top:6px; font-size:15px; line-height:1.2;';
     elem.appendChild(cap);
   }
 }
@@ -721,7 +700,8 @@ async function beginTransfer(filesSelected) {
     } else {
       output(`Password: ${password}`);
       // not awaited: the transfer below must start without waiting for the dialog to be dismissed
-      dialog.message(`Start the transfer on the other device and enter this password when prompted:\n\n${password}`, { title: '白い熊 魔法絨毯' });
+      // fork: the theme's own dialog rather than the platform's message box
+      window.forkUI.alert('白い熊 魔法絨毯', `Start the transfer on the other device and enter this password when prompted:\n\n${password}`);
     }
   }
 
@@ -843,7 +823,7 @@ let modeChange = async (button) => {
   selectedMode = button;
   // after selectedMode is set, not before: refreshing first tested the mode we were leaving, which
   // is why the button turned up in Send mode
-  refreshLastFolderButton();
+  refreshLastDirButton();
   checkStatus();
 }
 
@@ -921,7 +901,7 @@ let needPassword = async () => {
       showPassword = selectedPeer === 'windows' && selectedMode === 'send';
       break;
     default:
-      alert('Error in needPassword()');
+      window.forkUI.alert('白い熊 魔法絨毯', 'Error in needPassword().');
   }
   return showPassword;
 }
@@ -966,12 +946,12 @@ let enableUi = async () => {
   }
   // replace logo (fork: data-logo marks it tintable — QR codes are never tinted)
   let qrElem = document.getElementById('qrcode');
-  qrElem.style.background = 'transparent';
+  qrElem.style.background = '';
   qrElem.style.padding = '0';
   qrElem.style.border = 'none';
   // last, once the start button is back: the check looks at whether that button is showing, so
   // refreshing earlier left the receive-in button hidden until a mode was tapped again
-  refreshLastFolderButton();
+  refreshLastDirButton();
   qrElem.style.width = '150px';
   qrElem.style.height = '150px';
   qrElem.innerHTML = '<img src="assets/icon1024.png" data-logo style="width: 150px; height: 150px;">'
@@ -983,8 +963,8 @@ let disableUi = async () => {
   // fork: collapse the rows a running transfer cannot use, so the progress readout and the log
   // have room instead of being pushed off the bottom of the window (see customize.css)
   document.getElementById('mainContainer').classList.add('fork-transferring');
-  if (lastFolderButton) {
-    lastFolderButton.style.display = 'none';
+  if (lastDirButton) {
+    lastDirButton.style.display = 'none';
   }
   // hide both send buttons
   startButton.style.display = 'none';

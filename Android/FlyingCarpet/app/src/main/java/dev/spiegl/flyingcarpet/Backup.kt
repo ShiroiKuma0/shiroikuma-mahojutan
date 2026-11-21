@@ -32,8 +32,11 @@ import java.util.zip.ZipOutputStream
 
 /** One independently selectable part of a backup. [id] is both the `items` id and the ZIP entry stem. */
 enum class Cat(val id: String, val label: String) {
-    APPEARANCE("appearance", "Appearance — main screen"),
-    PAGE("page", "Appearance — this UI page"),
+    // Every colour role outside the UI page itself is stored beside the main screen's keys, so
+    // this category carries the dialogs', menus', sheets', lanes', icon and warning roles too.
+    APPEARANCE("appearance", "Appearance — main screen, dialogs, menus, icons"),
+    // "page.*": the page's own look, and its arrangement (section order, what is unfolded).
+    PAGE("page", "Appearance — this UI page and its arrangement"),
     FONTS("fonts", "Imported fonts"),
     ;
 

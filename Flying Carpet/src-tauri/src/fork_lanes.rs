@@ -43,7 +43,15 @@ struct Runtime {
 struct Inner {
     board: LaneBoard,
     runtime: HashMap<LaneId, Runtime>,
+    /// The last send to each device that did not finish — cancelled here, cancelled there, or
+    /// cut — and when. It is what the phone's narrow-channel dialog means by "Restart the
+    /// transfer" when the files were this device's to send (`resend`).
+    unfinished: HashMap<String, (std::time::Instant, Vec<SendFile>)>,
 }
+
+/// How long an unfinished send stays restartable. Long enough for a Wi-Fi reconnect and a
+/// moment's thought; short enough that "restart" never means something from this morning.
+const UNFINISHED_KEEP: std::time::Duration = std::time::Duration::from_secs(600);
 
 #[derive(Default)]
 pub struct LanesState {
@@ -329,7 +337,7 @@ fn spawn_send(app: AppHandle, id: LaneId, peer_name: String, pending: PendingSen
             app: app.clone(),
             ui: ui.clone(),
         };
-        tokio::select! {
+        let finished = tokio::select! {
             result = fork_paired::run_send(
                 &app,
                 &ui,
@@ -337,13 +345,51 @@ fn spawn_send(app: AppHandle, id: LaneId, peer_name: String, pending: PendingSen
                 &pending.files,
                 &mut conflict_rx,
             ) => {
-                if let Err(e) = result {
+                if let Err(e) = &result {
                     ui.output(&format!("Transfer error: {}", e));
                 }
+                result.is_ok()
             }
-            _ = cancelled(cancel_rx) => ui.output("Transfer cancelled."),
+            _ = cancelled(cancel_rx) => {
+                ui.output("Transfer cancelled.");
+                false
+            }
+        };
+        let lanes: State<LanesState> = app.state();
+        let mut inner = lanes.lock();
+        if finished {
+            inner.unfinished.remove(&pending.device_id);
+        } else {
+            inner.unfinished.insert(
+                pending.device_id.clone(),
+                (std::time::Instant::now(), pending.files.clone()),
+            );
         }
     });
+}
+
+/// Sends again what the last unfinished send to `device_id` was sending. Returns how many
+/// files that is.
+pub fn resend(app: &AppHandle, device_id: &str, peer_name: &str) -> Result<usize, String> {
+    let files = {
+        let lanes: State<LanesState> = app.state();
+        let mut inner = lanes.lock();
+        match inner.unfinished.remove(device_id) {
+            Some((when, files)) if when.elapsed() <= UNFINISHED_KEEP => files,
+            _ => return Err("There is no interrupted transfer to send again.".to_string()),
+        }
+    };
+    let count = files.len();
+    request_send(app, device_id.to_string(), peer_name.to_string(), files)?;
+    Ok(count)
+}
+
+/// Whether any lane belongs to a device other than `device_id`. Asked before this device's
+/// Wi-Fi is reconnected for one peer's sake: that takes every other peer's transfer with it.
+pub fn others_active(app: &AppHandle, device_id: &str) -> bool {
+    let lanes: State<LanesState> = app.state();
+    let inner = lanes.lock();
+    inner.board.list().iter().any(|lane| lane.peer_id != device_id)
 }
 
 // ── receiving ─────────────────────────────────────────────────────────────────────────────

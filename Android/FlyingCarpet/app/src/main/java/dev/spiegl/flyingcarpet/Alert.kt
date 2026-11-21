@@ -1,52 +1,68 @@
 package dev.spiegl.flyingcarpet
 
-import android.app.AlertDialog
 import android.app.Dialog
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.util.TypedValue
+import android.view.Gravity
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.fragment.app.DialogFragment
 
+// Fork: both dialogs here were stock AlertDialogs — a grey panel with a bare-text button. They
+// are the fork's own dialog now (ForkDialog): the bordered box, text in the theme's colours, and
+// a pill to close them.
+
 class Alert(private val message: String) : DialogFragment() {
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-        return activity?.let {
-            val builder = AlertDialog.Builder(it)
-//            builder.setTitle("Enter on Peer")
-                .setMessage(message)
-                .setPositiveButton("OK") { _, _ ->
-                    // nothing to do here
-                }
-            builder.create()
-        } ?: throw IllegalStateException("Activity cannot be null")
+        val context = requireActivity()
+        val box = ForkDialog.box(context)
+        box.addView(ForkDialog.label(context, message))
+        val dialog = ForkDialog.wrap(context, box)
+        box.addView(
+            LinearLayout(context).apply {
+                gravity = Gravity.END
+                clipChildren = false
+                setPadding(0, ForkDialog.dp(context, 16), 0, 0)
+                addView(ForkDialog.pill(context, "OK", main = true) { dialog.dismiss() })
+            },
+        )
+        return dialog
     }
 }
 
 class About : DialogFragment() {
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-        return activity?.let {
-            val builder = AlertDialog.Builder(it)
-                .setTitle("About 白い熊 魔法絨毯")
-                .setMessage(AboutMessage.trimIndent())
-//                .setPositiveButton("OK") {_, _ -> }
-            val dialog = builder.create()
-            // Apply 白い熊's "About page" customizations (and the yellow-on-black fork defaults) once the
-            // dialog's title/message TextViews exist.
-            dialog.setOnShowListener {
-                val s = Settings(requireContext())
-                dialog.window?.setBackgroundDrawable(ColorDrawable(s.colorOrNull("aboutBg") ?: Defaults.BLACK))
-                dialog.findViewById<TextView>(android.R.id.message)?.let { tv -> styleAbout(s, tv, "aboutBody") }
-                val titleId = resources.getIdentifier("alertTitle", "id", "android")
-                if (titleId != 0) dialog.findViewById<TextView>(titleId)?.let { tv -> styleAbout(s, tv, "aboutTitle") }
-            }
-            dialog
-        } ?: throw IllegalStateException("Activity cannot be null")
+        val context = requireActivity()
+        val s = Settings(context)
+        // The "About page" section of the UI page has roles of its own for this dialog — its
+        // ground, and the colour, font and size of its title and body. Its frame and its button
+        // are the dialogs'.
+        val box = ForkDialog.box(context, ground = s.colorOrNull("aboutBg") ?: Roles.GROUND)
+        box.addView(
+            ForkDialog.heading(context, "About 白い熊 魔法絨毯").apply { styleAbout(s, this, "aboutTitle") },
+        )
+        box.addView(
+            ForkDialog.label(context, AboutMessage.trimIndent()).apply {
+                setPadding(0, ForkDialog.dp(context, 10), 0, 0)
+                styleAbout(s, this, "aboutBody")
+            },
+        )
+        val dialog = ForkDialog.wrap(context, box)
+        box.addView(
+            LinearLayout(context).apply {
+                gravity = Gravity.END
+                clipChildren = false
+                setPadding(0, ForkDialog.dp(context, 16), 0, 0)
+                addView(ForkDialog.pill(context, "Close", main = true) { dialog.dismiss() })
+            },
+        )
+        return dialog
     }
 
-    // Applies "<key>.color/family/style/size" to a dialog TextView, defaulting to yellow text.
+    // Applies "<key>.color/family/style/size" to a dialog TextView, defaulting to the accent.
     private fun styleAbout(s: Settings, tv: TextView, key: String) {
-        tv.setTextColor(s.colorOrNull("$key.color") ?: Defaults.YELLOW)
+        tv.setTextColor(s.colorOrNull("$key.color") ?: Roles.ACCENT)
         val family = s.family("$key.family")
         val style = s.style("$key.style")
         if (family.isNotEmpty() || style >= 0) {

@@ -59,6 +59,20 @@ const val REQUEST_TRANSFER = 0L
  * accept/refuse, so a device that will not host says so in the usual way.
  */
 const val REQUEST_RAISE_HOTSPOT = 1L
+/**
+ * "What does your Wi-Fi link look like?" — answered by the desktop app with `key=value` lines
+ * (core/src/linkstate.rs). Asked a few seconds into a transfer, because a narrow hop between
+ * the access point and the PC is something only the PC's radio can see (白い熊, 2026-11-21).
+ */
+const val REQUEST_LINK_STATUS = 2L
+/** "Reconnect your Wi-Fi." The reply comes first; the reconnect takes the connection down. */
+const val REQUEST_REASSOCIATE = 3L
+/** "Send me again what you were sending when the transfer was cut." */
+const val REQUEST_RESEND = 4L
+
+/** The requests that move no files: a question, an answer, and the connection is done. */
+fun isControlRequest(request: Long): Boolean =
+    request == REQUEST_LINK_STATUS || request == REQUEST_REASSOCIATE || request == REQUEST_RESEND
 
 /** The hello's own version, separate from the offer's. Must match core/src/paired.rs. */
 const val HELLO_VERSION = 1L
@@ -121,6 +135,12 @@ sealed class Verdict {
  * out through all of them would mean editing every one.
  */
 class HotspotRequested(val offer: PairedOffer?) : Exception("Hotspot requested")
+
+/**
+ * Thrown to unwind out of the transfer pipeline once a control request has its answer, for the
+ * same reason and in the same way as [HotspotRequested]. [answer] is the far end's reply text.
+ */
+class ControlAnswered(val answer: String) : Exception("Control request answered")
 
 /** Whom a hello proved, on the listening side, and under which key. */
 data class Caller(val deviceId: String, val os: PeerOs, val key: PairKey)
@@ -321,6 +341,9 @@ suspend fun TransferLane.exchangePairedOffer(session: PairedSession) {
                         ?: "The other device refused the transfer."
                 )
             }
+            if (isControlRequest(session.request)) {
+                throw ControlAnswered(String(readBytes(inputStream), Charsets.UTF_8))
+            }
             if (session.request == REQUEST_RAISE_HOTSPOT) {
                 // Done: it has agreed to raise one. Everything after this happens on the
                 // hotspot, not on this connection.
@@ -339,6 +362,13 @@ suspend fun TransferLane.exchangePairedOffer(session: PairedSession) {
                     throw Exception("The other device's offer names a different device than its hello.")
                 }
                 session.onClaimed(caller, offer.name)
+            }
+            if (offer.request != REQUEST_TRANSFER && offer.request != REQUEST_RAISE_HOTSPOT) {
+                // A control request, or one from a newer build: a phone answers none of them,
+                // and must not take one for a transfer of no files.
+                outputStream.write(longToBigEndianBytes(Refusal.NOT_ALLOWED.code))
+                outputStream.flush()
+                throw Exception("The other device asked for something this one does not do.")
             }
             if (offer.request == REQUEST_RAISE_HOTSPOT) {
                 // Asked, not told: the same accept/refuse the file case uses, so a device

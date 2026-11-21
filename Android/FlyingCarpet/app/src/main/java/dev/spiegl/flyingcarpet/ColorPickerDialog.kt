@@ -27,17 +27,26 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
         setPadding(0, dp(12), 0, 0)
     }
 
+    // The colour being picked, in a frame of the dialog's own — so a ground-coloured pick can
+    // still be told from the dialog around it.
+    val frame = Roles.color(context, "dialog.frame")
+    fun swatch(color: Int) = android.graphics.drawable.GradientDrawable().apply {
+        setColor(color)
+        setStroke(dp(1).coerceAtLeast(1), frame)
+        cornerRadius = dp(6).toFloat()
+    }
     val preview = View(context).apply {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56))
-        setBackgroundColor(current)
+        background = swatch(current)
     }
     root.addView(preview)
 
+    // The field and the four sliders below take the dialog's field and slider roles when the
+    // dialog is built (ForkDialog.wrap → Theme.watch).
     val hex = EditText(context).apply {
         setText(String.format("#%08X", current))
         gravity = Gravity.CENTER
-        setTextColor(ForkDialog.accent(context))
-        backgroundTintList = android.content.res.ColorStateList.valueOf(ForkDialog.accent(context))
+        typeface = android.graphics.Typeface.MONOSPACE
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             .apply { topMargin = dp(8) }
     }
@@ -48,6 +57,7 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
         val label = TextView(context).apply {
             text = name
             setTextColor(ForkDialog.accent(context))
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
             layoutParams = LinearLayout.LayoutParams(dp(28), LinearLayout.LayoutParams.WRAP_CONTENT)
         }
         val bar = SeekBar(context).apply {
@@ -75,7 +85,7 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
         if (updating) return
         updating = true
         current = Color.argb(aBar.progress, rBar.progress, gBar.progress, bBar.progress)
-        preview.setBackgroundColor(current)
+        preview.background = swatch(current)
         hex.setText(String.format("#%08X", current))
         updating = false
     }
@@ -103,7 +113,7 @@ fun showColorPicker(context: Context, initial: Int, onResult: (Int?) -> Unit) {
             rBar.progress = Color.red(parsed)
             gBar.progress = Color.green(parsed)
             bBar.progress = Color.blue(parsed)
-            preview.setBackgroundColor(parsed)
+            preview.background = swatch(parsed)
             updating = false
         }
         override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}

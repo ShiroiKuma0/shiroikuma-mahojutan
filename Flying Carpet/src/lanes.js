@@ -11,7 +11,7 @@
 // Nothing here decides anything: the backend opens, queues, starts and ends lanes and this
 // page draws what it is told.
 
-import { el } from './customize.js';
+import { el, icon, pill } from './customize.js';
 
 const { core } = window.__TAURI__;
 
@@ -33,11 +33,14 @@ function openLane(info) {
   block.dataset.lane = String(info.id);
 
   const head = el('div', 'fork-lane-head');
-  const arrow = info.direction === 'send' ? '→' : '←';
-  const title = el('span', 'fork-lane-title', `${arrow} ${info.peer_name || 'Paired device'}`);
+  // Which way it goes is the lane's icon, coloured by what the lane does: sending out is the
+  // orange of sharing, taking in the green of connecting.
+  const sending = info.direction === 'send';
+  const title = el('span', 'fork-lane-title');
+  title.appendChild(icon(sending ? 'send' : 'receive', sending ? 'share' : 'connect'));
+  title.appendChild(el('span', 'fork-lane-name', info.peer_name || 'Paired device'));
   const status = el('span', 'fork-lane-status');
-  const cancel = el('button', 'fork-pill fork-lane-cancel', 'Cancel');
-  cancel.type = 'button';
+  const cancel = pill('Cancel', { className: 'fork-lane-cancel', danger: true });
   cancel.onclick = async () => {
     // Said once and then left alone: a running lane stops at its next await, and a second
     // click has nothing more to ask for.

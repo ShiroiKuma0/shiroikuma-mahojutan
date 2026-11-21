@@ -14,7 +14,6 @@
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
         android:text="@string/step2"
-        android:textColor="?android:attr/textColorPrimary"
         android:textSize="16sp"
         android:textStyle="bold"
         app:layout_constraintBottom_toTopOf="@+id/peerGroup"
@@ -34,8 +33,6 @@
         android:gravity="bottom"
         android:hint="@string/welcome"
         android:scrollbars="vertical"
-        android:textColor="?android:attr/textColorPrimary"
-        android:textColorHint="?android:attr/textColorPrimary"
         android:textIsSelectable="true"
         android:textSize="16sp"
         app:layout_constraintBottom_toTopOf="@+id/laneScroll"
@@ -74,12 +71,10 @@
             android:maxLines="1"
             android:text="@string/selectFiles"
             android:textAllCaps="false"
-            android:textColor="@color/white"
             app:autoSizeMaxTextSize="14sp"
             app:autoSizeMinTextSize="9sp"
             app:autoSizeStepGranularity="1sp"
             app:autoSizeTextType="uniform"
-            app:strokeColor="@color/startButtonStrokeColor"
             app:strokeWidth="2dp" />
 
         <!-- the folder half of what used to be a "Send Folder" tick box: same row, same dress, one
@@ -95,13 +90,11 @@
             android:maxLines="1"
             android:text="@string/directoryToSend"
             android:textAllCaps="false"
-            android:textColor="@color/white"
             android:visibility="gone"
             app:autoSizeMaxTextSize="14sp"
             app:autoSizeMinTextSize="9sp"
             app:autoSizeStepGranularity="1sp"
             app:autoSizeTextType="uniform"
-            app:strokeColor="@color/startButtonStrokeColor"
             app:strokeWidth="2dp" />
 
         <!-- reuse the directory picked last time: same effect as picking it again, one tap -->
@@ -119,7 +112,6 @@
             app:autoSizeMinTextSize="9sp"
             app:autoSizeStepGranularity="1sp"
             app:autoSizeTextType="uniform"
-            app:strokeColor="@color/startButtonStrokeColor"
             app:strokeWidth="2dp" />
     </LinearLayout>
 
@@ -127,9 +119,7 @@
         android:id="@+id/cancelButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:backgroundTint="#FF0000"
         android:text="@string/cancel"
-        android:textColor="@color/white"
         android:visibility="invisible"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -165,7 +155,6 @@
         android:paddingHorizontal="20dp"
         android:paddingBottom="2dp"
         android:text=""
-        android:textColor="?android:attr/textColorPrimary"
         android:textSize="14sp"
         android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@+id/progressTotalDetails"
@@ -181,7 +170,6 @@
         android:paddingHorizontal="20dp"
         android:paddingBottom="2dp"
         android:text=""
-        android:textColor="?android:attr/textColorPrimary"
         android:textSize="14sp"
         android:visibility="gone"
         app:layout_constraintBottom_toTopOf="@+id/progressBar"
@@ -244,7 +232,7 @@
 
         <Button
             android:id="@+id/sendButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -256,7 +244,7 @@
 
         <Button
             android:id="@+id/receiveButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -274,7 +262,6 @@
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
         android:text="@string/connectionInstruction"
-        android:textColor="?android:attr/textColorPrimary"
         android:textSize="16sp"
         android:textStyle="bold"
         app:layout_constraintBottom_toTopOf="@+id/connectionGroup"
@@ -298,7 +285,7 @@
 
         <Button
             android:id="@+id/hotspotButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -310,7 +297,7 @@
 
         <Button
             android:id="@+id/sharedNetworkButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -337,7 +324,7 @@
 
         <Button
             android:id="@+id/androidButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -351,7 +338,7 @@
 
         <Button
             android:id="@+id/iosButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -365,7 +352,7 @@
 
         <Button
             android:id="@+id/linuxButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -379,7 +366,7 @@
 
         <Button
             android:id="@+id/macButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -393,7 +380,7 @@
 
         <Button
             android:id="@+id/windowsButton"
-            style="@style/CustomButtonStyle"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -414,7 +401,6 @@
         android:layout_marginEnd="16dp"
         android:layout_marginTop="10dp"
         android:text="@string/step1"
-        android:textColor="?android:attr/textColorPrimary"
         android:textSize="16sp"
         android:textStyle="bold"
         app:layout_constraintEnd_toEndOf="parent"
@@ -431,7 +417,6 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:text="@string/programTitle"
-        android:textColor="?android:attr/textColorPrimary"
         android:textStyle="bold"
         app:autoSizeMaxTextSize="34sp"
         app:autoSizeMinTextSize="12sp"
@@ -448,7 +433,6 @@
         android:layout_height="wrap_content"
         android:layout_marginEnd="2dp"
         android:text="@string/about"
-        android:textColor="@color/aboutButtonColor"
         app:layout_constraintEnd_toEndOf="@+id/programTitle"
         app:layout_constraintTop_toBottomOf="@+id/programTitle" />
 
@@ -541,7 +525,6 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
         android:text="@string/versionNumber"
-        android:textColor="?android:attr/textColorPrimary"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/programTitle" />
 
@@ -554,9 +537,7 @@
         android:text="@string/bluetooth"
         android:textSize="14sp"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/textView"
-        app:thumbTint="@color/bluetooth_switch_thumb"
-        app:trackTint="@color/bluetooth_switch_track" />
+        app:layout_constraintTop_toBottomOf="@+id/textView" />
 
     <!-- What the switch above means for this transfer: who displays the QR code and password and
          who scans or types it. Text set in MainActivity.updateBluetoothHint(). -->
@@ -579,8 +560,7 @@
         android:layout_marginTop="8dp"
         app:layout_constraintStart_toEndOf="@+id/bluetoothSwitch"
         app:layout_constraintTop_toBottomOf="@+id/textView"
-        app:srcCompat="@android:drawable/stat_sys_data_bluetooth"
-        app:tint="@color/bluetoothColor" />
+        app:srcCompat="@android:drawable/stat_sys_data_bluetooth" />
 
     <!-- Fork: "Stay reachable", the switch that lets a paired device send to this phone without
          it being opened. It is the most consequential switch in the app and the one with a
@@ -596,9 +576,7 @@
         android:text="@string/reachable"
         android:textSize="14sp"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/bluetoothHint"
-        app:thumbTint="@color/bluetooth_switch_thumb"
-        app:trackTint="@color/bluetooth_switch_track" />
+        app:layout_constraintTop_toBottomOf="@+id/bluetoothHint" />
 
     <!-- What the switch above costs and buys. Text and colour set in
          MainActivity.refreshReachableSwitch(). -->

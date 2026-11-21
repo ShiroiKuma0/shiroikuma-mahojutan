@@ -59,6 +59,22 @@ pub const REQUEST_TRANSFER: u64 = 0;
 /// "Raise your hotspot and listen on it — I will leave this network and join you." The reply
 /// is the ordinary accept/refuse, so a device that cannot host says so in the usual way.
 pub const REQUEST_RAISE_HOTSPOT: u64 = 1;
+/// "What does your Wi-Fi link look like?" Answered with `linkstate::LinkState::to_wire`. Asked
+/// by the phone a few seconds into a transfer, because a narrow hop between the access point
+/// and this device is something only this device's radio can see (白い熊, 2026-11-21).
+pub const REQUEST_LINK_STATUS: u64 = 2;
+/// "Reconnect your Wi-Fi." The reply goes out first; the reconnect follows it, since it takes
+/// this very connection down.
+pub const REQUEST_REASSOCIATE: u64 = 3;
+/// "Send me again what you were sending when the transfer was cut." The far end of the
+/// narrow-channel dialog's "Restart the transfer", for the direction the phone cannot restart
+/// by itself.
+pub const REQUEST_RESEND: u64 = 4;
+
+/// The requests that move no files: a question, an answer, and the connection is done.
+pub fn is_control(request: u64) -> bool {
+    matches!(request, REQUEST_LINK_STATUS | REQUEST_REASSOCIATE | REQUEST_RESEND)
+}
 
 /// The hello's own version, separate from the offer's: the two live on opposite sides of
 /// the handshake and change for different reasons.
@@ -502,11 +518,139 @@ pub async fn send_to_peer<T: UI>(
     Ok(())
 }
 
-/// Handles one accepted connection, start to finish. Public because the accept loop no
-/// longer runs it: each connection is a lane of its own (see lanes.rs), spawned by whoever
-/// called `serve`, so a long transfer from one device does not hold the door shut against
-/// every other. A peer that misbehaves during its own session ends that session and
-/// nothing else.
+/// Asks a paired device one control question and returns its answer. The same connection a
+/// send opens — preamble, hello, handshake, offer — with a request in the offer instead of
+/// files. The desktop never needs to ask a phone anything yet; this is the calling half the
+/// tests drive, and the reference for the one in Paired.kt.
+#[allow(clippy::too_many_arguments)]
+pub async fn request_control<T: UI>(
+    peer_ip: IpAddr,
+    port: u16,
+    key: &[u8; 32],
+    peer_name: &str,
+    identity_id: [u8; 16],
+    identity_name: &str,
+    request: u64,
+    ui: &T,
+) -> Result<String, FCError> {
+    let addr = SocketAddr::new(peer_ip, port);
+    let tcp = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
+        Ok(Ok(tcp)) => tcp,
+        _ => {
+            fc_error(&format!("Could not reach {}", addr))?;
+            unreachable!()
+        }
+    };
+    let identity = HelloIdentity {
+        device_id: identity_id,
+        os: PeerOs::this_device(),
+    };
+    let held = Held::new(ui);
+    let (mut stream, _, _) = handshake(
+        tcp,
+        &Mode::Send(Vec::new()),
+        HelloSide::Initiator {
+            identity: &identity,
+            key,
+            peer_name,
+        },
+        &held,
+    )
+    .await?;
+    let offer = PairedOffer {
+        request,
+        device_id: identity_id,
+        name: identity_name.to_string(),
+        file_count: 0,
+        total_bytes: 0,
+        first_name: String::new(),
+    };
+    write_offer(&mut stream, &offer).await?;
+    stream.flush().await?;
+    match stream.read_u64().await? {
+        1 => Ok(String::from_utf8(read_bytes(&mut stream).await?)?),
+        _ => {
+            fc_error("The other device does not answer that request.")?;
+            unreachable!()
+        }
+    }
+}
+
+/// A voice that holds its lines until it is known whether anybody should hear them.
+///
+/// A control request arrives every few seconds while a transfer runs, and each one would
+/// otherwise write "Encrypted connection established." into the log for a connection that
+/// moves nothing. What it is cannot be known before the offer is read, so the lines wait:
+/// dropped for a control request, said in order for everything else — including every way
+/// the connection can fail before its offer, which is where a stranger's attempt shows up.
+#[derive(Clone)]
+struct Held<T: UI> {
+    inner: T,
+    lines: Arc<std::sync::Mutex<Option<Vec<String>>>>,
+}
+
+impl<T: UI> Held<T> {
+    fn new(inner: &T) -> Self {
+        Held {
+            inner: inner.clone(),
+            lines: Arc::new(std::sync::Mutex::new(Some(Vec::new()))),
+        }
+    }
+
+    /// Stops holding. `say` decides whether what was held is said or dropped.
+    fn release(&self, say: bool) {
+        let held = self.lines.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if say {
+            for line in held.unwrap_or_default() {
+                self.inner.output(&line);
+            }
+        }
+    }
+}
+
+impl<T: UI> UI for Held<T> {
+    fn output(&self, msg: &str) {
+        let mut lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
+        match lines.as_mut() {
+            Some(held) => held.push(msg.to_string()),
+            None => {
+                drop(lines);
+                self.inner.output(msg)
+            }
+        }
+    }
+    fn show_progress_bar(&self) {
+        self.inner.show_progress_bar()
+    }
+    fn update_progress_bar(&self, percent: u8) {
+        self.inner.update_progress_bar(percent)
+    }
+    fn update_total_progress_bar(&self, percent: u8) {
+        self.inner.update_total_progress_bar(percent)
+    }
+    fn update_progress_details(&self, current: &str, total: &str) {
+        self.inner.update_progress_details(current, total)
+    }
+    fn enable_ui(&self) {
+        self.inner.enable_ui()
+    }
+    fn show_pin(&self, pin: &str) {
+        self.inner.show_pin(pin)
+    }
+    fn ask_file_conflict(
+        &self,
+        name: &str,
+        local_size: u64,
+        incoming_size: u64,
+        identical: bool,
+        more_files: bool,
+    ) {
+        self.inner
+            .ask_file_conflict(name, local_size, incoming_size, identical, more_files)
+    }
+}
+
+/// `serve_one_with_control` for a caller that answers no control requests: they are refused.
 pub async fn serve_one<T: UI, D, C>(
     tcp: TcpStream,
     ring: &KeyRing,
@@ -518,15 +662,73 @@ where
     D: Fn(&PairedOffer) -> Verdict,
     C: Fn(&Caller, &str),
 {
+    serve_one_with_control(tcp, ring, ui, decide, claimed, &|_: &PairedOffer, _: IpAddr| None).await
+}
+
+/// Handles one accepted connection, start to finish. Public because the accept loop no
+/// longer runs it: each connection is a lane of its own (see lanes.rs), spawned by whoever
+/// called `serve`, so a long transfer from one device does not hold the door shut against
+/// every other. A peer that misbehaves during its own session ends that session and
+/// nothing else.
+///
+/// `control` answers the requests that move no files (`is_control`). It is handed the offer
+/// and this end's address on the connection — which is what says which interface the caller
+/// is asking about — and returns the reply text, or None to refuse. Anything it has to do
+/// *after* the reply has gone out, it arranges for itself.
+pub async fn serve_one_with_control<T: UI, D, C, K>(
+    tcp: TcpStream,
+    ring: &KeyRing,
+    ui: &T,
+    decide: &D,
+    claimed: &C,
+    control: &K,
+) -> Result<(), FCError>
+where
+    D: Fn(&PairedOffer) -> Verdict,
+    C: Fn(&Caller, &str),
+    K: Fn(&PairedOffer, IpAddr) -> Option<String>,
+{
+    let outer = ui;
+    let held = Held::new(outer);
+    let ui = &held;
+    let local_ip = tcp.local_addr().map(|a| a.ip());
     prepare_socket(&tcp, ui);
     // The destination is not known until the offer has been read, and Mode::Receive needs
     // one to exist for the preamble. It is replaced by the decision's own path before a
     // single file is written, so this placeholder never reaches the filesystem.
     let mode = Mode::Receive(PathBuf::new());
-    let (mut stream, peer_is_fork, caller) =
-        handshake(tcp, &mode, HelloSide::Responder { ring }, ui).await?;
-
-    let offer = read_offer(&mut stream).await?;
+    let opened = async {
+        let (mut stream, peer_is_fork, caller) =
+            handshake(tcp, &mode, HelloSide::Responder { ring }, ui).await?;
+        let offer = read_offer(&mut stream).await?;
+        Ok::<_, FCError>((stream, peer_is_fork, caller, offer))
+    }
+    .await;
+    let (mut stream, peer_is_fork, caller, offer) = match opened {
+        Ok(opened) => opened,
+        Err(e) => {
+            held.release(true);
+            return Err(e);
+        }
+    };
+    held.release(!is_control(offer.request));
+    if is_control(offer.request) {
+        // Asked under a key the handshake has just proved, like everything else here; a
+        // device still claiming a code has no business asking, so it is not recorded.
+        let reply = match local_ip {
+            Ok(ip) => control(&offer, ip),
+            Err(_) => None,
+        };
+        match reply {
+            Some(text) => {
+                stream.write_u64(1).await?;
+                write_bytes(&mut stream, text.as_bytes()).await?;
+            }
+            None => stream.write_u64(Refusal::NotAllowed as u64).await?,
+        }
+        stream.flush().await?;
+        return Ok(());
+    }
     // The handshake has proved the caller holds the key it named. If that key was a code
     // this device showed, the caller is the device it was shown to: record it now, with
     // the name the offer carries, before anything is decided about the offer itself.
@@ -542,6 +744,12 @@ where
             "{} asked this device to raise a hotspot; only the phone hosts in this pairing.",
             offer.name
         ));
+        return Ok(());
+    }
+    if offer.request != REQUEST_TRANSFER {
+        // A request from a newer build than this one. Refused in words rather than taken
+        // for a transfer of no files.
+        stream.write_u64(Refusal::NotAllowed as u64).await?;
         return Ok(());
     }
     let folder = match decide(&offer) {
@@ -955,6 +1163,76 @@ mod tests {
         assert_eq!(caller.key.key, code);
         assert_eq!(name, "Tuxedo");
         let _ = std::fs::remove_dir_all(&f._dir);
+    }
+
+    /// A control request is answered and moves nothing — and says nothing: the log of a
+    /// device that is asked every few seconds must not fill with handshakes.
+    #[tokio::test]
+    async fn a_control_request_is_answered_quietly() {
+        let key = [0x88u8; 32];
+        let ui = test_ui();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_ui = ui.clone();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ring = ring_with(vec![PairKey::bound(key, SENDER_ID)]);
+            serve_one_with_control(
+                tcp,
+                &ring,
+                &server_ui,
+                &|_o: &PairedOffer| -> Verdict { panic!("a control request must not be decided as a transfer") },
+                &|_: &Caller, _: &str| {},
+                &|offer: &PairedOffer, ip: IpAddr| {
+                    assert_eq!(offer.request, REQUEST_LINK_STATUS);
+                    Some(format!("wifi=1\nasked_on={}\n", ip))
+                },
+            )
+            .await
+        });
+        let answer = request_control(
+            addr.ip(),
+            addr.port(),
+            &key,
+            "desk",
+            SENDER_ID,
+            "phone",
+            REQUEST_LINK_STATUS,
+            &ui,
+        )
+        .await
+        .unwrap();
+        server.await.unwrap().unwrap();
+        assert_eq!(answer, "wifi=1\nasked_on=127.0.0.1\n");
+        assert!(ui.0.lock().unwrap().is_empty(), "{:?}", ui.0.lock().unwrap());
+    }
+
+    /// The plain `serve_one` answers none, and says so instead of taking it for a transfer.
+    #[tokio::test]
+    async fn a_control_request_nobody_answers_is_refused() {
+        let key = [0x99u8; 32];
+        let ui = test_ui();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_ui = ui.clone();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ring = ring_with(vec![PairKey::bound(key, SENDER_ID)]);
+            serve_one(
+                tcp,
+                &ring,
+                &server_ui,
+                &|_o: &PairedOffer| -> Verdict { panic!("not a transfer") },
+                &|_: &Caller, _: &str| {},
+            )
+            .await
+        });
+        let result = request_control(
+            addr.ip(), addr.port(), &key, "desk", SENDER_ID, "phone", REQUEST_REASSOCIATE, &ui,
+        )
+        .await;
+        server.await.unwrap().unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

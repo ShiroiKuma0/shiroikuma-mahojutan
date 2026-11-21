@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod error;
 // Fork: the rules for parallel paired transfers.
 pub mod lanes;
+pub mod linkstate;
 pub mod noise;
 pub mod paired;
 pub mod pairing;

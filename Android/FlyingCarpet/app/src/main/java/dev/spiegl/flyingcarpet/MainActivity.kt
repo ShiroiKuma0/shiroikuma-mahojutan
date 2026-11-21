@@ -839,7 +839,7 @@ class MainActivity : AppCompatActivity() {
                 filePicker.launch(arrayOf("*/*"))
             },
             onHotspot = { peer, sending -> pairedOverHotspot(peer, sending) },
-            onPickFolder = { peer ->
+            onPickDirectory = { peer ->
                 folderPickerForPeer = peer
                 peerFolderPicker.launch(lastReceiveDir())
             },
@@ -894,8 +894,12 @@ class MainActivity : AppCompatActivity() {
             )
             column.addView(
                 splitPill(
-                    ForkDialog.pill(this, "⚡ $name", ForkDialog.Corners.START) {
+                    ForkDialog.pill(this, name, ForkDialog.Corners.START) {
                         pairedOverHotspot(peer, sending = true)
+                    }.also {
+                        // The hotspot route's mark, an icon coloured by its role like the
+                        // Wi-Fi one above it (it was a text glyph in the label's yellow).
+                        ForkDialog.icon(it, Icons.Icon.BOLT, IconRole.CONNECT)
                     },
                     folderHalf("Send a directory to $name over a hotspot") {
                         pairedOverHotspot(peer, sending = true, folder = true)
@@ -951,7 +955,7 @@ class MainActivity : AppCompatActivity() {
     /** The folder half of a split pill: the glyph alone, with the words on a long press. */
     private fun folderHalf(what: String, onClick: () -> Unit): Button =
         ForkDialog.pill(this, "", ForkDialog.Corners.END, onClick = onClick).apply {
-            ForkDialog.icon(this, R.drawable.ic_folder, sizeDp = 18)
+            ForkDialog.icon(this, R.drawable.ic_directory, sizeDp = 18)
             compoundDrawablePadding = 0
             setPadding(
                 ForkDialog.dp(this@MainActivity, 14),
@@ -1061,7 +1065,7 @@ class MainActivity : AppCompatActivity() {
             activity = this,
             controller = pairedController,
             peer = peer,
-            onPickFolder = { target ->
+            onPickDirectory = { target ->
                 folderPickerForPeer = target
                 peerFolderPicker.launch(lastReceiveDir())
             },
@@ -1177,6 +1181,9 @@ class MainActivity : AppCompatActivity() {
         // An unattended transfer lands where the last one did — the same directory the
         // "Receive in ..." button uses, so there is nothing extra to configure.
         pairedController.receiveDirProvider = { lastReceiveDir() }
+        // Fork: the narrow-channel dialog, raised by a transfer that finds the PC's Wi-Fi link
+        // holding it back (LinkDoctor.kt).
+        LinkDoctor.attach(this, pairedController)
         peerFolderPicker = getPeerFolderPicker()
         findViewById<Button>(id.devicesButton)?.setOnClickListener { openDevicesSheet() }
         // Fork: the "Stay reachable" switch. A foreground service whose notification cannot
@@ -1729,8 +1736,7 @@ class MainActivity : AppCompatActivity() {
         // Offered only while files remain: on the last one it would be a control that does nothing.
         // Said only when it is ticked, because it only matters then -- a repeated rename has no box
         // to type in, so it becomes "keep both" with an automatic name.
-        val hint = ForkDialog.label(this, "Rename will add \u201c (copy)\u201d to each name.", 13f).apply {
-            alpha = 0.7f
+        val hint = ForkDialog.note(this, "Rename will add \u201c (copy)\u201d to each name.").apply {
             visibility = View.GONE
             setPadding(ForkDialog.dp(this@MainActivity, 34), 0, 0, 0)
         }
@@ -1788,7 +1794,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         row.addView(gap(renameButton))
-        row.addView(ForkDialog.pill(this, "Overwrite") { finish(FileConflictChoice.Overwrite) })
+        // Destructive: it replaces the file on the other device, so it wears the delete red.
+        row.addView(
+            ForkDialog.pill(this, "Overwrite", destructive = true) { finish(FileConflictChoice.Overwrite) }
+        )
         box.addView(row)
 
         dialog.show()

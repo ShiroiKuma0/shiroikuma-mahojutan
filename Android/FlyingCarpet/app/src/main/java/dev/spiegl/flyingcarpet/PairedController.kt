@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,16 @@ import java.net.Socket
 
 /** How long a scan listens. Long enough for a /21 sweep's chunk delays plus the replies. */
 private const val SCAN_WINDOW_MS = 1500L
+
+/** A control request's read deadline: an answer takes well under a second when there is one. */
+private const val CONTROL_TIMEOUT_MS = 5000
+
+// The link watch. The first look waits until file data is certainly flowing, since the rate
+// the PC reports is that of the last frames it saw; the confirming look follows shortly, and
+// after a clean bill it looks again now and then for as long as the transfer runs.
+private const val LINK_FIRST_CHECK_MS = 5000L
+private const val LINK_CONFIRM_MS = 3000L
+private const val LINK_RECHECK_MS = 20000L
 
 class PairedController(
     private val context: Context,
@@ -377,6 +388,122 @@ class PairedController(
         }
     }
 
+    // ── control requests (the narrow-channel dialog, LinkDoctor.kt) ───────────────────────
+
+    /**
+     * One question to a paired device, and its answer: the connection a send opens, with a
+     * request in the offer instead of files. Null when the device did not answer — off,
+     * mid-reconnect, or running a build that does not know the question.
+     *
+     * Silent, and bounded: this is asked every few seconds while a transfer runs, so it writes
+     * nothing to the log and never waits long on a device that has gone quiet.
+     */
+    private suspend fun control(peer: PairedPeer, request: Long): String? {
+        val key = pairing.keyFor(peer.deviceId) ?: return null
+        // Read afresh: a reconnect can hand the PC a new address, and noteSeen() records it.
+        val address = (pairing.findPeer(peer.deviceId) ?: peer).lastIp ?: return null
+        val lane = PairedLane(
+            app,
+            sending = true,
+            peerId = peer.deviceId,
+            peerName = peer.displayName,
+            log = { },
+        )
+        return try {
+            if (!lane.connectToPairedPeer(address)) return null
+            lane.client.soTimeout = CONTROL_TIMEOUT_MS
+            lane.mode = Mode.Sending
+            lane.psk = derivePairedPsk(key)
+            lane.pairedSession = PairedSession(
+                key = key,
+                sending = true,
+                localId = pairing.deviceId,
+                localName = pairing.name,
+                peerName = peer.displayName,
+                request = request,
+            )
+            lane.run()
+            null
+        } catch (e: ControlAnswered) {
+            e.answer
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.i("Paired", "Control request $request to ${peer.displayName} failed: ${e.message}")
+            null
+        } finally {
+            lane.close()
+        }
+    }
+
+    /** How the paired device's Wi-Fi link looks right now; null when it did not say. */
+    suspend fun linkStatus(peer: PairedPeer): LinkState? =
+        control(peer, REQUEST_LINK_STATUS)?.let { LinkState.parse(it) }
+
+    /** Tells the paired device to reconnect its Wi-Fi. */
+    suspend fun reassociate(peer: PairedPeer): ControlReply =
+        ControlReply.parse(control(peer, REQUEST_REASSOCIATE))
+
+    /** Tells the paired device to send again what it was sending when the transfer was cut. */
+    suspend fun askResend(peer: PairedPeer): ControlReply =
+        ControlReply.parse(control(peer, REQUEST_RESEND))
+
+    /** Looks for the device again, for when a reconnect has moved its address. */
+    suspend fun relocate(peer: PairedPeer): Boolean {
+        val fresh = locate(peer.deviceId) ?: return false
+        pairing.noteSeen(peer.deviceId, fresh)
+        return true
+    }
+
+    /**
+     * A lane has finished: if it was the fastest these two devices have managed in that
+     * direction, remember it. It is what the speed check holds a slow transfer up against.
+     * Counted from the first file to the last, files the other device already had left out.
+     */
+    private fun noteSpeed(lane: PairedLane) {
+        val id = lane.peerId ?: return
+        val totals = lane.totals ?: return
+        SpeedBook.record(
+            app, id, lane.sending, totals.bytesDone,
+            (System.currentTimeMillis() - totals.start) / 1000.0,
+        )
+    }
+
+    /**
+     * Watches one running lane's link, and raises the narrow-channel dialog if the PC's hop
+     * of it is narrow. Returns when it has raised one, or when the lane is over.
+     *
+     * Two readings a few seconds apart, both narrow, before anything is said: the driver
+     * reports the last frame it saw, and a dialog this loud must not be raised by one ACK.
+     */
+    private suspend fun watchLink(lane: PairedLane) {
+        // An incoming lane does not know its caller until the offer has been read.
+        var waited = 0
+        while (lane.peerId == null || lane.state != PairedLane.State.RUNNING) {
+            if (lane.state == PairedLane.State.DONE || lane.cancelled || waited > 120) return
+            kotlinx.coroutines.delay(500)
+            waited++
+        }
+        val peer = lane.peerId?.let { pairing.findPeer(it) } ?: return
+        // Only the Linux build answers; a phone would take the question for a transfer.
+        if (PeerOs.fromLabel(peer.os) != PeerOs.LINUX) return
+        kotlinx.coroutines.delay(LINK_FIRST_CHECK_MS)
+        while (lane.state == PairedLane.State.RUNNING && !lane.cancelled) {
+            if (LinkDoctor.snoozed(peer.deviceId)) return
+            val first = linkStatus(peer)?.takeIf { it.isNarrowFor(lane.sending) }
+            if (first != null) {
+                kotlinx.coroutines.delay(LINK_CONFIRM_MS)
+                val second = linkStatus(peer)?.takeIf { it.isNarrowFor(lane.sending) }
+                if (second != null && lane.state == PairedLane.State.RUNNING && !lane.cancelled) {
+                    lane.outputText("Narrow Wi-Fi channel: " + second.sentence(peer.displayName, lane.sending))
+                    LinkDoctor.raise(peer, lane, second)
+                    return
+                }
+            }
+            kotlinx.coroutines.delay(LINK_RECHECK_MS)
+        }
+    }
+
     /**
      * Makes this device visible to the peer's standing scan, which is all the wake needs to
      * be: the peer's own GATT server does the rest through gotPeer().
@@ -678,8 +805,11 @@ class PairedController(
         )
         lane.pairedSession = session
         lane.job = kotlin.coroutines.coroutineContext[Job]
+        // The same watch a send gets; it waits by itself until the offer has named the caller.
+        val watcher = scope.launch { watchLink(lane) }
         try {
             lane.run()
+            noteSpeed(lane)
             session.offer?.let { onArrival(it) }
         } catch (e: HotspotRequested) {
             // Not a failure: the control connection did its job. Let go of it, then raise the
@@ -700,6 +830,7 @@ class PairedController(
                 lane.outputText("Transfer error: ${e.message}")
             }
         } finally {
+            watcher.cancel()
             lane.close()
             TransferLanes.finish(lane)
         }
@@ -722,9 +853,50 @@ class PairedController(
      * device being off, so a failed connect looks again rather than giving up.
      */
     fun sendTo(peer: PairedPeer, onFinished: () -> Unit) {
+        // The selection moves into the lane, and the ViewModel gets fresh, empty lists: the
+        // next pick must not reach into a transfer that is already running.
+        val files = viewModel.files
+        val streams = viewModel.fileStreams
+        val paths = viewModel.filePaths
+        viewModel.files = mutableListOf()
+        viewModel.fileStreams = mutableListOf()
+        viewModel.filePaths = mutableListOf()
+        startSend(peer, files, streams, paths, onFinished)
+    }
+
+    /**
+     * Sends [files] to [peer] again, after a transfer of them was cut — the narrow-channel
+     * dialog's "Restart the transfer". The streams of the cut transfer are closed and half
+     * read, so each file is opened afresh; the selection on the main screen is not touched.
+     */
+    fun sendAgain(peer: PairedPeer, files: List<DocumentFile>, paths: List<String>) {
+        val streams = mutableListOf<java.io.InputStream>()
+        try {
+            for (file in files) {
+                streams.add(
+                    app.contentResolver.openInputStream(file.uri)
+                        ?: throw Exception("Could not open ${file.name ?: "a file"} again.")
+                )
+            }
+        } catch (e: Exception) {
+            streams.forEach { runCatching { it.close() } }
+            viewModel.outputText("Could not restart the transfer: ${e.message}")
+            return
+        }
+        startSend(peer, files.toMutableList(), streams, paths.toMutableList()) { }
+    }
+
+    private fun startSend(
+        peer: PairedPeer,
+        files: MutableList<DocumentFile>,
+        streams: MutableList<java.io.InputStream>,
+        paths: MutableList<String>,
+        onFinished: () -> Unit,
+    ) {
         val key = pairing.keyFor(peer.deviceId)
         if (key == null) {
             viewModel.outputText("No pairing key is stored for ${peer.displayName}; pair it again.")
+            streams.forEach { runCatching { it.close() } }
             onFinished()
             return
         }
@@ -733,6 +905,7 @@ class PairedController(
                 "A hotspot or password transfer is running, and it has the Wi-Fi to itself. " +
                     "Send to ${peer.displayName} when it has finished."
             )
+            streams.forEach { runCatching { it.close() } }
             onFinished()
             return
         }
@@ -746,14 +919,9 @@ class PairedController(
                 viewModel.askAboutExistingFile(who, name, identical, moreFiles)
             },
         )
-        // The selection moves into the lane, and the ViewModel gets fresh, empty lists: the
-        // next pick must not reach into a transfer that is already running.
-        lane.files = viewModel.files
-        lane.fileStreams = viewModel.fileStreams
-        lane.filePaths = viewModel.filePaths
-        viewModel.files = mutableListOf()
-        viewModel.fileStreams = mutableListOf()
-        viewModel.filePaths = mutableListOf()
+        lane.files = files
+        lane.fileStreams = streams
+        lane.filePaths = paths
         lane.mode = Mode.Sending
         lane.psk = derivePairedPsk(key)
         lane.pairedSession = PairedSession(
@@ -788,7 +956,15 @@ class PairedController(
                             "devices are on the same network."
                     )
                 }
-                lane.run()
+                // Beside the transfer, never in its way: it asks the PC how its Wi-Fi link
+                // looks, and says so loudly if that is what is holding the transfer back.
+                val watcher = scope.launch { watchLink(lane) }
+                try {
+                    lane.run()
+                    noteSpeed(lane)
+                } finally {
+                    watcher.cancel()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -1,52 +1,24 @@
 <resources>
-    <!-- Base application theme. -->
-    <style name="Theme.FlyingCarpet" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Primary brand color. -->
-        <item name="colorPrimary">@color/darkGreenBlue</item>
-        <item name="colorPrimaryVariant">@color/teal</item>
-        <item name="colorOnPrimary">@color/white</item>
-        <item name="colorOnSurface">@color/black</item>
-        <!-- Secondary brand color. -->
-        <item name="colorSecondary">@color/teal_200</item>
-        <item name="colorSecondaryVariant">@color/teal_700</item>
-        <item name="colorOnSecondary">@color/black</item>
-        <!-- Customize your theme here. -->
-        <item name="android:background">@color/tan</item>
-        <item name="android:textColorPrimary">@color/black</item>
-        <!-- Fork: the yellow-on-black look is painted at the *view* level by Appearance.apply(),
-             so without this the window behind it stayed the stock DayNight light background. Any
-             moment the window is visible before our views are drawn then flashed white — most
-             obviously coming back from the system Wi-Fi connection dialog when joining the peer's
-             hotspot (白い熊, 2026-08-10). Theme.FlyingCarpet.Settings below has always done this;
-             the main Activity simply never did. Black rather than a settings colour because this
-             is only ever seen for a frame, and it is the fork default the UI page starts from. -->
+    <!-- Fork: the themes carry NO colour of a themed surface (the black-yellow theme's rule: no
+         colour is written in XML). Every colour is a settable role, applied in code from the
+         role table in Roles.kt and the catalogue in Appearance.kt.
+
+         The three items below are the one exception the rule allows: what the platform draws
+         before any app code runs. The window ground, the status bar and the navigation bar of a
+         starting activity are painted by the system from the theme, and a preference cannot be
+         read there, so they stay literal black; each activity overwrites them from its roles in
+         onCreate (Appearance.apply, SettingsActivity.onCreate). Without the window ground the
+         screen flashed white coming back from the system Wi-Fi dialog (白い熊, 2026-08-10).
+
+         The parent is the dark Material theme, not DayNight: the app is black-ground by
+         default in either system mode, and a light parent would hand dark default text to any
+         view the code had not reached yet. -->
+    <style name="Theme.FlyingCarpet" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:colorBackground">@android:color/black</item>
-    </style>
-    <style name="CustomButtonStyle" parent="Widget.MaterialComponents.Button.OutlinedButton">
-        <item name="android:textColor">@drawable/button_selector</item>
-        <item name="strokeColor">@color/black</item>
-        <item name="backgroundTint">@drawable/button_background_selector</item>
-    </style>
-    <!-- 白い熊 魔法絨毯 UI customization page: a yellow-on-black dark theme so the page's many native
-         controls (EditText, Spinner, SeekBar, Buttons) stay legible by default. The page is still fully
-         configurable on top of this via the "This settings page" section (page.* keys). -->
-    <style name="Theme.FlyingCarpet.Settings" parent="Theme.MaterialComponents.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:colorBackground">@android:color/black</item>
-        <item name="colorPrimary">#FFFF00</item>
-        <item name="colorOnPrimary">#000000</item>
-        <item name="colorSecondary">#FFFF00</item>
-        <item name="colorOnSecondary">#000000</item>
-        <item name="colorSurface">#000000</item>
-        <item name="colorOnSurface">#FFFF00</item>
-        <item name="colorAccent">#FFFF00</item>
-        <item name="colorControlNormal">#FFFF00</item>
-        <item name="colorControlActivated">#FFFF00</item>
-        <item name="android:textColor">#FFFF00</item>
-        <item name="android:textColorPrimary">#FFFF00</item>
-        <item name="android:textColorSecondary">#CCFFEB00</item>
-        <item name="android:textColorHint">#80FFFF00</item>
         <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
     </style>
+    <!-- 白い熊 魔法絨毯 UI customization page. The same rule: nothing but what the platform
+         draws first. Its text fields, sliders, switches and pills are coloured in code. -->
+    <style name="Theme.FlyingCarpet.Settings" parent="Theme.FlyingCarpet" />
 </resources>

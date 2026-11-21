@@ -54,9 +54,11 @@ class ExportImportPanel(
     private var box: LinearLayout? = null
     private val selected: MutableSet<Cat> = Cat.values().toMutableSet()
 
+    // Roles, never values: the dialog's text, its note colour, its frame, and the warning red.
     private val accent get() = ForkDialog.accent(activity)
-    private val dim get() = 0xFFCCCC66.toInt()
-    private val red get() = Defaults.RED
+    private val dim get() = Roles.color(activity, "dialog.note")
+    private val frame get() = Roles.color(activity, "dialog.frame")
+    private val red get() = Roles.warning(activity)
 
     private fun dp(v: Int) = ForkDialog.dp(activity, v)
 
@@ -106,10 +108,7 @@ class ExportImportPanel(
                     "restore it from one. Importing merges: categories the file doesn’t carry are left alone.",
                 13f,
                 color = dim,
-            ).apply {
-                alpha = 0.85f
-                setPadding(0, 0, 0, dp(10))
-            },
+            ).apply { setPadding(0, 0, 0, dp(10)) },
         )
 
         if (!hasAllFilesAccess()) {
@@ -137,7 +136,10 @@ class ExportImportPanel(
         content.addView(buttonBar())
     }
 
-    /** The folder box: bordered and clearly tappable — small label over the bold value. */
+    /**
+     * The directory box: bordered and clearly tappable — small label over the bold value, the
+     * directory icon before the label and a › after it, since it opens the directory dialog.
+     */
     private fun directoryRow(): View {
         val path = Backup.exportDir(activity)
         return LinearLayout(activity).apply {
@@ -147,11 +149,18 @@ class ExportImportPanel(
             setPadding(dp(12), dp(10), dp(12), dp(10))
             background = GradientDrawable().apply {
                 setColor(ForkDialog.surface(activity))
-                setStroke(dp(2), if (path == null) red else accent)
+                setStroke(dp(2), if (path == null) red else frame)
                 cornerRadius = dp(10).toFloat()
             }
             setOnClickListener { editDirectory(path) }
-            addView(ForkDialog.label(activity, "Backup directory", 12f))
+            addView(
+                ForkDialog.label(activity, "Backup directory  ›", 12f).apply {
+                    Icons.lead(
+                        this, Icons.Icon.DIRECTORY, IconRole.SHARE, sizeDp = 14f,
+                        color = if (path == null) red else null,
+                    )
+                },
+            )
             addView(
                 ForkDialog.label(
                     activity,
@@ -171,7 +180,6 @@ class ExportImportPanel(
     private fun statusLine(): View {
         val (message, warn) = lastExportStatus()
         return ForkDialog.label(activity, message, 14f, color = if (warn) red else dim).apply {
-            alpha = if (warn) 1f else 0.8f
             setPadding(dp(2), 0, 0, dp(8))
         }
     }
@@ -197,14 +205,9 @@ class ExportImportPanel(
         setOnCheckedChangeListener { _, checked -> if (checked) selected.add(cat) else selected.remove(cat) }
     }
 
-    private fun checkbox(text: String, bold: Boolean = false): CheckBox = CheckBox(activity).apply {
-        this.text = text
-        setTextColor(accent)
-        if (bold) typeface = Typeface.DEFAULT_BOLD
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        buttonTintList = ColorStateList.valueOf(accent)
-        setPadding(dp(8), dp(7), 0, dp(7))
-    }
+    // A tick box is a selection mark and stays one; its mark and label take the dialog's roles.
+    private fun checkbox(text: String, bold: Boolean = false): CheckBox =
+        ForkDialog.checkbox(activity, text).apply { if (bold) typeface = Typeface.DEFAULT_BOLD }
 
     /** The ArcaneChat button bar: Cancel alone on the left, Import + Export grouped on the right. */
     private fun buttonBar(): View = LinearLayout(activity).apply {
@@ -276,11 +279,18 @@ class ExportImportPanel(
             ForkDialog.alert(activity, "Import", "No backup of this app was found in the backup directory.")
             return
         }
-        ForkDialog.chooser(
+        // A picker: every backup a full-width pill with the file icon, newest first.
+        ForkMenu.show(
             activity,
             "Choose a backup",
-            backups.map { "${it.name}\n${Backup.humanSize(it.length())}" },
-        ) { which -> runImport(backups[which]) }
+            backups.map { file ->
+                ForkMenu.Action(
+                    file.name, Icons.Icon.FILE, IconRole.SHARE,
+                    detail = Backup.humanSize(file.length()),
+                ) { runImport(file) }
+            },
+            cancelLabel = "Cancel",
+        )
     }
 
     private fun runImport(file: File) {
@@ -344,13 +354,12 @@ class ExportImportPanel(
                 13f, color = dim,
             ).apply { setPadding(0, dp(8), 0, dp(8)) },
         )
+        // Coloured from the dialog's text-field roles when it joins the box (Theme.watch).
         val input = EditText(activity).apply {
             setText(current ?: "")
             hint = "/storage/emulated/0/…"
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            setTextColor(accent)
-            setHintTextColor((accent and 0x00FFFFFF) or 0x80000000.toInt())
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             )
@@ -397,15 +406,22 @@ class ExportImportPanel(
             requestAllFilesAccess(); return
         }
         val subDirs = dir.listFiles { f -> f.isDirectory }?.sortedBy { it.name.lowercase() } ?: emptyList()
-        val labels = mutableListOf<String>()
-        val targets = mutableListOf<File?>()
-        labels.add("✓ Use this directory"); targets.add(null)
-        dir.parentFile?.let { labels.add(".. (${it.name.ifBlank { "/" }})"); targets.add(it) }
-        subDirs.forEach { labels.add("📁 ${it.name}"); targets.add(it) }
-        ForkDialog.chooser(activity, dir.absolutePath, labels) { which ->
-            val target = targets[which]
-            if (target == null) onPick(dir) else browse(target, onPick)
+        // The directory browser, as the theme's picker: one icon column, the two things that
+        // are not a subdirectory (take this one, go up) parted from the list by a line.
+        val rows = mutableListOf<ForkMenu.Entry>()
+        rows += ForkMenu.Action("Use this directory", Icons.Icon.CHECK, IconRole.CONNECT) { onPick(dir) }
+        dir.parentFile?.let { parent ->
+            rows += ForkMenu.Action(
+                "Up to ${parent.name.ifBlank { "/" }}", Icons.Icon.UP, IconRole.VIEW, opens = true,
+            ) { browse(parent, onPick) }
         }
+        if (subDirs.isNotEmpty()) rows += ForkMenu.Divider
+        subDirs.forEach { sub ->
+            rows += ForkMenu.Action(sub.name, Icons.Icon.DIRECTORY, IconRole.VIEW, opens = true) {
+                browse(sub, onPick)
+            }
+        }
+        ForkMenu.show(activity, dir.absolutePath, rows, cancelLabel = "Cancel")
     }
 
     private fun hasAllFilesAccess(): Boolean =
@@ -436,13 +452,13 @@ class ExportImportPanel(
  */
 object ExportImportStatus {
     fun summary(context: Context): Pair<String, Boolean> {
-        val path = Backup.exportDir(context) ?: return "No backup directory set" to true
+        val path = Backup.exportDir(context) ?: return "No backup directory set." to true
         val newest = Backup.listBackups(context).firstOrNull()
-            ?: return "$path — no backup yet" to true
+            ?: return "$path — no backup yet." to true
         val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(Date(newest.lastModified()))
         return "$path — latest $stamp" to false
     }
 
     fun color(context: Context, warn: Boolean): Int =
-        if (warn) Defaults.RED else (Settings(context).colorOrNull("page.label.color") ?: Defaults.YELLOW)
+        if (warn) Roles.warning(context) else Roles.color(context, "page.label.color")
 }

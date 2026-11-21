@@ -3,4 +3,7 @@
     <!-- Fork: marks a toggle group whose checked-change listener restyles its pills, so
          Appearance.apply() adds it only once however often the screen resumes. -->
     <item name="toggleStyleListener" type="id" />
+    <!-- Fork: marks a stock control (text field, slider, tick box, switch) that Theme has
+         already dressed from the colour roles, so the watcher does not dress it twice. -->
+    <item name="themeStyled" type="id" />
 </resources>

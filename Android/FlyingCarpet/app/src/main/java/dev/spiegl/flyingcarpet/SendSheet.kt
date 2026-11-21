@@ -2,10 +2,7 @@ package dev.spiegl.flyingcarpet
 
 import android.app.Activity
 import android.app.Dialog
-import android.content.res.ColorStateList
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.RippleDrawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -51,11 +48,13 @@ object SendSheet {
         fun rebuild() {
             val overHotspot = controller.pairing.shareOverHotspot
             box.removeAllViews()
-            box.addView(ForkDialog.heading(context, sharedTitle(fileNames.size)))
+            box.addView(DevicesSheet.heading(context, sharedTitle(fileNames.size), 19f))
             box.addView(DevicesSheet.underline(context, box))
             box.addView(
-                ForkDialog.label(context, summarise(fileNames, totalBytes), 13f)
-                    .apply { alpha = 0.85f }
+                ForkDialog.label(
+                    context, summarise(fileNames, totalBytes), 13f,
+                    color = Roles.color(context, "sheet.secondary"),
+                ).apply { Icons.lead(this, Icons.Icon.FILE, IconRole.SHARE, sizeDp = 16f) }
             )
             box.addView(ForkDialog.spacer(context, 12))
             box.addView(
@@ -65,7 +64,7 @@ object SendSheet {
                 }
             )
             box.addView(ForkDialog.spacer(context, 12))
-            box.addView(ForkDialog.divider(context))
+            box.addView(DevicesSheet.divider(context))
             box.addView(ForkDialog.spacer(context, 10))
 
             val peers = if (controller.isPaired) controller.pairing.peers() else emptyList()
@@ -75,12 +74,13 @@ object SendSheet {
                         context,
                         if (controller.isPaired) {
                             "No paired devices found yet. Open the app on the other device, " +
-                                "or send to one that isn't paired below."
+                                "or send to one that isn’t paired below."
                         } else {
                             "Pair a device once and sending becomes a single tap, with " +
                                 "nothing to do on the device receiving."
                         },
                         13f,
+                        color = Roles.color(context, "sheet.hint"),
                     )
                 )
             } else {
@@ -95,7 +95,7 @@ object SendSheet {
             }
 
             box.addView(ForkDialog.spacer(context, 12))
-            box.addView(ForkDialog.divider(context))
+            box.addView(DevicesSheet.divider(context))
             box.addView(ForkDialog.spacer(context, 12))
 
             val bar = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -104,7 +104,15 @@ object SendSheet {
                 View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }
             )
             if (!controller.isPaired) {
-                bar.addView(ForkDialog.pill(context, "＋ Pair") { dialog.dismiss(); onPair() })
+                bar.addView(
+                    ForkDialog.pill(context, "Pair") { dialog.dismiss(); onPair() }.apply {
+                        ForkDialog.icon(this, Icons.Icon.ADD, IconRole.CONNECT)
+                        layoutParams = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        ).apply { marginEnd = ForkDialog.dp(context, 8) }
+                    }
+                )
             }
             // The way out for a device that is not one of 白い熊's own — a stock peer, or
             // somebody else's phone. It takes the toggle's route, so the connection type is
@@ -144,8 +152,7 @@ object SendSheet {
     ): View {
         val row = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         row.addView(
-            ForkDialog.label(context, "Send over", 13f).apply {
-                alpha = 0.85f
+            ForkDialog.label(context, "Send over", 13f, color = Roles.color(context, "sheet.secondary")).apply {
                 setPadding(0, 0, ForkDialog.dp(context, 10), 0)
             }
         )
@@ -160,28 +167,19 @@ object SendSheet {
         selected: Boolean,
         onClick: () -> Unit,
     ): Button {
-        val accent = ForkDialog.accent(context)
-        val surface = ForkDialog.surface(context)
         return Button(context).apply {
             this.text = text
             isAllCaps = false
             typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             // Never filled (the theme's pill): the route that will be taken has the main pill's
             // 3 dp frame and bold label, the other the regular 1.25 dp one.
-            setTextColor(accent)
+            setTextColor(Roles.color(context, "sheet.segment.text"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            background = RippleDrawable(
-                ColorStateList.valueOf(Theme.ripple(accent)),
-                GradientDrawable().apply {
-                    setColor(surface)
-                    setStroke(
-                        if (selected) (Theme.PILL_MAIN_DP * resources.displayMetrics.density).toInt()
-                        else ForkDialog.strokePx(context),
-                        accent,
-                    )
-                    cornerRadius = ForkDialog.dp(context, 50).toFloat()
-                },
-                null,
+            background = Theme.pillBackground(
+                context,
+                Roles.color(context, "sheet.segment.frame"),
+                ForkDialog.surface(context),
+                main = selected,
             )
             minWidth = 0
             minimumWidth = 0
@@ -224,16 +222,27 @@ object SendSheet {
             // As wide as its name and no wider — the same pill as on the main page. Stretched
             // across the sheet it stopped reading as a device and started reading as a bar
             // (白い熊, 2026-09-11).
-            ForkDialog.pill(context, if (overHotspot) "⚡ $name" else name, onClick = onClick).apply {
+            // The route's mark before the name, in the connect green: every device in the list
+            // has one, so the names share one edge whichever route is chosen.
+            ForkDialog.pill(context, name, onClick = onClick).apply {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 )
-                if (!overHotspot) {
-                    ForkDialog.icon(this, R.drawable.ic_wifi)
+                setTextColor(Roles.color(context, "sheet.pill.text"))
+                background = Theme.pillBackground(
+                    context,
+                    Roles.color(context, "sheet.pill.frame"),
+                    Roles.color(context, "sheet.pill.bg"),
+                )
+                if (overHotspot) {
+                    ForkDialog.icon(this, Icons.Icon.BOLT, IconRole.CONNECT)
+                } else {
+                    ForkDialog.icon(this, R.drawable.ic_wifi, dim = !reachable)
                 }
             }
         )
+        val hint = Roles.color(context, "sheet.hint")
         // Only for the network route. Over a hotspot there is a tap to make on the far device
         // regardless, so "not seen recently" would be noise rather than information.
         if (!overHotspot && !reachable) {
@@ -242,14 +251,12 @@ object SendSheet {
                     context,
                     "Not seen on this network recently — it will be looked for.",
                     11f,
-                ).apply { alpha = 0.7f }
+                    color = hint,
+                )
             )
         }
         if (overHotspot) {
-            column.addView(
-                ForkDialog.label(context, "Tap $name on that device too.", 11f)
-                    .apply { alpha = 0.7f }
-            )
+            column.addView(ForkDialog.label(context, "Tap $name on that device too.", 11f, color = hint))
         }
         return column
     }

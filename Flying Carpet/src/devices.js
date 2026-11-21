@@ -7,7 +7,9 @@
 // It reuses customize.js's dialog primitives rather than growing its own, because a second
 // set would drift out of step with the theme the first one follows.
 
-import { el, forkInfo, forkAlert, forkChooser } from './customize.js';
+import {
+  el, icon, pill, switchInput, colour, actionRow, forkInfo, forkAlert, forkMenu,
+} from './customize.js';
 import { QRCode } from './deps/qrcode.js';
 
 const { core, dialog } = window.__TAURI__;
@@ -63,15 +65,16 @@ function showPairCode(uri, typed) {
     ),
   );
 
-  const qrHolder = el('div');
-  qrHolder.style.cssText =
-    'background:#ffff00; padding:16px; width:214px; margin:12px auto 6px auto;';
-  new QRCode(qrHolder, { text: uri, width: 182, height: 182, colorLight: '#ffff00' });
-  const caption = el('div', null, typed);
-  caption.style.cssText =
-    'margin-top:8px; text-align:center; font-family:monospace; font-weight:bold;'
-    + ' color:#000000; font-size:13px; letter-spacing:1px; line-height:1.5; word-break:break-all;';
-  qrHolder.appendChild(caption);
+  // Light and dark of the code are roles (the UI page, “QR codes”), as on the main page.
+  const qrHolder = el('div', 'fork-qr-holder');
+  new QRCode(qrHolder, {
+    text: uri,
+    width: 182,
+    height: 182,
+    colorLight: colour('role.qr.light'),
+    colorDark: colour('role.qr.dark'),
+  });
+  qrHolder.appendChild(el('div', 'fork-qr-caption', typed));
   box.appendChild(qrHolder);
 
   const warn = el(
@@ -82,8 +85,7 @@ function showPairCode(uri, typed) {
   box.appendChild(warn);
 
   const row = el('div', 'fork-info-actions');
-  const done = el('button', 'fork-pill fork-main', 'Done');
-  done.type = 'button';
+  const done = pill('Done', { main: true });
   done.onclick = () => {
     overlay.remove();
     refresh();
@@ -143,71 +145,108 @@ function askForPairCode() {
 
 // ── The panel ─────────────────────────────────────────────────────────────────────────────
 
-function peerRow(peer, onSend) {
-  const row = el('div', 'fork-setting-row');
-  row.style.marginLeft = '0';
-  row.style.cursor = peer.reachable || peer.last_ip ? 'pointer' : 'default';
+/**
+ * One paired device in the panel, as a group of the list: the pill that sends it files over
+ * this network — its icon green while the device answers, dim while it does not — what is
+ * known about it beneath, on the label's edge, then what else can be done with it.
+ */
+function deviceGroup(peer) {
+  const group = el('div', 'fork-list-group');
+  const name = displayName(peer);
 
-  const title = el('div', 'fork-setting-title', displayName(peer));
-  row.appendChild(title);
+  const row = el('button', 'fork-list-pill');
+  row.type = 'button';
+  row.title = `Send files to ${name} over this network`;
+  row.appendChild(icon('device', peer.reachable ? 'role.list.online' : 'role.list.offline'));
+  row.appendChild(el('span', 'fork-list-text', name));
+  // It opens the file picker.
+  row.appendChild(el('span', 'fork-chevron', '›'));
+  row.onclick = () => sendTo(peer);
+  group.appendChild(row);
 
   const state = peer.reachable
     ? `● on this network — ${peer.last_ip}`
     : peer.last_ip
       ? `○ ${whenSeen(peer.last_seen)} at ${peer.last_ip}`
       : `○ ${whenSeen(peer.last_seen)}`;
-  const summary = el('div', 'fork-setting-summary', `${peer.os || 'not yet heard from'} · ${state}`);
-  if (!peer.reachable) summary.classList.add('fork-note');
-  row.appendChild(summary);
-
+  group.appendChild(el('div', 'fork-list-sub', `${peer.os || 'not yet heard from'} · ${state}`));
   if (peer.receive_dir) {
-    row.appendChild(el('div', 'fork-setting-summary', `Receives into ${peer.receive_dir}`));
+    group.appendChild(el('div', 'fork-list-sub', `Receives into ${peer.receive_dir}`));
   }
-
   if (!peer.auto_accept) {
-    row.appendChild(
-      el(
-        'div',
-        'fork-setting-summary fork-warn',
-        'Set not to accept transfers from this device without asking',
-      ),
+    group.appendChild(
+      el('div', 'fork-list-sub fork-warn', 'Set not to accept transfers from this device without asking.'),
     );
   }
 
-  row.onclick = () => onSend(peer);
-  row.addEventListener('contextmenu', (event) => {
+  const actions = el('div', 'fork-list-actions');
+  const hotspotSend = pill('Send over hotspot', { mini: true, icon: 'bolt', tint: 'share', opens: true });
+  hotspotSend.onclick = () => sendOverHotspot(peer);
+  const hotspotReceive = pill('Receive over hotspot', { mini: true, icon: 'receive', tint: 'connect' });
+  hotspotReceive.onclick = () => receiveOverHotspot(peer);
+  const forget = pill('Forget', { mini: true, icon: 'trash', danger: true });
+  forget.onclick = () => confirmForget(peer);
+  actions.appendChild(hotspotSend);
+  actions.appendChild(hotspotReceive);
+  actions.appendChild(forget);
+  group.appendChild(actions);
+
+  // On or off, so a switch — the same one the device's menu shows.
+  const accept = el('label', 'fork-list-toggle');
+  accept.appendChild(icon('check', 'connect'));
+  accept.appendChild(el('span', 'fork-list-text', 'Accept without asking'));
+  const toggle = switchInput(peer.auto_accept, true);
+  toggle.onchange = () => setAutoAccept(peer, toggle.checked);
+  accept.appendChild(toggle);
+  group.appendChild(accept);
+
+  group.addEventListener('contextmenu', (event) => {
     event.preventDefault();
-    deviceMenu(peer);
+    deviceMenu(peer, event);
   });
-  return row;
+  return group;
 }
 
 // ── One device's menu ─────────────────────────────────────────────────────────────────────
 //
 // Everything that can be done to one paired device, in one place — the desktop twin of
 // Android's DeviceMenu, reached by right-clicking a device the way Android holds one: on the
-// main page's strip or on a row of the Devices panel, so neither surface can drift into a
-// half-menu of its own. Same items, same order.
+// main page's strip or on a device of the Devices panel, so neither surface can drift into a
+// half-menu of its own. Same items, same order — drawn as the theme draws a menu: the name
+// as a plain header, every action a full-width pill with its icon, accepting as a switch, and
+// a line between the groups. It opens where the pointer is.
 
-function deviceMenu(peer) {
-  const items = [
-    'Rename…',
-    'Receive directory…',
-    peer.auto_accept ? 'Ask before accepting' : 'Accept without asking',
-    'Send over hotspot',
-    'Receive over hotspot',
-    'Forget this device',
-  ];
-  forkChooser(displayName(peer), items, (index) => {
-    switch (index) {
-      case 0: renameDevice(peer); break;
-      case 1: chooseDeviceReceiveDir(peer); break;
-      case 2: toggleAutoAccept(peer); break;
-      case 3: sendOverHotspot(peer); break;
-      case 4: receiveOverHotspot(peer); break;
-      case 5: confirmForget(peer); break;
-    }
-  });
+function deviceMenu(peer, event) {
+  forkMenu({ x: event.clientX, y: event.clientY }, displayName(peer), [
+    {
+      label: 'Rename…', icon: 'pencil', tint: 'contact', opens: true,
+      onClick: () => renameDevice(peer),
+    },
+    {
+      label: 'Receive directory…', icon: 'directory', tint: 'view', opens: true,
+      onClick: () => chooseDeviceReceiveDir(peer),
+    },
+    { divider: true },
+    {
+      label: 'Accept without asking', icon: 'check', tint: 'connect',
+      checked: peer.auto_accept,
+      onToggle: (allow) => setAutoAccept(peer, allow),
+    },
+    { divider: true },
+    {
+      label: 'Send over hotspot', icon: 'bolt', tint: 'share', opens: true,
+      onClick: () => sendOverHotspot(peer),
+    },
+    {
+      label: 'Receive over hotspot', icon: 'receive', tint: 'connect',
+      onClick: () => receiveOverHotspot(peer),
+    },
+    { divider: true },
+    {
+      label: 'Forget this device', icon: 'trash', danger: true,
+      onClick: () => confirmForget(peer),
+    },
+  ]);
 }
 
 /**
@@ -296,10 +335,10 @@ async function chooseDeviceReceiveDir(peer) {
   forkInfo('Receive directory', current, actions);
 }
 
-async function toggleAutoAccept(peer) {
+async function setAutoAccept(peer, allow) {
   await core.invoke('paired_set_auto_accept', {
     deviceId: peer.device_id,
-    allow: !peer.auto_accept,
+    allow,
   });
   await refreshEverywhere();
 }
@@ -309,13 +348,14 @@ async function toggleAutoAccept(peer) {
  * key — but its directory, its name here and its remembered address do not come back.
  */
 function confirmForget(peer) {
-  const overlay = forkInfo(
+  forkInfo(
     `Forget ${displayName(peer)}?`,
     'It disappears from the list, along with the directory and name set for it here. It can be found again by looking, as long as both devices still share the same pairing key — this does not un-pair anything.',
     [
       { label: 'Cancel', onClick: (close) => close() },
       {
         label: 'Forget',
+        danger: true,
         onClick: async (close) => {
           close();
           await core.invoke('paired_forget', { deviceId: peer.device_id });
@@ -324,8 +364,6 @@ function confirmForget(peer) {
       },
     ],
   );
-  const buttons = overlay.querySelectorAll('.fork-pill');
-  buttons[buttons.length - 1].classList.add('fork-warn');
 }
 
 /** The panel if it is open, and the strip on the main page either way. */
@@ -337,57 +375,15 @@ async function refreshEverywhere() {
   }
 }
 
-/** Everything that can be done to one device, once it is in the list. */
-function peerActions(peer, container) {
-  const row = el('div', 'fork-info-actions');
-  row.style.marginTop = '0';
-
-  const accept = el(
-    'button',
-    'fork-mini-btn',
-    peer.auto_accept ? 'Ask before accepting' : 'Accept without asking',
-  );
-  accept.type = 'button';
-  accept.onclick = (event) => {
-    event.stopPropagation();
-    toggleAutoAccept(peer);
-  };
-
-  const forget = el('button', 'fork-mini-btn', 'Forget');
-  forget.type = 'button';
-  forget.onclick = (event) => {
-    event.stopPropagation();
-    confirmForget(peer);
-  };
-
-  const hotspotSend = el('button', 'fork-mini-btn', 'Send over hotspot');
-  hotspotSend.type = 'button';
-  hotspotSend.onclick = (event) => {
-    event.stopPropagation();
-    sendOverHotspot(peer);
-  };
-
-  const hotspotReceive = el('button', 'fork-mini-btn', 'Receive over hotspot');
-  hotspotReceive.type = 'button';
-  hotspotReceive.onclick = (event) => {
-    event.stopPropagation();
-    receiveOverHotspot(peer);
-  };
-
-  row.appendChild(hotspotSend);
-  row.appendChild(hotspotReceive);
-  row.appendChild(accept);
-  row.appendChild(forget);
-  container.appendChild(row);
-}
-
 async function scan() {
   const list = document.getElementById('forkDeviceList');
   if (list) list.dataset.scanning = '1';
   const button = document.getElementById('forkScanButton');
+  // The pill keeps its icon: only its label changes.
+  const label = button && button.querySelector('.fork-pill-label');
   if (button) {
     button.disabled = true;
-    button.innerText = 'Looking…';
+    label.innerText = 'Looking…';
   }
   try {
     const peers = await core.invoke('paired_scan');
@@ -397,7 +393,7 @@ async function scan() {
   } finally {
     if (button) {
       button.disabled = false;
-      button.innerText = 'Look again';
+      label.innerText = 'Look again';
     }
   }
   await refresh();
@@ -506,10 +502,10 @@ export async function sendFilesTo(peer, fileList) {
   }
 }
 
-async function chooseReceiveFolder() {
-  const folder = await dialog.open({ multiple: false, directory: true });
-  if (!folder) return;
-  await core.invoke('paired_set_receive_dir', { dir: folder });
+async function chooseReceiveDir() {
+  const dir = await dialog.open({ multiple: false, directory: true });
+  if (!dir) return;
+  await core.invoke('paired_set_receive_dir', { dir });
   await refresh();
 }
 
@@ -535,15 +531,19 @@ async function refresh() {
   body.replaceChildren(...buildPanelBody(state));
 }
 
-/** The panel's two sections, as detached nodes. */
+/**
+ * The panel's two parts, as detached nodes: this device, then the paired ones — a list with
+ * one icon column and one label edge, a line between every two devices.
+ */
 function buildPanelBody(state) {
   // Identity.
-  const identity = el('div', 'fork-section');
-  identity.appendChild(el('div', 'fork-section-title', 'This device'));
-  identity.appendChild(el('div', 'fork-section-rule'));
+  const identity = el('div');
+  identity.appendChild(el('div', 'fork-panel-heading', 'This device'));
 
-  const nameRow = el('div', 'fork-row');
-  nameRow.appendChild(el('span', 'fork-label', 'Name'));
+  // A control row: plain.
+  const nameRow = el('label', 'fork-panel-row');
+  nameRow.appendChild(icon('tag', 'contact'));
+  nameRow.appendChild(el('span', null, 'Name'));
   const nameInput = el('input', 'fork-text-input');
   nameInput.type = 'text';
   nameInput.value = state.name;
@@ -554,24 +554,19 @@ function buildPanelBody(state) {
   nameRow.appendChild(nameInput);
   identity.appendChild(nameRow);
 
-  const folderRow = el('div', 'fork-setting-row');
-  folderRow.style.marginLeft = '0';
-  folderRow.appendChild(el('div', 'fork-setting-title', 'Receive into'));
-  const folderValue = el(
-    'div',
-    'fork-setting-summary',
-    state.receive_dir || 'No directory set — transfers from paired devices will be refused',
+  // It opens the directory picker, so it is a pill; where files go stands beneath it.
+  const dirRow = actionRow(
+    'Receive into',
+    state.receive_dir || 'No directory set — transfers from paired devices will be refused.',
+    { icon: 'directory', tint: 'view', opens: true, onClick: chooseReceiveDir },
   );
-  if (!state.receive_dir) folderValue.classList.add('fork-warn');
-  folderRow.appendChild(folderValue);
-  folderRow.style.cursor = 'pointer';
-  folderRow.onclick = chooseReceiveFolder;
-  identity.appendChild(folderRow);
+  if (!state.receive_dir) dirRow.summary.classList.add('fork-warn');
+  identity.appendChild(dirRow);
 
   identity.appendChild(
     el(
       'div',
-      'fork-note',
+      'fork-panel-note',
       state.serving
         ? `Listening on port ${state.port}. This device accepts transfers from paired devices for as long as the app is open.`
         : 'Not paired with anything yet.',
@@ -579,9 +574,9 @@ function buildPanelBody(state) {
   );
 
   // The devices.
-  const devices = el('div', 'fork-section');
-  devices.appendChild(el('div', 'fork-section-title', 'Paired devices'));
-  devices.appendChild(el('div', 'fork-section-rule'));
+  const devices = el('div');
+  devices.appendChild(el('div', 'fork-hairline'));
+  devices.appendChild(el('div', 'fork-panel-heading', 'Paired devices'));
 
   if (!state.paired) {
     devices.appendChild(
@@ -596,40 +591,17 @@ function buildPanelBody(state) {
       const live = lastScan.get(p.device_id);
       return live ? { ...p, ...live } : p;
     });
-    for (const peer of merged) {
-      const holder = el('div');
-      holder.appendChild(peerRow(peer, sendTo));
-      peerActions(peer, holder);
-      devices.appendChild(holder);
-    }
+    const list = el('div', 'fork-list');
+    merged.forEach((peer, i) => {
+      if (i > 0) list.appendChild(el('div', 'fork-list-divider'));
+      list.appendChild(deviceGroup(peer));
+    });
+    devices.appendChild(list);
   }
   return [identity, devices];
 }
 
 // ── The strip on the main page ────────────────────────────────────────────────────────────
-
-/** The Android pill's Wi-Fi mark, as the same path: a glyph the fonts cannot be relied on for. */
-const WIFI_PATH =
-  'M1,9l2,2c4.97,-4.97 13.03,-4.97 18,0l2,-2C16.93,2.93 7.08,2.93 1,9zM9,17l3,3 3,-3'
-  + 'c-1.65,-1.66 -4.34,-1.66 -6,0zM5,13l2,2c2.76,-2.76 7.24,-2.76 10,0l2,-2C15.14,9.14 8.87,9.14 5,13z';
-
-/** The folder half's glyph, the same way: Material's folder outline. */
-const FOLDER_PATH =
-  'M10,4H4C2.9,4 2.01,4.9 2.01,6L2,18c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8l-2,-2z';
-
-function mark(d) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('aria-hidden', 'true');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', d);
-  svg.appendChild(path);
-  return svg;
-}
-
-function wifiMark() {
-  return mark(WIFI_PATH);
-}
 
 function half(className, onClick, title) {
   const button = el('button', `fork-device-pill ${className}`);
@@ -641,17 +613,17 @@ function half(className, onClick, title) {
 
 /**
  * One row of a device column: a pill with two targets. The name half sends files, exactly
- * the one click it always was; the folder half sends one folder. It is the strip's version
+ * the one click it always was; the other half sends one directory. It is the strip's version
  * of the main page's "Files to send | Directory to send" twins — a choice made by where the
  * click lands rather than by a mode set beforehand or a question asked afterwards.
  */
-function splitPill(name, route, onFiles, onFolder) {
+function splitPill(name, route, onFiles, onDirectory) {
   const row = el('div', 'fork-split-pill');
   const files = half('fork-pill-files', onFiles, `Send files to ${name} ${route}`);
-  const folder = half('fork-pill-folder', onFolder, `Send a directory to ${name} ${route}`);
-  folder.appendChild(mark(FOLDER_PATH));
+  const directory = half('fork-pill-directory', onDirectory, `Send a directory to ${name} ${route}`);
+  directory.appendChild(icon('directory', 'share'));
   row.appendChild(files);
-  row.appendChild(folder);
+  row.appendChild(directory);
   return files;
 }
 
@@ -775,7 +747,8 @@ function renderPills(state) {
       () => sendTo(peer, false),
       () => sendTo(peer, true),
     );
-    network.appendChild(wifiMark());
+    // Both routes reach the device, so both marks are the green of connecting.
+    network.appendChild(icon('wifi', 'connect'));
     network.appendChild(document.createTextNode(name));
     const hotspot = splitPill(
       name,
@@ -783,13 +756,14 @@ function renderPills(state) {
       () => sendOverHotspot(peer, false),
       () => sendOverHotspot(peer, true),
     );
-    hotspot.appendChild(document.createTextNode(`⚡ ${name}`));
+    hotspot.appendChild(icon('bolt', 'connect'));
+    hotspot.appendChild(document.createTextNode(name));
     column.appendChild(network.parentElement);
     column.appendChild(hotspot.parentElement);
     // Right-click is the desktop's hold: the same menu Android opens on a long press.
     column.addEventListener('contextmenu', (event) => {
       event.preventDefault();
-      if (!dragging) deviceMenu(peer);
+      if (!dragging) deviceMenu(peer, event);
     });
     draggable(column, strip);
     return column;
@@ -807,9 +781,7 @@ export function openDevicesPanel() {
   const box = el('div', 'fork-panel-box');
   page.appendChild(box);
 
-  const header = el('div', 'fork-page-header');
-  header.appendChild(el('div', 'fork-page-title', 'Devices'));
-  box.appendChild(header);
+  box.appendChild(el('div', 'fork-panel-title', 'Devices'));
   box.appendChild(
     el(
       'div',
@@ -825,20 +797,18 @@ export function openDevicesPanel() {
   box.appendChild(bodyHolder);
 
   const bar = el('div', 'fork-pill-bar');
-  const close = el('button', 'fork-pill fork-main', 'Done');
-  close.type = 'button';
+  // Pairing is what the panel is for, so that is its one main pill; Done is the way out.
+  const close = pill('Done');
   close.onclick = () => page.remove();
   bar.appendChild(close);
   bar.appendChild(el('div', 'fork-pill-spacer'));
 
-  const scanButton = el('button', 'fork-pill', 'Look again');
+  const scanButton = pill('Look again', { icon: 'search', tint: 'connect' });
   scanButton.id = 'forkScanButton';
-  scanButton.type = 'button';
   scanButton.onclick = scan;
   bar.appendChild(scanButton);
 
-  const pair = el('button', 'fork-pill fork-main', 'Pair a device');
-  pair.type = 'button';
+  const pair = pill('Pair a device', { main: true, icon: 'device', tint: 'contact', opens: true });
   pair.onclick = () => {
     // Either direction works; this PC has no camera, so its own code is the one that gets
     // scanned, and a phone's code is typed.
