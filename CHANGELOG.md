@@ -8,6 +8,92 @@ normally resets on each upstream rebase — except where a reset would build a l
 share one counter — the same code always builds as the same `+N` on both, and since `+22` every
 delivered `+N` ships both artifacts as a pair.
 
+## 10.0.6+094 — 2026-11-21
+
+Built on upstream release 10.0.6, like `+091`. Three builds were delivered on the way (`+092`,
+`+093` and `+094`), each as an APK and a `.deb`; this release is the third. A `+094` device still
+pairs and transfers with a `+091` one; the new dialogs need `+092` or later on the PC.
+
+### The narrow-channel dialog (phone, with a Linux PC)
+
+- **A transfer held back by a narrow Wi-Fi channel says so.** A few seconds into every paired
+  transfer with a Linux peer, the phone asks the PC how its Wi-Fi link looks. When the PC's hop of
+  the transfer runs on a quarter of the network's width or less, on a network of 80 MHz or more, a
+  red dialog names the device, the width and the rate.
+- **Two narrow readings in a row are needed** before the dialog is raised, a few seconds apart, so
+  one stray frame never raises it. The link is looked at again every twenty seconds for as long as
+  the transfer runs.
+- **“Reconnect …'s Wi-Fi”** cancels the transfer, has the PC reconnect to its network, waits for it
+  to come back — looking for it again if its address changed — and reads the link once more.
+- **The result is stated**: reconnected, with the new widths and figures; still narrow; or not back
+  within a minute. A failed reconnect can be tried again.
+- **“Restart the transfer”** sends the same files again without picking them. For files the PC was
+  sending, the PC is asked to send them again; it keeps the last unfinished send to each device for
+  ten minutes for this.
+- **“Keep going”** silences the automatic dialog for that device for fifteen minutes; **“Cancel
+  transfer”** cancels and nothing more.
+- **The PC refuses to reconnect** while it has transfers running with other devices, or a hotspot
+  or password transfer, and says which.
+- **The dialog survives the screen being rebuilt.** Turning or unfolding the phone during a
+  reconnect no longer loses it or its result.
+- **Only the PC's link is judged and repaired.** Android lets no app reconnect its own Wi-Fi.
+
+### Speed check (phone, with a Linux PC)
+
+- **“Speed check ›” on every running lane**, beside its Cancel, and **“Wi-Fi speed check ›”** as the
+  first row of a Linux device's menu, for use with no transfer running.
+- **Three figures in MB/s**: the transfer's rate over the last seconds; what the phone's hop and the
+  PC's hop allow together, as a range; and the fastest finished transfer with that device in that
+  direction, with its date. With no transfer running, both directions are shown.
+- **One sentence of verdict**: the Wi-Fi link is the brake; the link could carry more and the brake
+  is elsewhere; this is as fast as these two have gone; the transfer runs at what the link gives;
+  nothing to compare with yet; or the reading is stale, when the transfer outruns it.
+- **The raw rates of both devices** in small print, and what a reconnect costs: every transfer with
+  that PC is cut, a restart begins from zero, and how much has already moved.
+- **“Best seen” is recorded from finished transfers of 50 MB or more**, from this build on.
+
+### On the wire (fork peers only)
+
+- **Three control requests in the paired offer**: link status, reconnect, send again. They move no
+  files, are answered only by the Linux build, and leave no lines in the PC's log.
+- **An offer with an unknown request is refused** instead of being taken for a transfer of no files.
+
+### Theme: the black-yellow checklist, in full (both apps)
+
+- **Every colour is a role of its own**, with its default written once and a swatch row on the UI
+  page: dialogs, menus, the Devices and Send sheets, transfer lanes, icons, warnings, text fields,
+  sliders and the page itself. New sections on the page hold them: Dialogs, Menus, Devices and
+  sheets, Transfer lanes, Icons, Warnings, Maintenance.
+- **No colour is left in XML or CSS**, apart from the black a window shows before any code runs, the
+  launcher icon ground and two icon masks. Stored settings keep working under their old keys.
+- **The UI page is a folding accordion with a chip index.** Every section starts folded; a chip per
+  section jumps to it, and holding a chip drags the sections into a new order. Order and fold state
+  are remembered and travel in the export.
+- **Every row of the UI page has an icon**, coloured by what the row does.
+- **Maintenance** holds “Reset section order”, “Reset all colours” and “Reset all to defaults”.
+- **The device menu is a menu**: full-width pills with icons, a switch row for “Accept without
+  asking”, clear lines between groups, and a red “Forget this device”. On the desktop it opens at
+  the pointer.
+- **Lists and pickers have icons**: the Devices and Send sheets, the directory browser, the backup
+  list, the pairing choices.
+- **Font and style dropdowns became themed pickers.**
+- **No stock dialog is left.** Android's About dialog and the desktop's native confirmations,
+  alerts, Bluetooth PIN question and password display all use the fork's own dialog.
+- **Cancel buttons are red by default**, on the main page and on every lane; deleting, overwriting
+  and resetting actions are red too. All remain settable.
+- **Two reds**: the warning keeps `#FF5252`; whatever deletes uses `#FF0000`.
+- **Desktop**: Escape answers a waiting dialog; the window is black before the page loads.
+
+### Fixes and behaviour
+
+- **Android**: the dimmed route icon on a device not seen recently is actually dimmed.
+- **Android**: `ic_folder` and `onPickFolder` are renamed to say “directory”.
+
+### Not yet checked
+
+- The theme has been checked in the code and by opening the main surfaces, not surface by surface on
+  the devices. The dialogs for a PC-sent transfer have not been run on the devices.
+
 ## 10.0.6+091 — 2026-11-17
 
 Built on upstream release 10.0.6, like `+089`. Two builds were delivered on the way (`+090` and

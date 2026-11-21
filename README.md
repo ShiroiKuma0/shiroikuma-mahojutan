@@ -27,7 +27,7 @@ Installs **side-by-side** with the official Flying Carpet (app id `shiroikuma.ma
 > which this fork makes the **default**, since hotspot mode takes both devices off their network for
 > the duration of the transfer.
 
-**📥 Latest release: [`10.0.6+091`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
+**📥 Latest release: [`10.0.6+094`](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases/latest)** — [all releases & downloads »](https://github.com/ShiroiKuma0/shiroikuma-mahojutan/releases)
 
 </div>
 
@@ -128,6 +128,10 @@ and the selected one is told by its weight rather than by a yellow slab. Switche
 rule: a round outline with a dot inside, bright and on the right when on, a darker yellow and on the
 left when off. Explanations are dim gold, never grey, and no dialog is the platform's white box.
 
+**Menus are columns of full-width pills**, each with an icon coloured by what the row does — green
+connects, cyan is about a device, orange exports, red deletes — and a switch where a row is a state
+rather than an action. Whatever throws something away, cancelling a transfer included, is red.
+
 ---
 
 ## 🌙 A transfer that survives leaving the app
@@ -155,6 +159,26 @@ transfers still run alone, because they need the whole radio.
 
 ---
 
+## 🩺 “Why is this slow?” — answered, and fixed from the phone
+
+A transfer from phone to PC once ran at 13 MB/s while the other direction ran at 49. Neither app was
+slow: the access point had been feeding the PC on a 20 MHz channel for forty hours while the rest of
+the network ran on 160. Reconnecting the PC's Wi-Fi cured it in ten seconds — after an afternoon
+spent finding out that this was what was wrong.
+
+Now the app finds out by itself. A few seconds into a paired transfer the phone asks the Linux PC
+how its Wi-Fi link looks, and when the PC's hop is narrow it says so **in red**, with the width and
+the rate. From that one dialog you can cancel the transfer, **have the PC reconnect its Wi-Fi**,
+read whether that worked, and **restart the transfer without picking the files again**.
+
+The same dialog is there whenever you want it — **Speed check** on a running transfer, **Wi-Fi speed
+check** in a device's menu — and puts three figures side by side: how fast the transfer is moving
+**now**, what the two radio hops **allow**, and the **best** these two devices have ever done. One
+sentence under them says what they add up to: the link is the brake, the brake is elsewhere, or this
+is as fast as it gets.
+
+---
+
 ## 🛠️ Customize UI — every surface, yours
 
 A dedicated settings page (the *Customize UI* button under the logo) turns the entire interface into
@@ -167,6 +191,12 @@ something you can edit without touching code:
 - **Live preview** — changes land on the real UI as you make them.
 - **Reset anywhere** — per property, per group, or everything at once.
 - **The settings page styles itself**, so you can theme the theming tool.
+
+- **Every colour is its own role** — dialogs, menus, sheets, transfer lanes, icons and warnings each
+  have their swatches in a section of their own, and nothing in either app is pinned to a colour
+  you cannot change.
+- **A chip for every section** — the page opens folded, with a row of chips on top: tap one to jump
+  to its section, hold one to drag the sections into the order you want.
 
 The page is laid out for scanning: a thin rule between top-level sections, a text-width underline
 under every heading, and a fixed indentation ladder from section to element to control — the same
